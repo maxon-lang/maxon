@@ -1227,6 +1227,8 @@ export enum CryptoRoutine
 	aesGcmEncrypt
 	aesGcmDecrypt
 	aesGcmFinish
+	sha256Blocks
+	aesHash
 end 'CryptoRoutine'
 
 // ⭐⭐ **WHICH WINSOCK ENTRY POINT ONE `osSocketOverlapped` ASKS FOR, AND WHICH OPERANDS IT READS.** Each verb
@@ -2965,6 +2967,7 @@ export union StdOp
 	// vocabulary.
 	osFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	osFileOpenCreateNew(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osFileRenameNew(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The WHOLE environment, which `osEnvRead` cannot reach ---
 	//
@@ -3464,6 +3467,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindNext or
 		osDirCreate or
@@ -3584,6 +3588,7 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -4028,6 +4033,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -4289,6 +4295,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -4615,6 +4622,7 @@ export function classifyCallOperands(op StdOp, call StdCallOperands)
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -4792,6 +4800,7 @@ function classifyWitnessOperands(op StdOp, w StdWitnessOperands)
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -5371,6 +5380,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osAdoptNamedSegment(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osFileSize(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osFileRename(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osFileRenameNew(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osFileFindFirst(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osFileFindNext(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osDirCurrentPath(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -5632,6 +5642,7 @@ function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
 		osFileDelete(resultId, _) then def.recordOne(resultId)
 		osFileRename(resultId, _, _) then def.recordOne(resultId)
+		osFileRenameNew(resultId, _, _) then def.recordOne(resultId)
 		osFileFindFirst(resultId, _, _) then def.recordOne(resultId)
 		osFileFindNext(resultId, _, _) then def.recordOne(resultId)
 		osDirCreate(resultId, _) then def.recordOne(resultId)
@@ -5911,6 +5922,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
+		osFileRenameNew(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRenameNew(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
 		osFileFindFirst(resultId, pathPtr, findDataPtr) gives StdOp.osFileFindFirst(resultId, pathPtrId: remappedValue(pathPtr, subst: subst), findDataPtrId: remappedValue(findDataPtr, subst: subst))
 		osFileFindClose(handle) gives StdOp.osFileFindClose(remappedValue(handle, subst: subst))
 		osFileFindNext(resultId, handle, findDataPtr) gives StdOp.osFileFindNext(resultId, handleId: remappedValue(handle, subst: subst), findDataPtrId: remappedValue(findDataPtr, subst: subst))
@@ -6193,6 +6205,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -6785,6 +6798,7 @@ export function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -7013,6 +7027,7 @@ function classifyBranch(op StdOp, out StdBranchOperands)
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or

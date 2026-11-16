@@ -153,13 +153,14 @@ export type EntryStubCalls
 	export let capturesArguments as bool
 	export let capturesEnvironment as bool
 	export let gatesDescendants as bool
+	export let startsHash as bool
 
 	export static function none() returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, releasesRegistry: false, capturesArguments: false, capturesEnvironment: false, gatesDescendants: false}
+		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, releasesRegistry: false, capturesArguments: false, capturesEnvironment: false, gatesDescendants: false, startsHash: false}
 	end 'none'
 
 	export static function fromUsage(usage RuntimeUsage, target Target) returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, releasesRegistry: usage.releasesRegistry, capturesArguments: usage.usesCommandLine and argumentsArriveAsHostList(target), capturesEnvironment: usage.usesEnvironment and environmentArrivesAsHostList(target), gatesDescendants: usage.usesGt and usage.usesProcessDescendants and targetProvidesFacility(target, facility: HostFacility.processDescendants)}
+		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, releasesRegistry: usage.releasesRegistry, capturesArguments: usage.usesCommandLine and argumentsArriveAsHostList(target), capturesEnvironment: environmentIsCaptured(usage, target: target), gatesDescendants: usage.usesGt and usage.usesProcessDescendants and targetProvidesFacility(target, facility: HostFacility.processDescendants), startsHash: usage.usesHash}
 	end 'fromUsage'
 
 	export function allocatesHostLists() returns bool
@@ -395,6 +396,7 @@ function compilerOwnedRoots(target Target, stub EntryStubCalls) returns Compiler
 	roots.push(CompilerOwnedRoot.create(GtDrainAtExitName, isCalledHere: stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(GtRunMainName, isCalledHere: stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(ProcessDescendantGateName, isCalledHere: stub.gatesDescendants))
+	roots.push(CompilerOwnedRoot.create(HashInitName, isCalledHere: stub.startsHash))
 	roots.push(CompilerOwnedRoot.create(GtPreemptName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GtPanicFlushName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GtFaultFlushName, isCalledHere: true))
@@ -691,6 +693,7 @@ function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into StdFuncti
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or

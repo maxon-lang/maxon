@@ -1,0 +1,33 @@
+let HashTierCaseDirName = "the-compiler-builds-a-hashing-program-on-every-hash-tier"
+let HashTierUnavailableWording = "is not available on this host"
+let HashingProgramSource = "typealias Ledger = Map with (String, HashDigest)\ntypealias WordList = Array with String\n\nfunction main() returns ExitCode\n\tlet ledger = Ledger.create()\n\tlet seed = HashSeed.random()\n\tvar state = KeyedHasher.empty(seed)\n\n\tfor word in WordList from [\"alpha\", \"beta\", \"gamma\"] 'eachWord'\n\t\tstate = KeyedHasher.combined(state, value: word.count() as HashDigest)\n\t\tledger.upsert(word, value: state)\n\tend 'eachWord'\n\n\tlet found = ledger.contains(\"beta\") and state != KeyedHasher.empty(seed)\n\tprint(\"entries=\{ledger.count()} found=\{found}\\n\")\n\treturn 0\nend 'main'\n"
+let HashingProgramOutput = "entries=3 found=true\n"
+
+test 'a build run under each hash tier compiles a hashing program that runs'
+	let dir = freshCaseDir(HashTierCaseDirName)
+
+	for tier in StringArray from [HashTierAes, HashTierSoftware] 'eachTier'
+		let tierDir = stagingDir(dir.join(tier).toString())
+		let program = tierDir.join(StagedProgramFileName)
+		writeStagedFile(program, content: HashingProgramSource)
+
+		let naming = EnvMap.create()
+		naming.upsert(CacheRootVariable, value: cacheRootIn(tierDir).toString())
+		naming.upsert(HashTierVariable, value: tier)
+
+		let build = runWithCacheRoots([BuildCommandWord, program.toString(), "{OutputOptionPrefix}{tierDir.join(OutputStem).toString()}"], naming: naming, workingDirectory: tierDir)
+
+		if tier != HashTierSoftware and build.exitCode() == 1 and build.stderr.startsWith("{HashTierVariable}={tier} {HashTierUnavailableWording}") 'hostLacksTier'
+			continue
+		end 'hostLacksTier'
+
+		requireBuilt(build, which: "the build with {HashTierVariable}={tier}")
+
+		let ran = spawnIn(Executable.path(tierDir.join("{OutputStem}{executableSuffix()}")), arguments: StringArray.create(0), staged: tierDir, what: "the program built with {HashTierVariable}={tier}")
+		let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+		Expect.equal(ran.exitCode(), expected: 0, message: "the program built with {HashTierVariable}={tier} did not exit 0. {said}")
+		Expect.equal(ran.stdout, expected: HashingProgramOutput, message: "the program built with {HashTierVariable}={tier} printed the wrong line. {said}")
+	end 'eachTier'
+
+	discardStagedDir(dir)
+end 'a build run under each hash tier compiles a hashing program that runs'

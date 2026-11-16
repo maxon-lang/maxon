@@ -7985,7 +7985,7 @@ func @main {
     x64.movRegReg r14, r10
     x64.storeSlotReg slot3, r14
     x64.movRegReg rcx, rbx
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -8001,7 +8001,7 @@ func @main {
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
     x64.movRegReg rcx, r13
-    x64.callMem [r14 + 40]
+    x64.callMem [r14 + 48]
     x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -8276,7 +8276,7 @@ func @main {
     x64.movRegReg r14, r10
     x64.storeSlotReg slot3, r14
     x64.movRegReg rcx, rbx
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -8292,7 +8292,7 @@ func @main {
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
     x64.movRegReg rcx, r13
-    x64.callMem [r14 + 40]
+    x64.callMem [r14 + 48]
     x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -8548,7 +8548,7 @@ func @main {
     arm64.movRegReg x22, x9
     arm64.storeSlotReg slot3, x22
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
     arm64.blr x16
     arm64.movRegReg x19, x0
     arm64.movImm x0, 21
@@ -8564,7 +8564,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x22 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 48]
     arm64.blr x16
     arm64.movRegReg x21, x0
     arm64.movImm x0, 21
@@ -8823,7 +8823,7 @@ func @main {
     arm64.movRegReg x22, x9
     arm64.storeSlotReg slot3, x22
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
     arm64.blr x16
     arm64.movRegReg x19, x0
     arm64.movImm x0, 21
@@ -8839,7 +8839,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x22 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 48]
     arm64.blr x16
     arm64.movRegReg x21, x0
     arm64.movImm x0, 21

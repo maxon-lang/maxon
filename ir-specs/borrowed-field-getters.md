@@ -69,13 +69,17 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_console_probe_stdin@48 = i8 0
-  __mrt_console_probe_stdout@49 = i8 0
-  __mrt_console_probe_stderr@50 = i8 0
-  __mrt_program_started@51 = i8 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __mrt_hash_seed@40 = i64 0
+  __mrt_hash_tier@48 = i64 0
+  __slab_arena_list@56 = i64 0
+  __slab_arena_map_l1@64 = i64 0
+  __slab_state@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+  __mrt_program_started@83 = i8 0
 }
 
 func @Big.create {
@@ -299,7 +303,7 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp __il_body#40
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_61]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -310,7 +314,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -326,10 +330,14 @@ func @main {
 data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
-  __mrt_program_started@40 = i8 0
+  __mrt_cpu_aes_usable@16 = i64 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __mrt_hash_seed@32 = i64 0
+  __mrt_hash_tier@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
+  __mrt_program_started@72 = i8 0
 }
 
 func @Big.create {
@@ -553,7 +561,7 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp __il_body#40
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_61]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -564,7 +572,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -578,251 +586,9 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_program_started@24 = i8 0
-}
-
-func @Big.create {
-  entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, x27
-    arm64.storeSlotReg slot7, x26
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-  __il_body#2:
-    arm64.movImm x0, 4
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-  __il_body#4:
-    arm64.leaRdata x20, __layout_Map_Count$0_1000000_Count$0_1000000
-  __il_body#11:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 72]
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 40]
-    arm64.bl __managed_create
-    arm64.movRegReg x21, x0
-  __il_body#12:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 152]
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 120]
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-  __il_body#13:
-    arm64.movImm x0, 1
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x22, x0
-  __il_body#14:
-    arm64.movImm x0, 4
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x23, x0
-  __il_cont#7:
-    arm64.movImm x24, 0
-    arm64.movImm x25, 0
-    arm64.movImm x26, 0
-    arm64.movImm x0, 56
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x27, x0
-    arm64.storeBaseDispReg.word64 [x27 + 0], x21
-    arm64.storeBaseDispReg.word64 [x27 + 8], x20
-    arm64.storeBaseDispReg.word64 [x27 + 16], x22
-    arm64.storeBaseDispReg.word64 [x27 + 24], x23
-    arm64.storeBaseDispReg.word64 [x27 + 32], x24
-    arm64.storeBaseDispReg.word64 [x27 + 40], x25
-    arm64.storeBaseDispReg.word64 [x27 + 48], x26
-  __il_cont#3:
-    arm64.movImm x20, 0
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x27
-    arm64.storeBaseDispReg.byte [x0 + 16], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-  __il_body#5:
-    arm64.bl Big.create
-    arm64.movRegReg x19, x0
-    arm64.bl Big.create
-    arm64.movRegReg x20, x0
-    arm64.movImm x21, 0
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x19
-    arm64.storeBaseDispReg.word64 [x22 + 8], x20
-    arm64.storeBaseDispReg.byte [x22 + 16], x21
-  __il_cont#4:
-    arm64.movImm x1, 3
-  __il_body#34:
-    arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#36
-  sharedView#35:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#33
-  ifcont#36:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#33:
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.leaRdata x3, __witness_int.Hashable
-    arm64.leaRdata x4, __witness_int.Equatable
-    arm64.leaRdata x5, __layout_Map_Count$0_1000000_Count$0_1000000
-  __il_body#38:
-    arm64.movImm x2, 3
-  __il_cont#37:
-    arm64.movRegReg x0, x19
-    arm64.bl Map.findSlot
-    arm64.movRegReg x1, x0
-    arm64.cmp x9, 0
-    arm64.b.eq __il_body#17
-  tryerr#15:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#12
-  __il_body#17:
-    arm64.movImm x0, 9223372036854775808
-    arm64.cmp x1, x0
-    arm64.b.hi __rc_panic
-  __rc_ok:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x0, x0, x1
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __il_body#40:
-    arm64.cmp x0, 0
-    arm64.b.ne matchnext
-  matcharm#42:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#12
-  matchnext:
-    arm64.cmp x0, 1
-    arm64.b.ne matcharm#43
-  matcharm#41:
-    arm64.movImm x0, 1
-    arm64.b __il_cont#12
-  matcharm#43:
-    arm64.movImm x0, 0
-  __il_cont#12:
-    arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#49
-  __il_body#26:
-    arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#28
-  sharedView#27:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#25
-  ifcont#28:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#25:
-    arm64.loadRegBaseDisp.byte x0, [x0 + 16]
-    arm64.b scmerge
-  critsplit#49:
-    arm64.movRegReg x0, x1
-  scmerge:
-    arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#48
-  __il_body#30:
-    arm64.loadRegBaseDisp.byte x0, [x22 + 16]
-    arm64.cbz x0, ifcont#32
-  sharedView#31:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.b __il_cont#29
-  ifcont#32:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-  __il_cont#29:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.cmp x0, 3
-    arm64.cset x0, hi
-    arm64.b __il_cont#6
-  critsplit#48:
-    arm64.movRegReg x0, x1
-  __il_cont#6:
-    arm64.cbz x0, ifcont#3
-  asked:
-    arm64.movImm x19, 1
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_Holder
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  ifcont#3:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_Holder
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#19
-    arm64.b __il_body#40
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_61  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  tryerr#19:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-}
-```
-```TargetIr:arm64-linux
-data {
-  __mrt_envp@0 = i64 0
-  __mrt_signal_stack_bytes@8 = i64 0
-  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_cpu_aes_usable@0 = i64 1
+  __mrt_hash_seed@8 = i64 0
+  __mrt_hash_tier@16 = i64 0
   __slab_arena_list@24 = i64 0
   __slab_arena_map_l1@32 = i64 0
   __slab_state@40 = i64 0
@@ -1042,7 +808,7 @@ func @main {
     arm64.b.ne tryerr#19
     arm64.b __il_body#40
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_61  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_58  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1052,7 +818,256 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   tryerr#19:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __mrt_hash_seed@40 = i64 0
+  __mrt_hash_tier@48 = i64 0
+  __slab_arena_list@56 = i64 0
+  __slab_arena_map_l1@64 = i64 0
+  __slab_state@72 = i64 0
+  __mrt_program_started@80 = i8 0
+}
+
+func @Big.create {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#2:
+    arm64.movImm x0, 4
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+  __il_body#4:
+    arm64.leaRdata x20, __layout_Map_Count$0_1000000_Count$0_1000000
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 72]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 40]
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 152]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 120]
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+  __il_body#13:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+  __il_body#14:
+    arm64.movImm x0, 4
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x23, x0
+  __il_cont#7:
+    arm64.movImm x24, 0
+    arm64.movImm x25, 0
+    arm64.movImm x26, 0
+    arm64.movImm x0, 56
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.storeBaseDispReg.word64 [x27 + 0], x21
+    arm64.storeBaseDispReg.word64 [x27 + 8], x20
+    arm64.storeBaseDispReg.word64 [x27 + 16], x22
+    arm64.storeBaseDispReg.word64 [x27 + 24], x23
+    arm64.storeBaseDispReg.word64 [x27 + 32], x24
+    arm64.storeBaseDispReg.word64 [x27 + 40], x25
+    arm64.storeBaseDispReg.word64 [x27 + 48], x26
+  __il_cont#3:
+    arm64.movImm x20, 0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x27
+    arm64.storeBaseDispReg.byte [x0 + 16], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#5:
+    arm64.bl Big.create
+    arm64.movRegReg x19, x0
+    arm64.bl Big.create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x19
+    arm64.storeBaseDispReg.word64 [x22 + 8], x20
+    arm64.storeBaseDispReg.byte [x22 + 16], x21
+  __il_cont#4:
+    arm64.movImm x1, 3
+  __il_body#34:
+    arm64.loadRegBaseDisp.byte x0, [x22 + 16]
+    arm64.cbz x0, ifcont#36
+  sharedView#35:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.b __il_cont#33
+  ifcont#36:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_cont#33:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.leaRdata x5, __layout_Map_Count$0_1000000_Count$0_1000000
+  __il_body#38:
+    arm64.movImm x2, 3
+  __il_cont#37:
+    arm64.movRegReg x0, x19
+    arm64.bl Map.findSlot
+    arm64.movRegReg x1, x0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#17
+  tryerr#15:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#12
+  __il_body#17:
+    arm64.movImm x0, 9223372036854775808
+    arm64.cmp x1, x0
+    arm64.b.hi __rc_panic
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+  __il_body#40:
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#42:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#12
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matcharm#43
+  matcharm#41:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#12
+  matcharm#43:
+    arm64.movImm x0, 0
+  __il_cont#12:
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#49
+  __il_body#26:
+    arm64.loadRegBaseDisp.byte x0, [x22 + 16]
+    arm64.cbz x0, ifcont#28
+  sharedView#27:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.b __il_cont#25
+  ifcont#28:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_cont#25:
+    arm64.loadRegBaseDisp.byte x0, [x0 + 16]
+    arm64.b scmerge
+  critsplit#49:
+    arm64.movRegReg x0, x1
+  scmerge:
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#48
+  __il_body#30:
+    arm64.loadRegBaseDisp.byte x0, [x22 + 16]
+    arm64.cbz x0, ifcont#32
+  sharedView#31:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.b __il_cont#29
+  ifcont#32:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+  __il_cont#29:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 3
+    arm64.cset x0, hi
+    arm64.b __il_cont#6
+  critsplit#48:
+    arm64.movRegReg x0, x1
+  __il_cont#6:
+    arm64.cbz x0, ifcont#3
+  asked:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#3:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#19
+    arm64.b __il_body#40
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_58  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#19:
+    arm64.leaRdata x0, __str_blob_25  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

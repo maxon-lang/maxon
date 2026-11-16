@@ -19,6 +19,7 @@ let sha2BlockWords = 16
 let sha256RoundCount = 64
 let sha512RoundCount = 80
 let sha256WordBytes = 4
+let sha256StateWords = 8
 let sha512WordBytes = 8
 let sha256WordBits = 32
 let sha512WordBits = 64
@@ -33,6 +34,7 @@ let sha384DigestBytes = 48
 let sha512DigestBytes = 64
 let sha256LengthFieldBytes = 8
 let sha512LengthFieldBytes = 16
+let pendingCapacityBlocks = 2
 let messageLengthBytes = 8
 let paddingMarkerByte = 0x80 as Byte
 let paddingFillByte = 0 as Byte
@@ -264,6 +266,24 @@ function sha256InitialState() returns Sha2State
 	return Sha2State from [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
 end 'sha256InitialState'
 
+function sha256HardwareAvailable() returns bool
+	#if arch(x64) or arch(arm64)
+		return __Builtins.cpuHasSha()
+	#else
+		return false
+	#endif
+end 'sha256HardwareAvailable'
+
+function sha256HardwareInitialState(initial Sha2State) returns ByteArray
+	let bytes = ByteArray.create(sha256DigestBytes, zeroed: false)
+
+	for word in initial 'eachWord'
+		appendOrderedWord(bytes, word: word as OrderedWord, width: sha256WordBytes, order: ByteOrder.littleEndian)
+	end 'eachWord'
+
+	return bytes
+end 'sha256HardwareInitialState'
+
 function sha384InitialState() returns Sha2State
 	return Sha2State from [
 		0xcbbb9d5dc1059ed8, 0x629a292a367cd507,
@@ -328,6 +348,7 @@ end 'HashAlgorithm'
 public type Digest
 	var algorithm as HashAlgorithm
 	var state as Sha2State
+	var hardwareState as ByteArray
 
 	// Reused by every block, so compressing one allocates nothing.
 	var schedule as Sha2Words
@@ -337,16 +358,27 @@ public type Digest
 
 	/// A new hash of the empty message, sharing nothing with any other `Digest`.
 	public static function create(algorithm HashAlgorithm) returns Digest
+		return Self.build(algorithm, software: false)
+	end 'create'
+
+	static function build(algorithm HashAlgorithm, software bool) returns Digest
 		let initial = match algorithm 'initial'
 			sha256 gives sha256InitialState()
 			sha384 gives sha384InitialState()
 			sha512 gives sha512InitialState()
 		end 'initial'
 
-		let schedule = Sha2Words.create(sha512RoundCount, zeroed: false)
+		let hardware = algorithm == HashAlgorithm.sha256 and not software and sha256HardwareAvailable()
+		let schedule = Sha2Words.create(0 if hardware else sha512RoundCount, zeroed: false)
+		let hardwareState = sha256HardwareInitialState(initial) if hardware else ByteArray.create(0)
+		let pending = ByteArray.create((algorithm.blockBytes() * pendingCapacityBlocks) as ElementIndex, zeroed: false)
 
-		return Digest{algorithm: algorithm, state: initial, schedule: schedule, pending: ByteArray.create(0), consumed: 0, finished: false}
-	end 'create'
+		return Digest{algorithm: algorithm, state: initial, hardwareState: hardwareState, schedule: schedule, pending: pending, consumed: 0, finished: false}
+	end 'build'
+
+	function usesHardware() returns bool
+		return hardwareState.count() != 0
+	end 'usesHardware'
 
 	/// Feed `data` into the hash. It panics after `finalize`.
 	public function update(data ByteArray)
@@ -363,15 +395,14 @@ public type Digest
 			offset = taken
 
 			if pending.count() == blockBytes 'filled'
-				compress(pending, blockOff: 0)
+				compress(pending, blockOff: 0, blocks: 1)
 				pending.clear()
 			end 'filled'
 		end 'topUp'
 
-		while data.count() - offset >= blockBytes 'wholeBlocks'
-			compress(data, blockOff: offset)
-			offset = offset + blockBytes
-		end 'wholeBlocks'
+		let wholeBlocks = ((data.count() - offset) / blockBytes) as Count
+		compress(data, blockOff: offset, blocks: wholeBlocks)
+		offset = offset + wholeBlocks * blockBytes
 
 		buffer(data, firstIndex: offset, limit: data.count())
 	end 'update'
@@ -397,12 +428,11 @@ public type Digest
 
 		appendOrderedWord(pending, word: (consumed * bitsPerByte) as OrderedWord, width: messageLengthBytes, order: ByteOrder.bigEndian)
 
-		var blockOff = 0 as ElementIndex
+		compress(pending, blockOff: 0, blocks: pending.count() / blockBytes)
 
-		while blockOff < pending.count() 'finalBlocks'
-			compress(pending, blockOff: blockOff)
-			blockOff = blockOff + blockBytes
-		end 'finalBlocks'
+		if usesHardware() 'hardware'
+			loadHardwareState()
+		end 'hardware'
 
 		let digestBytes = algorithm.digestBytes()
 		let wordBytes = algorithm.wordBytes()
@@ -431,13 +461,35 @@ public type Digest
 		end 'eachByte'
 	end 'buffer'
 
-	function compress(padded ByteArray, blockOff ElementIndex)
-		match algorithm 'compression'
-			sha256 then sha256Compress(state, schedule: schedule, padded: padded, blockOff: blockOff)
-			sha384 or
-			sha512 then sha512Compress(state, schedule: schedule, padded: padded, blockOff: blockOff)
-		end 'compression'
+	function compress(padded ByteArray, blockOff ElementIndex, blocks Count)
+		#if arch(x64) or arch(arm64)
+			if usesHardware() 'hardware'
+				__Builtins.sha256Blocks(hardwareState, padded, blockOff, blocks)
+
+				return
+			end 'hardware'
+		#endif
+
+		let blockBytes = algorithm.blockBytes()
+		var offset = blockOff
+
+		for _ in 0 upto blocks 'eachBlock'
+			match algorithm 'compression'
+				sha256 then sha256Compress(state, schedule: schedule, padded: padded, blockOff: offset)
+				sha384 or
+				sha512 then sha512Compress(state, schedule: schedule, padded: padded, blockOff: offset)
+			end 'compression'
+
+			offset = offset + blockBytes
+		end 'eachBlock'
 	end 'compress'
+
+	function loadHardwareState()
+		for slot in 0 upto sha256StateWords 'eachWord'
+			let word = readOrderedWord(hardwareState, off: slot * sha256WordBytes, width: sha256WordBytes, limit: hardwareState.count(), order: ByteOrder.littleEndian) as Sha2Word
+			state.set(slot, value: word)
+		end 'eachWord'
+	end 'loadHardwareState'
 end 'Digest'
 
 function sha2Once(algorithm HashAlgorithm, data ByteArray) returns ByteArray

@@ -1,0 +1,261 @@
+let HashSeedFileName = "hash-seed"
+let HashTierProbeSeed = b"tierseed"
+let HashTierProbeText = b"the hash tier a library cache is keyed by"
+let HashSeedAdoptionAttempts = 8
+
+enum DigestSeedBacking
+	process
+	library
+end 'DigestSeedBacking'
+
+union StoredSeed
+	held(seed HashSeed)
+	absent
+	damaged
+end 'StoredSeed'
+
+union SeedAttempt
+	settled(digest DigestSeed)
+	contended(discarded LibraryEntryTally)
+end 'SeedAttempt'
+
+type DigestSeed
+	let seed as HashSeed
+	let backing as DigestSeedBacking
+	let discarded as LibraryEntryTally
+
+	static function ofThisProcess() returns DigestSeed
+		return Self{seed: HashSeed.random(), backing: DigestSeedBacking.process, discarded: 0}
+	end 'ofThisProcess'
+
+	static function storedInTheLibrary(seed HashSeed, discarded LibraryEntryTally) returns DigestSeed
+		return Self{seed: seed, backing: DigestSeedBacking.library, discarded: discarded}
+	end 'storedInTheLibrary'
+
+	function withoutDiscards() returns DigestSeed
+		return Self{seed: self.seed, backing: self.backing, discarded: 0}
+	end 'withoutDiscards'
+
+	function isStoredInTheLibrary() returns bool
+		return self.backing == DigestSeedBacking.library
+	end 'isStoredInTheLibrary'
+end 'DigestSeed'
+
+default DigestSeed = DigestSeed.ofThisProcess()
+
+function startDigest() returns HashDigest
+	return KeyedHasher.empty(DigestSeed.current().seed)
+end 'startDigest'
+
+function digestOfBytes(bytes ByteArray) returns HashDigest
+	return mixBytes(startDigest(), bytes: bytes)
+end 'digestOfBytes'
+
+function libraryDigestSeedIsStored() returns bool
+	return DigestSeed.current().isStoredInTheLibrary()
+end 'libraryDigestSeedIsStored'
+
+function claimedSeedDiscards() returns LibraryEntryTally
+	while true 'untilClaimed'
+		let held = DigestSeed.current()
+
+		if held.discarded == 0 'nothingToClaim'
+			return 0
+		end 'nothingToClaim'
+
+		if DigestSeed.register(held.withoutDiscards(), replacing: held) 'claimed'
+			return held.discarded
+		end 'claimed'
+	end 'untilClaimed'
+
+	panic("claimedSeedDiscards: the claim loop ended without a claim")
+end 'claimedSeedDiscards'
+
+function hashTierFingerprint() returns HashDigest
+	let seed = try HashSeed.fromBytes(HashTierProbeSeed) otherwise panic("hashTierFingerprint: the probe seed spells eight bytes")
+
+	return KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: HashTierProbeText)
+end 'hashTierFingerprint'
+
+function libraryTierHome(root FilePath) returns FilePath
+	return root.join(LibraryCacheDirName).join("{hashTierFingerprint():016x}")
+end 'libraryTierHome'
+
+export function installLibraryDigestSeed()
+	let root = try hostCacheRoot() otherwise (reason) 'noRoot'
+		noteLibraryCacheTrouble("no library cache: {reason.sentence()}")
+		return
+	end 'noRoot'
+
+	DigestSeed.register(libraryDigestSeedUnder(root))
+end 'installLibraryDigestSeed'
+
+function libraryDigestSeedUnder(root FilePath) returns DigestSeed
+	let home = libraryTierHome(root)
+
+	if not Directory.create(home) 'notCreated'
+		return digestSeedOfTheProcess("{home.toString()} could not be created")
+	end 'notCreated'
+
+	sweepAbandonedSeedScratch(home)
+
+	let path = home.join(HashSeedFileName)
+	var discarded = 0 as LibraryEntryTally
+
+	for _ in 0 upto HashSeedAdoptionAttempts 'eachAttempt'
+		match nextSeedAttempt(home, path: path, discarded: discarded) 'attempt'
+			settled(digest) then return digest
+			contended(carried) then discarded = carried
+		end 'attempt'
+	end 'eachAttempt'
+
+	return digestSeedOfTheProcess("{path.toString()} kept changing while this compiler read it")
+end 'libraryDigestSeedUnder'
+
+function digestSeedOfTheProcess(reason String) returns DigestSeed
+	noteLibraryCacheTrouble("no library cache: {reason}")
+
+	return DigestSeed.ofThisProcess()
+end 'digestSeedOfTheProcess'
+
+function storedSeedAt(path FilePath) returns StoredSeed
+	if not File.exists(path) 'nothingThere'
+		return StoredSeed.absent
+	end 'nothingThere'
+
+	let bytes = try File.readBinary(path) otherwise return StoredSeed.damaged
+
+	return StoredSeed.held(try HashSeed.fromBytes(bytes) otherwise return StoredSeed.damaged)
+end 'storedSeedAt'
+
+function nextSeedAttempt(home FilePath, path FilePath, discarded LibraryEntryTally) returns SeedAttempt
+	return match storedSeedAt(path) 'stored'
+		held(seed) gives SeedAttempt.settled(DigestSeed.storedInTheLibrary(seed, discarded: discarded))
+		absent gives publishedLibraryDigestSeed(home, path: path, discarded: discarded)
+		damaged gives claimedDamagedSeed(home, path: path, discarded: discarded)
+	end 'stored'
+end 'nextSeedAttempt'
+
+function claimedDamagedSeed(home FilePath, path FilePath, discarded LibraryEntryTally) returns SeedAttempt
+	let claimed = home.join(scratchNameFor(HashSeedFileName))
+
+	try File.rename(path, to: claimed) otherwise return SeedAttempt.contended(discarded)
+
+	return match storedSeedAt(claimed) 'claimed'
+		damaged gives publishedAfterDiscarding(home, path: path, claimed: claimed, discarded: discarded)
+		held(seed) gives restoredSeed(path, claimed: claimed, seed: seed, discarded: discarded)
+		absent gives SeedAttempt.contended(discarded)
+	end 'claimed'
+end 'claimedDamagedSeed'
+
+function publishedAfterDiscarding(home FilePath, path FilePath, claimed FilePath, discarded LibraryEntryTally) returns SeedAttempt
+	removeSeedScratch(claimed)
+
+	return publishedLibraryDigestSeed(home, path: path, discarded: discarded + 1)
+end 'publishedAfterDiscarding'
+
+function restoredSeed(path FilePath, claimed FilePath, seed HashSeed, discarded LibraryEntryTally) returns SeedAttempt
+	try File.renameNew(claimed, to: path) otherwise 'notRestored'
+		removeSeedScratch(claimed)
+
+		return SeedAttempt.contended(discarded)
+	end 'notRestored'
+
+	return SeedAttempt.settled(DigestSeed.storedInTheLibrary(seed, discarded: discarded))
+end 'restoredSeed'
+
+function publishedLibraryDigestSeed(home FilePath, path FilePath, discarded LibraryEntryTally) returns SeedAttempt
+	// Listed before the seed is published: a compiler that adopts it at once writes entries under it, and
+	// the winner's sweep must not reach them.
+	let stale = libraryEntriesIn(home)
+	let fresh = HashSeed.random()
+	let pending = home.join(scratchNameFor(HashSeedFileName))
+
+	try File.writeBinary(pending, content: fresh.toBytes()) otherwise 'unwritten'
+		try File.delete(pending) otherwise ignore
+
+		return SeedAttempt.settled(digestSeedOfTheProcess("{pending.toString()} could not be written"))
+	end 'unwritten'
+
+	try File.renameNew(pending, to: path) otherwise (failure) 'unpublished'
+		try File.delete(pending) otherwise ignore
+
+		if failure != FileRenameError.alreadyExists 'unpublishable'
+			return SeedAttempt.settled(digestSeedOfTheProcess("{path.toString()} could not be written"))
+		end 'unpublishable'
+
+		return SeedAttempt.contended(discarded)
+	end 'unpublished'
+
+	return SeedAttempt.settled(DigestSeed.storedInTheLibrary(fresh, discarded: discarded + sweptLibraryEntries(stale)))
+end 'publishedLibraryDigestSeed'
+
+function libraryEntriesIn(home FilePath) returns FilePathArray
+	let entries = FilePathArray.create(0)
+	let listed = try Directory.list(home) otherwise return entries
+
+	for entry in listed 'eachEntry'
+		if not entry.filename().startsWith(HashSeedFileName) 'anEntry'
+			entries.push(entry)
+		end 'anEntry'
+	end 'eachEntry'
+
+	return entries
+end 'libraryEntriesIn'
+
+function sweptLibraryEntries(stale FilePathArray) returns LibraryEntryTally
+	var swept = 0 as LibraryEntryTally
+
+	for entry in stale 'eachEntry'
+		swept = swept + filesHeldIn(entry)
+
+		for stuck in Directory.removeTree(entry) 'eachStuck'
+			noteLibraryCacheTrouble("{stuck.toString()} could not be removed")
+		end 'eachStuck'
+	end 'eachEntry'
+
+	return swept
+end 'sweptLibraryEntries'
+
+function sweepAbandonedSeedScratch(home FilePath)
+	let entries = try Directory.list(home) otherwise return
+
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+
+		if name == HashSeedFileName 'theSeed'
+			continue
+		end 'theSeed'
+
+		if leftoverIsAbandoned(entry, standing: standingOfScratchName(name, family: ScratchFamily.afterBase(HashSeedFileName))) 'abandoned'
+			removeSeedScratch(entry)
+		end 'abandoned'
+	end 'eachEntry'
+end 'sweepAbandonedSeedScratch'
+
+function removeSeedScratch(path FilePath)
+	try File.delete(path) otherwise (failure) 'kept'
+		if failure != FileDeleteError.notFound 'stuck'
+			noteLibraryCacheTrouble("{path.toString()} could not be removed")
+		end 'stuck'
+	end 'kept'
+end 'removeSeedScratch'
+
+function filesHeldUnder(directory FilePath) returns LibraryEntryTally
+	var held = 0 as LibraryEntryTally
+	let entries = try Directory.list(directory) otherwise return 0
+
+	for entry in entries 'eachEntry'
+		held = held + filesHeldIn(entry)
+	end 'eachEntry'
+
+	return held
+end 'filesHeldUnder'
+
+function filesHeldIn(entry FilePath) returns LibraryEntryTally
+	if Directory.isDirectory(entry) 'aDirectory'
+		return filesHeldUnder(entry)
+	end 'aDirectory'
+
+	return 1
+end 'filesHeldIn'

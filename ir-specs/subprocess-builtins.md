@@ -147,14 +147,18 @@ data {
   __sched_timer_starts@584 = i64 0
   __mrt_envp@592 = i64 0
   __mrt_signal_stack_bytes@600 = i64 0
-  __mrt_tls_next_key@608 = i64 0
-  __io_pipe_seq@616 = i64 0
-  __subp_table@624 = i64 0
-  __subp_last_error@632 = i64 0
-  __slab_arena_list@640 = i64 0
-  __slab_arena_map_l1@648 = i64 0
-  __slab_state@656 = i64 0
-  __mrt_program_started@664 = i8 0
+  __mrt_cpu_aes_usable@608 = i64 0
+  __mrt_cpu_sha_usable@616 = i64 0
+  __mrt_hash_seed@624 = i64 0
+  __mrt_hash_tier@632 = i64 0
+  __mrt_tls_next_key@640 = i64 0
+  __io_pipe_seq@648 = i64 0
+  __subp_table@656 = i64 0
+  __subp_last_error@664 = i64 0
+  __slab_arena_list@672 = i64 0
+  __slab_arena_map_l1@680 = i64 0
+  __slab_state@688 = i64 0
+  __mrt_program_started@696 = i8 0
 }
 
 func @main {
@@ -445,7 +449,7 @@ func @main {
     x64.retIndirect
   __rc_panic#8:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_265]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_263]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -458,7 +462,7 @@ func @main {
     x64.retIndirect
   __rc_panic#10:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_266]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_264]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -471,7 +475,7 @@ func @main {
     x64.retIndirect
   __rc_panic#12:
     x64.callDirect __gt_panic_flush
-    x64.leaRegRdata rcx, [rip + __str_blob_267]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_265]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -929,13 +933,16 @@ data {
   __sched_sysmon_event@536 = i64 0
   __sched_sysmon_wait@544 = i64 0
   __sched_timer_starts@552 = i64 0
-  __io_pipe_seq@560 = i64 0
-  __subp_table@568 = i64 0
-  __subp_last_error@576 = i64 0
-  __slab_arena_list@584 = i64 0
-  __slab_arena_map_l1@592 = i64 0
-  __slab_state@600 = i64 0
-  __mrt_program_started@608 = i8 0
+  __mrt_cpu_aes_usable@560 = i64 1
+  __mrt_hash_seed@568 = i64 0
+  __mrt_hash_tier@576 = i64 0
+  __io_pipe_seq@584 = i64 0
+  __subp_table@592 = i64 0
+  __subp_last_error@600 = i64 0
+  __slab_arena_list@608 = i64 0
+  __slab_arena_map_l1@616 = i64 0
+  __slab_state@624 = i64 0
+  __mrt_program_started@632 = i8 0
 }
 
 func @main {
@@ -1217,7 +1224,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#8:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_265  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_263  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1234,7 +1241,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#10:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_266  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_264  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1251,7 +1258,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#12:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_267  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_265  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1745,14 +1752,18 @@ data {
   __mrt_envp@592 = i64 0
   __mrt_signal_stack_bytes@600 = i64 0
   __mrt_hwcap_atomics@608 = i64 0
-  __mrt_tls_next_key@616 = i64 0
-  __io_pipe_seq@624 = i64 0
-  __subp_table@632 = i64 0
-  __subp_last_error@640 = i64 0
-  __slab_arena_list@648 = i64 0
-  __slab_arena_map_l1@656 = i64 0
-  __slab_state@664 = i64 0
-  __mrt_program_started@672 = i8 0
+  __mrt_cpu_aes_usable@616 = i64 0
+  __mrt_cpu_sha_usable@624 = i64 0
+  __mrt_hash_seed@632 = i64 0
+  __mrt_hash_tier@640 = i64 0
+  __mrt_tls_next_key@648 = i64 0
+  __io_pipe_seq@656 = i64 0
+  __subp_table@664 = i64 0
+  __subp_last_error@672 = i64 0
+  __slab_arena_list@680 = i64 0
+  __slab_arena_map_l1@688 = i64 0
+  __slab_state@696 = i64 0
+  __mrt_program_started@704 = i8 0
 }
 
 func @main {
@@ -2034,7 +2045,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#8:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_265  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_263  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -2051,7 +2062,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#10:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_266  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_264  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -2068,7 +2079,7 @@ func @main {
     arm64.retIndirect
   __rc_panic#12:
     arm64.bl __gt_panic_flush
-    arm64.leaRdata x0, __str_blob_267  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_265  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16

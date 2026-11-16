@@ -866,6 +866,23 @@ let OpcodeAeskeygenassist = 0xDF
 let OpcodePinsr = 0x22
 let OpcodePclmulqdq = 0x44
 let OpcodePshufb = 0x00
+let OpcodePaddd = 0xFE
+let OpcodePalignr = 0x0F
+let OpcodePblendw = 0x0E
+
+enum ShaNiInstruction
+	sha256rnds2
+	sha256msg1
+	sha256msg2
+end 'ShaNiInstruction'
+
+function shaNiOpcode(instruction ShaNiInstruction) returns MachineWord
+	return match instruction 'instruction'
+		sha256rnds2 gives 0xCB
+		sha256msg1 gives 0xCC
+		sha256msg2 gives 0xCD
+	end 'instruction'
+end 'shaNiOpcode'
 
 enum AesNiInstruction
 	aesimc
@@ -895,8 +912,8 @@ function encodeSseMap3ARegRegImm8(code ByteArray, opcode MachineWord, dest X64Re
 	code.push(imm as Byte)
 end 'encodeSseMap3ARegRegImm8'
 
-function encodeSseMap38RegReg(code ByteArray, opcode MachineWord, dest X64Register, src X64Register)
-	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
+function encodeSseMap38RegReg(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, prefix SseMandatoryPrefix = SseMandatoryPrefix.packedDouble)
+	emitSseMandatoryPrefix(code, prefix: prefix)
 	emitRex(code, wide: false, regField: dest, rmField: src)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeThreeByteEscape38)
@@ -907,6 +924,22 @@ end 'encodeSseMap38RegReg'
 function encodeAesNiRegReg(code ByteArray, instruction AesNiInstruction, dest X64Register, src X64Register)
 	encodeSseMap38RegReg(code, opcode: aesNiOpcode(instruction), dest: dest, src: src)
 end 'encodeAesNiRegReg'
+
+function encodeShaNiRegReg(code ByteArray, instruction ShaNiInstruction, dest X64Register, src X64Register)
+	encodeSseMap38RegReg(code, opcode: shaNiOpcode(instruction), dest: dest, src: src, prefix: SseMandatoryPrefix.none)
+end 'encodeShaNiRegReg'
+
+function encodePaddd(code ByteArray, dest X64Register, src X64Register)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePaddd, dest: dest, src: src, wide: false)
+end 'encodePaddd'
+
+function encodePalignr(code ByteArray, dest X64Register, src X64Register, byteShift MachineWord)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodePalignr, dest: dest, src: src, imm: byteShift)
+end 'encodePalignr'
+
+function encodePblendw(code ByteArray, dest X64Register, src X64Register, selector MachineWord)
+	encodeSseMap3ARegRegImm8(code, opcode: OpcodePblendw, dest: dest, src: src, imm: selector)
+end 'encodePblendw'
 
 function encodePshufb(code ByteArray, dest X64Register, src X64Register)
 	encodeSseMap38RegReg(code, opcode: OpcodePshufb, dest: dest, src: src)

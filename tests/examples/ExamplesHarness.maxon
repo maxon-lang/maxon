@@ -1,5 +1,5 @@
 // ExamplesHarness.maxon — the shared half every case under `tests/examples/` reaches for: building
-// one program from `examples/`, `bench/concurrency/` or `bench/aes/`, or one complete program a document
+// one program from `examples/`, `bench/concurrency/`, `bench/aes/` or `bench/hash/`, or one complete program a document
 // shows, with the compiler under test, and running what it built.
 //
 // ⭐ **EVERY EXPECTATION IS EXTERNAL**: a reference output someone else published, what a benchmark's Go
@@ -37,6 +37,12 @@ let ConcurrencyBenchmarkDirName = "bench/concurrency"
 let ConcurrencyBenchmarkProcessorCounts = ["1", "4"]
 let ConcurrencyBenchmarkExitCode = 0
 
+let BenchmarkCommonProgram = "bench/common/BenchProgram.maxon"
+let BenchmarkRowFields = 6
+let BenchmarkBestNanosField = 4
+let BenchmarkFieldSeparator = " "
+let BenchmarkClockPrefix = "clock "
+
 // A Markdown document's programs are its ```maxon fences.
 let MarkdownSuffix = ".md"
 let MaxonFenceOpen = "```maxon"
@@ -70,12 +76,12 @@ end 'ExampleRun'
 // Build `<directory>/<example>` — a file or a project directory — with the compiler under test. The
 // previous run's files go first, so an executable a failed build left behind cannot answer for this
 // one.
-function requireExampleBuild(example String, directory String = ExamplesDirName) throws TestFailure
+function requireExampleBuild(example String, directory String = ExamplesDirName, companions StringArray = StringArray.create(0)) throws TestFailure
 	let source = examplePath(example, directory: directory)
 	let staging = exampleStagingDir(example, directory: directory)
 	clearStagedTree(staging)
 
-	try requireBuild(source, staging: staging, stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory))
+	try requireBuild(source, staging: staging, stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory), companions: companions)
 end 'requireExampleBuild'
 
 // Run what `requireExampleBuild` produced, with `arguments` as its command line.
@@ -94,6 +100,44 @@ function requireConcurrencyBenchmarkAnswer(workload String, arguments StringArra
 
 	discardStagedDir(exampleStagingDir(program, directory: ConcurrencyBenchmarkDirName))
 end 'requireConcurrencyBenchmarkAnswer'
+
+function withoutBestNanos(stdout String) returns String
+	var kept = ""
+
+	for line in stdout.split("\n") 'eachLine'
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		if line.startsWith(BenchmarkClockPrefix) 'clock'
+			continue
+		end 'clock'
+
+		let fields = line.split(BenchmarkFieldSeparator)
+
+		if fields.count() != BenchmarkRowFields 'malformed'
+			panic("examples tests: the benchmark printed `{line}`, which is not 'workload bytesPerOp iterations repeats bestNanos digest'")
+		end 'malformed'
+
+		var row = ""
+
+		for (iter, field) in fields.withIterator() 'eachField'
+			if iter.index() == BenchmarkBestNanosField 'timing'
+				continue
+			end 'timing'
+
+			if not row.isEmpty() 'separate'
+				row.append(BenchmarkFieldSeparator)
+			end 'separate'
+
+			row.append(field)
+		end 'eachField'
+
+		kept.append("{row}\n")
+	end 'eachLine'
+
+	return kept
+end 'withoutBestNanos'
 
 // Write `content` at `relativePath` inside `example`'s staging directory, which is the working directory
 // `runBuiltExample` gives the program — so a case hands its fixture to the program by relative path.
@@ -143,14 +187,27 @@ end 'runDocumentProgram'
 
 // Lint `source`, then build it into `staging` as `stem`; `spelling` is how every report names the
 // program.
-function requireBuild(source FilePath, staging FilePath, stem String, spelling String) throws TestFailure
+function requireBuild(source FilePath, staging FilePath, stem String, spelling String, companions StringArray = StringArray.create(0)) throws TestFailure
 	let output = executableIn(staging, stem: stem)
+	let companionPaths = StringArray.create(0)
 
-	let lint = spawnCompiler([LintCommandName, source.toString()], staged: staging, what: "the '{spelling}' lint")
+	for companion in companions 'eachCompanion'
+		companionPaths.push(checkoutPath(companion).toString())
+	end 'eachCompanion'
+
+	let lintArguments = StringArray.create(companionPaths.count() + 2, zeroed: false)
+	lintArguments.push(LintCommandName)
+	lintArguments.push(source.toString())
+
+	for companionPath in companionPaths 'eachLintedCompanion'
+		lintArguments.push(companionPath)
+	end 'eachLintedCompanion'
+
+	let lint = spawnCompiler(lintArguments, staged: staging, what: "the '{spelling}' lint")
 
 	try Expect.equal(lint.exitCode(), expected: LintedExitCode, message: "`{LintCommandName} {spelling}` exited {lint.exitCode()}. Every program the examples directory or a document shows must pass the lint rules, which `{BuildCommandName}` does not check. It wrote to stderr: {lint.stderr}")
 
-	let build = spawnBuild(source, staged: staging, output: output, label: spelling, extraArguments: StringArray.create(0))
+	let build = spawnBuild(source, staged: staging, output: output, label: spelling, extraArguments: companionPaths)
 
 	try requireBuiltExecutable(build, output: output, what: "{BuildCommandName} {spelling}", reason: "Every program the examples directory or a document shows must build.")
 end 'requireBuild'
@@ -292,7 +349,11 @@ end 'exampleSpelling'
 
 // The example's source, absolute because it is handed to a child.
 function examplePath(example String, directory String) returns FilePath
-	let spelled = exampleSpelling(example, directory: directory)
+	return checkoutPath(exampleSpelling(example, directory: directory))
+end 'examplePath'
+
+// `spelled`, a path relative to the checkout root, made absolute.
+function checkoutPath(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	if not File.exists(path) and not Directory.isDirectory(path) 'notThere'
@@ -300,7 +361,7 @@ function examplePath(example String, directory String) returns FilePath
 	end 'notThere'
 
 	return path.resolve(Directory.currentPath())
-end 'examplePath'
+end 'checkoutPath'
 
 // An example's name without its source suffix, which names its executable.
 function exampleStem(example String) returns String

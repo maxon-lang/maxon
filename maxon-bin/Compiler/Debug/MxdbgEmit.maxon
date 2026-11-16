@@ -1121,17 +1121,16 @@ function sidecarFileIdOf(fileId DebugFileId) returns MxdbgIndex
 	return (fileId - 1) as MxdbgIndex
 end 'sidecarFileIdOf'
 
-// ⭐ **BARE FNV-1a OVER THE `.text` BYTES — `ContentHash.mixBytes` IS THE WRONG FOLD HERE.** That one
-// appends a length tag, which is right for a content-addressed cache key and wrong for a digest another
-// implementation recomputes: the driver reads the code section back out of the binary and folds it plainly,
-// so a tagged digest would never match and every artifact would be refused as belonging to a different
-// build. Nothing is embedded in the executable — that would break byte-identity.
+// The `.text` bytes through `outputDigest` and nothing else: the driver reads the code section back out
+// of the binary in another process and recomputes this, so a seeded or tagged digest would never match and
+// every artifact would be refused as belonging to a different build. Nothing is embedded in the executable
+// — that would break byte-identity.
 //
 // ⭐ **BOTH ARTIFACTS A `--coverage` BUILD LEAVES BEHIND CARRY IT**, the `.mxdbg` sidecar and the `.mxcov`
 // header the reserved `.data` run is stamped with, and a report REFUSES a pair whose ids differ — so the
 // two must come from one spelling rather than from two that agree today.
 export function codeBuildId(code ByteArray) returns HashDigest
-	return Hasher.combinedBytes(Hasher.empty(), bytes: code)
+	return outputDigest(code)
 end 'codeBuildId'
 
 // The sidecar beside `outputPath`: the WHOLE output name with the suffix appended, extension and all

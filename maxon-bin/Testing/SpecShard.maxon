@@ -65,7 +65,7 @@ export type ShardSelection
 	// Every CI job computes this in its own process, so the hash must be unseeded and keyed by the
 	// name alone: shards that disagree about a spec run it twice or not at all.
 	export function holds(specName String) returns bool
-		let digest = Hasher.combinedBytes(Hasher.empty(), bytes: specName.toByteArray())
+		let digest = outputDigest(specName.toByteArray())
 		let owner = try ((digest as ShardHash) mod (self.count as ShardHash)) otherwise panic("ShardSelection.holds: a shard count is at least {SoleShardCount}")
 
 		return owner + (FirstShardNumber as ShardHash) == (self.index as ShardHash)

@@ -21,6 +21,7 @@ sidebar:
 | `File.exists(path FilePath)` | `bool` | — | True when a file exists at `path`. |
 | `File.delete(path FilePath)` | — | `FileDeleteError` | Delete a file. |
 | `File.rename(from FilePath, to FilePath)` | — | `FileRenameError` | Move a file, replacing any existing destination in one step, so a reader of `to` never sees a partly written file. |
+| `File.renameNew(from FilePath, to FilePath)` | — | `FileRenameError` | Move a file to a destination that must not exist. An existing `to` is `alreadyExists` and is left as it was; the check and the move are one step, so of several processes renaming onto one path exactly one succeeds. |
 | `File.info(path FilePath)` | `FileInfo` | `FileInfoError` | Size, timestamps and attributes, from one OS call. |
 
 ### Types
@@ -62,10 +63,11 @@ file that is not there, and the file named by the bytes before the NUL is left a
 | `FileReadError` | `notFound`, `accessDenied`, `busy`, `failed` |
 | `FileWriteError` | `failed`, `notFound`, `accessDenied`, `alreadyExists`, `busy`, `partialFileLeft` |
 | `FileDeleteError` | `notFound`, `accessDenied`, `busy`, `failed` |
-| `FileRenameError` | `failed`, `notFound`, `accessDenied`, `busy` |
+| `FileRenameError` | `failed`, `notFound`, `accessDenied`, `busy`, `alreadyExists` |
 | `FileInfoError` | `notFound`, `accessDenied`, `busy`, `failed` |
 
-`alreadyExists` and `partialFileLeft` come only from `File.createText`. Every one of these enums has
+`alreadyExists` comes only from `File.createText` and `File.renameNew`, and `partialFileLeft` only from
+`File.createText`. Every one of these enums has
 `failure()`, which returns the cause as a `FileFailure` — `notFound`, `accessDenied`, `alreadyExists`, `busy`
 or `failed` (`partialFileLeft` gives `failed`) — so one `match` handles the causes of any file operation.
 

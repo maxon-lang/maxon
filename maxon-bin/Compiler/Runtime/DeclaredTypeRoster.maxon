@@ -1,0 +1,69 @@
+// An emitter walking the type registries walks this or `structRuntimeRoster`: the registries'
+// hashes are seeded per process, and the-output-is-independent-of-the-hash-seed pins the output.
+function enumLayoutsInNameOrder(project Project) returns FrozenEnumLayoutArray
+	let ordered = FrozenEnumLayoutArray.create(0)
+
+	for (_, layout) in project.enumTypes 'eachDeclared'
+		ordered.push(layout)
+	end 'eachDeclared'
+
+	ordered.sortBy(function(left immutable EnumLayout, right immutable EnumLayout) gives compareBytesOrdinally(left.name, right: right.name))
+
+	return ordered
+end 'enumLayoutsInNameOrder'
+
+// ⚠⚠ **THE TWO REGISTRIES HAND OVER LAYOUTS FROM TWO NAME SPACES, AND THE INTERNER TRAVELS WITH THE
+// LAYOUT (`StructRosterEntry`).** A `project.structTypes` layout's field-type ids index `project.typeNames`;
+// an INTERNED TUPLE comes out of the signature index and its ids index that index's table. Resolving both
+// against the project's misreads them — see `ProgramSignatures.indexTypeNames` for why a misread that
+// happens to land on a declared type is worse.
+function structRosterEntryNamed(project Project, signatures ProgramSignatures, name ByteArray) returns StructRosterEntry throws MapError
+	if let committed = try project.structTypes.get(name) 'committed'
+		return StructRosterEntry.create(committed, typeNames: project.typeNames)
+	end 'committed'
+
+	if not isTupleTypeName(name) 'notATuple'
+		throw MapError.keyNotFound
+	end 'notATuple'
+
+	return StructRosterEntry.create(try signatures.registeredLayout(name), typeNames: signatures.indexTypeNames())
+end 'structRosterEntryNamed'
+
+// ⭐⭐ **THE ONE ROSTER OF LAYOUTS A PER-STRUCT RUNTIME ENTRY MAY BE SYNTHESIZED FOR — TWO REGISTRIES, ONE
+// DERIVATION.** Every per-struct walk — the installers and the cascade-need walks alike — must agree
+// about WHICH LAYOUTS EXIST; a missing body is `bakeFuncAbs64Relocs: … it was never installed`, a
+// BACKEND PANIC rather than a diagnostic. What stays per-entry is the ADMISSION TEST, which is genuinely
+// different (`installOneStructDestructor` gates on a managed field, `installOneStructCascade`
+// deliberately does not).
+//
+// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED
+// ONE.** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
+// ARTIFACT's own layouts, so it holds every tuple the source SPELLS and no tuple minted by SUBSTITUTION —
+// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE, straight into the
+// whole-program index. The parser emits the drop call either way, so a substituted tuple missing
+// here is a BACKEND panic (`resolveCallFixups: call to unknown function '__destruct___Tuple2…'`)
+// rather than a leak.
+//
+// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED; THIS WALK MUST NOT OWN ALL TUPLES.**
+// The two registries are NOT two views of one table for a tuple: a sweep key is `(spelling, file)`
+// and only a CANONICAL name is a whole-program identity, so the index can hold a layout whose
+// elements were resolved in a different file's scope from the one `commitStructTypes` committed.
+// The project's entry is the authoritative resolved one wherever it exists; this walk supplies only
+// what nothing committed.
+export function structRuntimeRoster(project Project, signatures ProgramSignatures) returns StructRosterEntryArray
+	let roster = StructRosterEntryArray.create(0)
+
+	for (name, _) in project.structTypes 'eachCommitted'
+		roster.push(try structRosterEntryNamed(project, signatures: signatures, name: name) otherwise panic("structRuntimeRoster: the committed struct '{String.from(name)}' is not in the registry it was read from"))
+	end 'eachCommitted'
+
+	for layout in signatures.tupleLayouts() 'eachInternedTuple'
+		if not project.structTypes.contains(layout.name) 'notCommitted'
+			roster.push(try structRosterEntryNamed(project, signatures: signatures, name: layout.name) otherwise panic("structRuntimeRoster: the interned tuple '{String.from(layout.name)}' is not in the index it was read from"))
+		end 'notCommitted'
+	end 'eachInternedTuple'
+
+	roster.sortBy(function(left StructRosterEntry, right StructRosterEntry) gives compareBytesOrdinally(left.layout.name, right: right.layout.name))
+
+	return roster
+end 'structRuntimeRoster'

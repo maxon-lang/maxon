@@ -56,7 +56,7 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | `byteLength()` | `BytePos` | Number of UTF-8 bytes. |
 | `isEmpty()` | `bool` | True when the string has no bytes. |
 | `isAscii()` | `bool` | True when every byte is below 128. |
-| `hash()` | `HashValue` | Through `Hashable`. |
+| `hash()` | `HashValue` | The [`Hasher`](/docs/stdlib/data/#hasher) fold of the string's UTF-8 bytes, so it differs between processes. |
 | `equals(other String)` | `bool` | Byte-wise equality; `==` calls it. |
 
 ### Search
@@ -204,7 +204,7 @@ end 'StringError'
 | `advanceBy(n CodepointDelta)` | `Character` | The character `n` scalar values away, in either direction; the surrogate block U+D800 to U+DFFF is not counted. |
 | `toString()` | `String` | The cluster as a string. |
 | `clone()` | `Character` | An independent copy. |
-| `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. |
+| `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. `hash()` is the `String.hash()` of the cluster's UTF-8 bytes. |
 
 ```maxon
 enum CharacterError implements Error

@@ -38,13 +38,7 @@ export function requireSpecVerdictMapping()
 	checkEveryOutcomeIsCounted(broken)
 	checkOnlyACompiledVerdictPinsIr(broken)
 
-	if broken.isEmpty() 'everyRowHeld'
-		return
-	end 'everyRowHeld'
-
-	// `panic` takes a string literal (a `let`-bound String is rejected), so the list is interpolated.
-	let report = indentedList(broken, indent: BrokenVerdictRowIndent)
-	panic("SpecVerdictSelfTest: {broken.count()} row(s) of the not-run verdict mapping no longer hold. A lane whose whole job is reporting what it did NOT run is one simplification away from reporting that it passed.{report}")
+	requireEveryRowHeld(broken, headline: "SpecVerdictSelfTest: {broken.count()} row(s) of the not-run verdict mapping no longer hold. A lane whose whole job is reporting what it did NOT run is one simplification away from reporting that it passed.", indent: BrokenVerdictRowIndent)
 end 'requireSpecVerdictMapping'
 
 // ⭐ ROW 1 — a run this lane could not perform is `notRunHere`; a launch that FAILED is a `fail`.
@@ -61,9 +55,15 @@ function checkLaunchFailureVerdicts(broken StringArray)
 	// program this compiler had just emitted and could not start gets waved through.
 	let attempted = verdictOf(RunObservation.failed("the OS refused it"))
 
-	if not isFailVerdict(attempted) 'excusedAFailedLaunch'
+	if not attempted.isFail() 'excusedAFailedLaunch'
 		broken.push("a binary that FAILED TO LAUNCH earned '{verdictLine(attempted, label: SelfTestName)}' instead of a FAIL. A launch that was attempted and did not work is a defect, and running the program is what exists to catch it.\n")
 	end 'excusedAFailedLaunch'
+
+	let refused = verdictOf(RunObservation.notLaunched("the OS refused to start it"))
+
+	if not refused.isFail() 'excusedARefusedLaunch'
+		broken.push("a binary the runner REFUSED TO LAUNCH earned '{verdictLine(refused, label: SelfTestName)}' instead of a FAIL. A refused launch is still a defect, and it must not read as a program that ran.\n")
+	end 'excusedARefusedLaunch'
 
 	for target in supportedTargets() 'eachTarget'
 		let key = targetToString(target)
@@ -101,17 +101,6 @@ function checkLaunchFailureVerdicts(broken StringArray)
 		end 'wrongVerdict'
 	end 'eachTarget'
 end 'checkLaunchFailureVerdicts'
-
-// Is this the FAIL arm specifically? `not isPass()` would not do: it is also true of the two not-run
-// arms, which is exactly the confusion the row above exists to refuse.
-function isFailVerdict(outcome TestOutcome) returns bool
-	return match outcome 'v'
-		fail gives true
-		pass gives false
-		skipped gives false
-		notRunHere gives false
-	end 'v'
-end 'isFailVerdict'
 
 // The verdict one observation earns, through the runner's own conversion. A `run` expectation with the
 // simplest possible pins, because what is under test is the OBSERVATION arm and not the assertions.

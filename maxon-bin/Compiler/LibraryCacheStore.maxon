@@ -2,7 +2,7 @@ export let LibraryCacheDirName = "library"
 
 // A change to any column the library cache writes bumps this: an entry written under the old number would
 // otherwise be read under the new layout.
-let LibraryCacheFormat = 28
+let LibraryCacheFormat = 29
 let LibraryEntryExtension = ".mxlc"
 let LibraryEntryNameSeparator = "-"
 
@@ -323,7 +323,12 @@ function resolvedLibraryDirectory(target Target) returns LibraryCacheDirectory
 	// The identity's modification time is whole seconds, so two builds of one size inside one second
 	// share a directory. The schema fingerprint in every entry refuses an entry whose codec differs,
 	// and nothing else tells the two apart.
-	let formats = root.join(LibraryCacheDirName)
+	if not libraryDigestSeedIsStored() 'noSeed'
+		noteLibraryCacheTrouble("no library cache: no digest seed is stored under {libraryTierHome(root).toString()}")
+		return LibraryCacheDirectory.unavailable
+	end 'noSeed'
+
+	let formats = libraryTierHome(root)
 	let lineage = formats.join(cacheFormatDirectoryName(LibraryCacheFormat)).join(identity.lineage())
 	let entries = lineage.join(identity.build())
 	let firstUseOfThisBuild = not Directory.exists(entries)
@@ -334,14 +339,15 @@ function resolvedLibraryDirectory(target Target) returns LibraryCacheDirectory
 	end 'notCreated'
 
 	if firstUseOfThisBuild 'creatingTheBuildsDirectory'
-		discardSupersededLibraryCaches(formats, lineage: lineage, current: entries)
+		discardSupersededLibraryCaches(root.join(LibraryCacheDirName), formats: formats, lineage: lineage, current: entries)
 	end 'creatingTheBuildsDirectory'
 
 	return LibraryCacheDirectory.available(entries)
 end 'resolvedLibraryDirectory'
 
-function discardSupersededLibraryCaches(formats FilePath, lineage FilePath, current FilePath)
+function discardSupersededLibraryCaches(libraryRoot FilePath, formats FilePath, lineage FilePath, current FilePath)
 	discardOlderFormats(formats, than: LibraryCacheFormat)
+	discardOlderFormats(libraryRoot, than: LibraryCacheFormat)
 
 	if let builds = try Directory.list(lineage) 'buildsListed'
 		for build in builds 'eachBuild'

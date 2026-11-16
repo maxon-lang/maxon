@@ -147,7 +147,8 @@ makes — so a compile lexes, sweeps and parses the library once per compiler an
 compile, in any process, starts from what that one wrote:
 
 ```text
-<cache>/library/v<cache format>/<compiler path and target>/<compiler build>/
+<cache>/library/<hash tier>/hash-seed
+<cache>/library/<hash tier>/v<cache format>/<compiler path and target>/<compiler build>/
 ├── views-<key>.mxlc            # every library file's tokens with `#if` resolved
 ├── baseline-<key>.mxlc         # the library's declarations
 ├── core-<key>.mxlc             # the same, less the files that declare generic functions
@@ -157,6 +158,13 @@ compile, in any process, starts from what that one wrote:
 
 - **It is always on**, under the same `<cache>` as the run cache: the first usable row of the table
   above, so `MAXON_RUN_CACHE_ROOT` moves it too. On a host with no usable row, compiles run without it.
+- **Its keys come from one stored seed.** The cache's keys and checksums are
+  [`KeyedHasher`](/docs/stdlib/data/#keyedhasher) digests, and those differ between hash tiers, so each tier the
+  host's compiles run on has a directory of its own, named by a digest that tier alone computes. That
+  directory holds `hash-seed`, the 8 bytes of a [`HashSeed`](/docs/stdlib/data/#hashseed) every compile
+  using it folds its keys from. The first compile to find no seed writes one, removing whatever entries the
+  directory held; of compiles racing to write it, one seed wins and the others adopt it. A compile that can
+  neither read nor write the seed runs without the cache.
 - **It holds the installed `stdlib/` and `runtime/`.** [Scriptlib](#the-scriptlib-directory) packages
   are your own files and change between compiles, so each compile reads and parses them fresh.
 - **A program folds its own declarations on top of the library's.** A program that shadows a library
@@ -171,7 +179,8 @@ compile, in any process, starts from what that one wrote:
   as a cold one. Entries are written under a temporary name and renamed into place, so concurrent compiles
   share the cache safely.
 - **Old entries are removed as new ones are written.** A new build of the compiler replaces the previous
-  build's directory, a directory an older entry format left is removed, each kind keeps its 4 newest
+  build's directory, a directory an older entry format left is removed (directly under `library/` as well
+  as under a tier's directory), each kind keeps its 4 newest
   entries (16 for parses), and the 16 most recently written compiler directories are kept.
 
 [`maxon cache`](#maxon-cache) counts its entries and `clear` removes it. Under `--log=compiler:debug` each
@@ -998,6 +1007,18 @@ with, passed to the binary as `--descendant-token=<token>`, and its `ended` line
 count; `maxon test` takes out the frames bearing its token, and a count that differs from them fails the
 test. A frame a test prints with any other token, or none, is test output.
 
+**The hash seed and tier.** A run draws one hash seed and hands it to every test process as
+`MAXON_HASH_SEED`, with a `MAXON_HASH_TIER`: `aes` when the target has an `aes` tier, the test binary runs
+natively on this CPU and the CPU has AES, else `software`. A non-empty value of either variable already in
+`maxon test`'s own environment is kept. Every failure block ends with the pair, at the block's indent:
+
+```text
+  MAXON_HASH_SEED=<16 hex digits> MAXON_HASH_TIER=<tier>
+```
+
+Under `--json`, the record of every test that did not pass carries the same pair as `hashSeed` and
+`hashTier`. Running with both variables set to the pair named reproduces the run's hashing.
+
 **Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
 harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
 leak found at exit, an entry left in the process's scratch directories, or a process left running after
@@ -1230,8 +1251,9 @@ library cache — baseline <loaded|built|unused>, <n> loaded, <n> written, <n> r
 `baseline` says where the library's declarations came from: `loaded` from the cache, `built` by this
 compile (which then wrote them), or `unused` when the program sweeps the library itself. The counts are the
 cache entries this compile loaded, wrote and rejected, then the library files whose declarations it swept
-and the library files it parsed. The lines prefixed `library cache:` say why an entry was rejected or a
-baseline went unused.
+and the library files it parsed. `rejected` includes the entries removed, and a damaged `hash-seed`
+replaced, when this compile wrote the tier's seed. The lines prefixed `library cache:` say why an entry was
+rejected or a baseline went unused, or, as `no library cache: <reason>`, why the compile ran without it.
 
 **The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature
@@ -1335,6 +1357,8 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | Variable | Effect |
 |----------|--------|
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A decimal number from 1 to 2147483647, optionally led by `+`, sets it exactly, above the machine's count as well as below it; any other value is ignored. `Scheduler.processorCount()` answers the resulting count. |
+| `MAXON_HASH_TIER` | Forces the tier the seeded hash ([`Hasher`](/docs/stdlib/data/#hasher), [`KeyedHasher`](/docs/stdlib/data/#keyedhasher), and every `String`, `Character` and `Array` `hash()`) runs on: `aes` or `software`. Unset or empty, the program takes the best tier the host has, `aes` before `software`; `software` is one function on every target, and the only tier `wasm32-wasi` has. A value that names no tier ends the program before `main` with exit code 1 and `MAXON_HASH_TIER=<value> is not a hash tier: expected aes or software` on stderr, and a tier the host lacks with `MAXON_HASH_TIER=<value> is not available on this host: its best hash tier is <best>`. A program reads this variable and `MAXON_HASH_SEED` only when it contains the hash runtime, and then checks both before `main`, whether or not it reaches a hash; a program with no hash runs whatever they hold. The compiler reads it too, and its library cache keeps one directory per tier. |
+| `MAXON_HASH_SEED` | Pins the process's hash seed, the one `Hasher` and every `hash()` fold from, which is otherwise drawn from the operating system at startup. The value is 16 hexadecimal digits, upper or lower case, read in order as the seed's 8 bytes. Unset or empty draws a seed. Any other value ends the program before `main` with exit code 1 and `MAXON_HASH_SEED=<value> is not a hash seed: expected 16 hexadecimal digits` on stderr. A pin is readable by the program and inherited by the processes it starts, and a pinned process has no collision resistance against anyone who knows the pin, so a deployed program runs unpinned. [`scale-test`](/docs/cli/compiler-development/#maxon-scale-test) sets it for every compile it measures, and [`spec-test`](/docs/cli/compiler-development/#maxon-spec-test) and [`maxon test`](#maxon-test) for every program they run. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 | `MAXON_TRACK_DESCENDANTS` | Set by `maxon test` and `spec-test` for every program they run on a native target. A value starting `A` arms descendant tracking when the program starts, so [`Process.endDescendants()`](/docs/stdlib/io/#process) finds every process it started; the text after the `A` is the token the program ends each stderr frame with, naming a process left running (`@@maxon-spec@@!<pid> <name>`, a tab, the token); the program then rewrites the `A` to `D`, so the processes it starts inherit the variable without arming. A host that refuses the tracking ends the program at start with a fatal naming it. With any other value, or unset, a program that calls `Process.endDescendants()` tracks its descendants from startup, for that call alone; every other program runs untracked. |
 

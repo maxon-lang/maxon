@@ -268,7 +268,9 @@ Output: `05 false` and `negativeInteger`.
 ## Sha2
 
 The SHA-2 hash functions of FIPS 180-4. `sha256`, `sha384` and `sha512` hash a whole `ByteArray`; a
-`Digest` takes the message in chunks.
+`Digest` takes the message in chunks. SHA-256 runs on the CPU's SHA-256 instructions where it has them
+(SHA-NI on x64, the ARMv8 SHA2 extension on arm64) and in portable code elsewhere, with the same digest
+either way.
 
 | Function | Returns | Description |
 |----------|---------|-------------|
@@ -786,33 +788,96 @@ Output: `invalidCertificate`.
 
 ## Hasher
 
-`Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.
-Its result is a `HashDigest`, `bits(64)`.
+`Hasher` is the process's seeded hash, in the shape of Go's `hash/maphash`, for hash tables and in-process
+keys, and it is not cryptographic. It folds from a seed the process draws at startup, and its result is a
+`HashValue`, so it differs from run to run. `String.hash()`, `Character.hash()` and `Array.hash()` are this
+fold, and so is a type's own `hash()` that folds its fields with a `Hasher`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Hasher.create()` | `Hasher` | A hasher at the FNV-1a offset basis. |
-| `Hasher.resume(state HashDigest)` | `Hasher` | Continue from a value `finalize()` returned. |
+| `Hasher.create()` | `Hasher` | A hasher at the start of the process fold. |
 | `combine(value HashDigest)` | — | Fold in one value. |
-| `combineBytes(bytes ByteArray)` | — | Fold in each byte. |
-| `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
-| `Hasher.empty()` | `HashDigest` | The state of an empty fold. |
-| `Hasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
-| `Hasher.combinedBytes(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
+| `combineBytes(bytes ByteArray)` | — | Fold in the bytes as one step. |
+| `finalize()` | `HashValue` | The fold's 32-bit hash. |
 
-FNV-1a folds a flat byte sequence and records no lengths, so `"ab"` then `"c"` hashes the same as `"a"`
-then `"bc"`. When hashing a sequence of parts, combine each part's length too.
+Each step's state seeds the next, so the steps are delimited: `"ab"` then `"c"` hashes apart from `"abc"`
+and from `"a"` then `"bc"`. Two folds through the same steps reach one hash within a process.
+
+The seed is what keeps keys chosen to collide from crowding one slot of a [`Map`](/docs/stdlib/collections/#map) or [`Set`](/docs/stdlib/collections/#set).
+That resistance covers `String`, `Character` and `Array` keys and keys whose `hash()` is built with
+`Hasher`. Integer and float keys hash without the seed ([Primitive Extensions](/docs/stdlib/runtime/#primitive-extensions)),
+and mixing the seed into the table itself is
+[maxon-lang/maxon#79](https://github.com/maxon-lang/maxon/issues/79).
+
+The tier is chosen once, before `main`: `aes` (`AESENC` on x64, `AESE` and `AESMC` on arm64) when the CPU
+has AES, else `software`, which is one function on every target and the tier `wasm32-wasi` always runs.
+Each tier is a different hash. [`MAXON_HASH_TIER`](/docs/cli/#environment-variables) forces one, and
+[`MAXON_HASH_SEED`](/docs/cli/#environment-variables) pins the process seed.
 
 ```maxon
 function main() returns ExitCode
-	let hasher = Hasher.create()
+	let first = Hasher.create()
+	first.combineBytes("ab".toByteArray())
+	first.combine(7)
+
+	let second = Hasher.create()
+	second.combineBytes("ab".toByteArray())
+	second.combine(7)
+
+	print("{first.finalize() == second.finalize()}\n")
+	return 0
+end 'main'
+```
+
+Output: `true`.
+
+### KeyedHasher
+
+`KeyedHasher` is the same fold from a [`HashSeed`](#hashseed) the program supplies, with its whole 64-bit
+state: its result is a `HashDigest`, `bits(64)`. It is for a digest the program keeps, resumes, or threads
+through expressions.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `KeyedHasher.create(seed HashSeed)` | `KeyedHasher` | A hasher at the start of a fold from `seed`. |
+| `KeyedHasher.resume(state HashDigest)` | `KeyedHasher` | Continue from a value `finalize()` returned. |
+| `combine(value HashDigest)` | — | Fold in one value. |
+| `combineBytes(bytes ByteArray)` | — | Fold in the bytes as one step. |
+| `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
+| `KeyedHasher.empty(seed HashSeed)` | `HashDigest` | The state of an empty fold from `seed`. |
+| `KeyedHasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
+| `KeyedHasher.combinedBytes(state HashDigest, bytes ByteArray)` | `HashDigest` | The bytes as one step, as an expression. |
+
+A digest depends on its seed, the steps folded and the hash tier, so it differs between seeds, tiers and
+hosts. Two folds from one seed through the same steps reach one digest in any process on the same tier.
+Keep a digest beside the seed it came from, and use [`sha256`](#sha2) for a digest that is the same
+everywhere.
+
+```maxon
+function main() returns ExitCode
+	let seed = HashSeed.random()
+	let hasher = KeyedHasher.create(seed)
 	hasher.combineBytes("ab".toByteArray())
 	hasher.combine(7)
 
-	let direct = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
+	let direct = KeyedHasher.combined(KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: "ab".toByteArray()), value: 7)
 	print("{hasher.finalize() == direct}\n")
 	return 0
 end 'main'
 ```
 
 Output: `true`.
+
+### HashSeed
+
+Every `KeyedHasher` fold starts from a `HashSeed`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `HashSeed.random()` | `HashSeed` | — | 64 bits of fresh entropy from the operating system, whatever `MAXON_HASH_SEED` holds. |
+| `toBytes()` | `ByteArray` | — | The seed as exactly 8 bytes. |
+| `HashSeed.fromBytes(bytes ByteArray)` | `HashSeed` | `HashSeedError` | The seed 8 bytes spell; any other count throws `HashSeedError.wrongByteCount`. |
+
+A seed written with `toBytes` and read back with `fromBytes` is the same seed, so a seed stored beside the
+digests it made keys them in a later process on the same tier. The compiler's
+[library cache](/docs/cli/#the-library-cache) keeps its seed this way.

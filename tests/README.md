@@ -122,7 +122,7 @@ tests/
       expected-tree/             stored names only  — see rule 1
       expected-stdout.txt  expected-stderr.txt  expected-exit.txt  argv.txt?
   testCommand/
-    fixtures.maxtest             the shared half: paths, argv, the staging in the test scratch directory, the flag spellings (`--list`, `--build`, `--json`), the `binary` key, the clean exit, the two corpus guards
+    fixtures.maxtest             the shared half: paths, argv, the staging in the test scratch directory, the flag spellings (`--list`, `--build`, `--json`), the `binary` key, the clean exit, the two corpus guards, and the re-record mode: with `MAXON_RECORD_FIXTURE_EXPECTATIONS` set to anything non-empty, each case writes the stdout it observed to its `expected.txt` before comparing (after its exit code has matched), so the next run is the diff to read; every case runs with the pinned `MAXON_HASH_SEED` and `MAXON_HASH_TIER=software`, so a recorded report is the same on every host
     <case>.maxtest               ONE spawning `test` per file - see rule 5
     duplicate-private-functions-refused.maxtest      a free function declared twice in one directory is a compile error naming each later declaration, never a crash
     list-build.maxtest           `--list --build --json` names an absolute binary with its sidecar; each listed `select` runs one test
@@ -617,6 +617,17 @@ tests/
     library-cache-a-build-the-front-end-refuses-still-keeps-the-library.maxtest   a refused build still reports and keeps the library entries it produced, and the next build loads them
     library-cache-is-per-target.maxtest                     a build for another target loads none of the baseline another target wrote
     library-cache-rejects-a-damaged-entry.maxtest           a damaged entry is rejected and rewritten, and the build is the cold one
+    library-cache-holds-one-hash-seed.maxtest              two builds on one fresh library cache leave one eight-byte hash seed, and the second build loads the baseline the first wrote
+    the-output-is-independent-of-the-hash-seed.maxtest   two cold builds of a two-file program whose enum and union lookups run at run time, two of them on case names spelled nowhere else, and whose records and union are cloned, into one output path under `MAXON_HASH_SEED` `0123456789abcdef` and `fedcba9876543210`, write the same executable and sidecar, plain and with `--debugstream`
+    the-compiler-builds-a-hashing-program-on-every-hash-tier.maxtest   under each of the two hash tiers, `aes` and `software`, a build compiles a hashing program that runs; a tier the host lacks is refused naming itself
+    spec-test-names-the-hash-seed-and-tier-of-a-failing-case.maxtest   two failing cases of one `spec-test` run that pin nothing each report `    MAXON_HASH_SEED=<16 lowercase hex digits> MAXON_HASH_TIER=<aes|software>` as a line of their failure, the same pair, which their programs saw in their environment; the same program built and run under that pair prints the line the failure showed
+    spec-test-keeps-the-hash-pins-a-case-sets-and-hands-it-the-rest.maxtest   a case pinning both variables, only the seed or only the tier through `<!-- env: -->` reports its own, and the run's drawn value for the one it leaves unset; each program saw what its failure names and prints the same line run again under it
+    spec-test-draws-a-fresh-hash-seed-for-every-run.maxtest   two runs of one spec report two seeds and one tier, and a run launched with only `MAXON_HASH_SEED` set reports that seed with the host's tier
+    spec-test-names-the-run-pins-of-a-case-that-fails-to-compile.maxtest   two cases whose program does not compile, one pinning a seed and a tier through `<!-- env: -->`, report the run's pair, the one the compiler ran under, and neither names the pinned seed
+    spec-test-names-the-run-pins-of-a-case-whose-ir-pin-differs.maxtest   a case pinning a seed and a tier whose program runs and passes but whose Target IR pin for the running lane differs reports the run's pair, as an unpinned sibling does
+    test-names-the-hash-seed-and-tier-of-a-failing-test.maxtest   a failing test of `maxon test` reports `  MAXON_HASH_SEED=<16 lowercase hex digits> MAXON_HASH_TIER=<aes|software>` in its failure block, the test process and a process it spawns saw that pair, a run under it receives the same hash, and a fresh run draws another seed
+    test-keeps-the-hash-pin-its-environment-sets-and-hands-it-the-rest.maxtest   a `maxon test` run launched with only the seed, or only the tier, set keeps it and is handed the other
+    library-cache-sweeps-an-abandoned-seed-scratch-file.maxtest   a build removes the hash-seed scratch file of a compiler that has ended, and keeps one a running compiler owns and the published seed
     library-cache-an-entry-written-under-another-schema-is-rejected.maxtest      an entry carrying another codec schema's fingerprint is rejected, and the build is the cold one
     library-cache-an-entry-holding-an-out-of-range-number-is-rejected.maxtest    an entry whose checksum holds and whose number is out of range is rejected, and the build is the cold one
     a-record-layout-guard-fails-the-compile-when-the-record-grows.maxtest        a record guarded by its byte size stops compiling when a field is added without regenerating the guard
@@ -776,6 +787,7 @@ tests/
     run-lists-the-tasks-a-directory-declares.maxtest                   a bare run lists the exported tasks and nothing else
     run-refuses-a-task-nobody-declared.maxtest                         a task nobody declared is refused and the tasks that are there are listed
     run-streams-a-task-and-forwards-its-exit-code.maxtest              a task prints on the callers stdout and its exit code is the commands
+    scale-test-repeated-compiles-of-a-rung-report-the-same-memory.maxtest   scale-test compiles one rung twice under a random harness seed, and both compiles report the same memory
     scale-test-rung-zero-compiles-and-every-witness-holds.maxtest      scale-test compiles and runs its generated rung 0, with every witness holding
     stage-library-tier-stages-the-tier-and-the-compiler.maxtest        stage-library-tier copies both tiers and the compiler into the directory it is given
     test-default-deadline-outlasts-a-file-that-runs-past-five-seconds.maxtest   maxon test with no --timeout= lets a test file run past five seconds
@@ -784,6 +796,9 @@ tests/
     upgrade-dry-run-names-the-child-environment.maxtest                upgrade --dry-run names every variable the run would set for the child
     wasm-call-free-functions-record-no-frame.maxtest                   a wasm function that calls nothing records no frame and one that calls does
     wasm-fixed-array-stores-take-each-value-once.maxtest               a wasm store at a proven index consumes its value once and calls no runtime store
+    fixtures/hash-seed-independent-output/main.maxon.fixture  shelves.maxon.fixture   stored names only - see rule 1
+    fixtures/hash-report-program/main.maxon.fixture   the program every case of the generated hash-report spec runs: it prints the two hash variables it sees and `"abc".hash()` - stored name only, see rule 1
+    fixtures/hash-report-test/hashed.maxtest.fixture   the `maxon test` file that fails on `"abc".hash()` and says, in its message, the two hash variables it and a process it spawns saw - stored name only, see rule 1
   profile/
     ProfileHarness.maxon                    the shared half: the profiler run, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -887,7 +902,7 @@ tests/
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
     fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
   examples/
-    ExamplesHarness.maxon                   the shared half: lint and build one example, bench/concurrency/ or bench/aes/ program or document's program into `<test scratch>/<source spelling>/`, run it, check its answer
+    ExamplesHarness.maxon                   the shared half: lint and build one example, bench/concurrency/, bench/aes/ or bench/hash/ program or document's program into `<test scratch>/<source spelling>/`, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
     hello.maxtest                           prints `Hello, world!` and exits 0
     binary-trees.maxtest                    the published n=10 checks, exit 0
@@ -913,6 +928,7 @@ tests/
     bench-concurrency-thread-ring.maxtest   1000 passes round 503 services at MAXON_MAX_PROCS=1 and 4 name Go's holder, 498
     bench-concurrency-worker-pool.maxtest   16 tasks of 1000 kernel rounds at MAXON_MAX_PROCS=1 and 4 print Go's sum
     bench-aes.maxtest                       every AES workload at repeats 1, divisor 1000 prints Go crypto/aes's iteration counts and digests
+    bench-hash.maxtest                      every hash workload at repeats 1, divisor 1000, on the host's best tier and on `software`, prints the iteration counts and digests Go's maphash, map and crypto/sha256 print
   warmRebuild/
     WarmRebuildHarness.maxon                the shared half: the `verify-warm-rebuild` spawn, which asserts `PASS immutable:`
     warm-equals-cold.maxtest                `verify-warm-rebuild` holds on a program whose parses mint instances
@@ -1882,14 +1898,16 @@ so an edit to a document cannot quietly drop its program out of the gate.
 ⭐⭐ **THESE EXPECTATIONS ARE HAND-WRITTEN, AND THAT INVERTS RULE 6 ON PURPOSE.** An answer generated by
 running this compiler would agree with whatever the compiler does; the point here is an answer that
 does not come from it. Every expected value is EXTERNAL — the Benchmarks Game's published reference
-output, the behaviour the example's own source documents, or what a `bench/concurrency/` or `bench/aes/`
-program's Go twin prints — and each case cites its source in a comment beside the value.
+output, the behaviour the example's own source documents, or what a `bench/concurrency/`, `bench/aes/` or
+`bench/hash/` program's Go twin prints — and each case cites its source in a comment beside the value.
 
-⭐ **THE `bench/concurrency/` AND `bench/aes/` PROGRAMS ARE GATED FOR CORRECTNESS ONLY.**
+⭐ **THE `bench/concurrency/`, `bench/aes/` AND `bench/hash/` PROGRAMS ARE GATED FOR CORRECTNESS ONLY.**
 `requireConcurrencyBenchmarkAnswer` builds one and runs it at `MAXON_MAX_PROCS=1` and `4`, at a small size,
 against its Go twin's output. `bench-aes.maxtest` runs `bench/aes/aes.maxon` at a small size and compares
-every line, its time field removed, with what the Go program's `std` arm prints. Their timing is
-`scripts/bench-concurrency.py`'s and `scripts/bench-aes.py`'s, documented in each directory's `README.md`.
+every line, its time field removed, with what the Go program's `std` arm prints. `bench-hash.maxtest` does the
+same for `bench/hash/hash.maxon` under the host's best hash tier and under `MAXON_HASH_TIER=software`. Both strip the time field with the harness's
+`withoutBestNanos`. Their timing is `scripts/bench-concurrency.py`'s,
+`scripts/bench-aes.py`'s and `scripts/bench-hash.py`'s, documented in each directory's `README.md`.
 
 ⚠ **THE BENCHMARKS RUN AT THE PUBLISHED SIZE, NEVER THEIR DEFAULT.** Each benchmark example takes its
 size as argv[1] and without one runs the benchmark's full size (fannkuch-redux n=11; nbody 50,000,000

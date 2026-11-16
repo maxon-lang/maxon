@@ -275,6 +275,11 @@ let ProcsMarker = "<!-- procs:"
 // independent of every other family's.
 let PreemptMarker = "<!-- preempt:"
 
+let EnvMarker = "<!-- env:"
+let EnvAssignmentSeparator = "="
+let EnvFirstPrintableCodepoint = 0x20
+let EnvDeleteCodepoint = 0x7F
+
 // ⭐⭐ **WHETHER THIS CASE'S PROGRAM IS GIVEN A STDIN THAT BLOCKS — `<!-- stdin: hold -->` and
 // `<!-- stdin: after "<line>" -->`, the markers that make a real KERNEL WAIT reachable from an
 // ordinary spec case.**
@@ -807,6 +812,17 @@ union SpecPreempt
 	off
 end 'SpecPreempt'
 
+type SpecEnvAssignment
+	let name as String
+	let value as String
+
+	static function create(name String, value String) returns Self
+		return Self{name: name, value: value}
+	end 'create'
+end 'SpecEnvAssignment'
+
+typealias SpecEnvAssignmentArray = Array with SpecEnvAssignment
+
 // ⭐ **WHAT A CASE'S PROGRAM FINDS ON STDIN — see `StdinMarker` for why this is a per-case fact.**
 //
 // A UNION rather than a bool, for `SpecNetwork`'s reasons: the marker carries a VALUE, the third answer
@@ -946,6 +962,8 @@ type SpecTest
 	// variable the child is given.
 	export let preempt as SpecPreempt
 
+	export let environment as SpecEnvAssignmentArray
+
 	// What this case's program finds on stdin (a `<!-- stdin: … -->` marker). It rides HERE for `procs`'
 	// reason exactly and is the same kind of fact: it changes one property of the spawn — which
 	// descriptor the child's fd 0 is — not what the run must produce.
@@ -967,9 +985,9 @@ type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, requiredFunctions RequiredFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
+	static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, requiredFunctions RequiredFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, environment SpecEnvAssignmentArray, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinnedLanes: pinnedLanes}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, environment: environment, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinnedLanes: pinnedLanes}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1417,6 +1435,8 @@ type CaseBuilder
 	// inherits the environment, not a default standing in for an unread marker.
 	var preempt as SpecPreempt
 
+	let environment as SpecEnvAssignmentArray
+
 	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
 	// program is handed the null device, not a default standing in for an unread marker.
 	var stdin as SpecStdin
@@ -1430,7 +1450,7 @@ type CaseBuilder
 	var targetIrBlock as TargetIrBlock
 
 	static function create(name String, markerIndex ElementIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
-		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(0), claimedDirectives: CaseDirectiveArray.create(0), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(0), asyncTrace: false, debugInfo: false, poisonFreed: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent}
+		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(0), claimedDirectives: CaseDirectiveArray.create(0), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(0), asyncTrace: false, debugInfo: false, poisonFreed: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, environment: SpecEnvAssignmentArray.create(0), stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent}
 	end 'create'
 
 	function refuseCrowdedLine(openings StringArray, line String, lineIndex ElementIndex)
@@ -1461,7 +1481,7 @@ type CaseBuilder
 	function readDirective(directive CaseDirective, opening String, lineIndex ElementIndex, unsupportedTargets TargetKeyArray, programArgs ProgramArgArray)
 		let spelling = directive.spelling()
 
-		if claimedDirectives.contains(directive) 'repeated'
+		if claimedDirectives.contains(directive) and not directive.isRepeatable() 'repeated'
 			panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' repeats the directive `{spelling} … -->`. A case reads each directive once, so the later line would silently overrule the earlier one. Keep one of the two")
 		end 'repeated'
 
@@ -1483,12 +1503,23 @@ type CaseBuilder
 			network then network = parseNetworkValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			procs then procs = parseProcsValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			preempt then preempt = parsePreemptValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			env then self.addEnvAssignment(parseEnvValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name), lineIndex: lineIndex)
 			stdin then stdin = parseStdinValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			runs then runs = parseRunsValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			process then process = parseProcessValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			tier then tier = parseTierValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 		end 'directive'
 	end 'readDirective'
+
+	function addEnvAssignment(assignment SpecEnvAssignment, lineIndex ElementIndex)
+		for earlier in environment 'eachEarlier'
+			if earlier.name == assignment.name 'sameName'
+				panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{name}' carries `{EnvMarker} … -->` for '{assignment.name}' twice. A variable has one value in a child's environment, so the later line would silently overrule the earlier one. Keep one of the two")
+			end 'sameName'
+		end 'eachEarlier'
+
+		environment.push(assignment)
+	end 'addEnvAssignment'
 
 	function markTraceFamily(family TraceFamily, lineIndex ElementIndex)
 		match markedFamily 'marked'
@@ -1659,7 +1690,7 @@ type CaseBuilder
 		end 'poisonWithoutAPin'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, requiredFunctions: requiredFunctions, pinnedLanes: pinnedLanes), unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinnedLanes: pinnedLanes)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, requiredFunctions: requiredFunctions, pinnedLanes: pinnedLanes), unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, environment: environment, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinnedLanes: pinnedLanes)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -2208,6 +2239,7 @@ enum CaseDirective
 	network
 	procs
 	preempt
+	env
 	stdin
 	runs
 	process
@@ -2226,12 +2258,17 @@ enum CaseDirective
 			network gives NetworkMarker
 			procs gives ProcsMarker
 			preempt gives PreemptMarker
+			env gives EnvMarker
 			stdin gives StdinMarker
 			runs gives RunsMarker
 			process gives ProcessMarker
 			tier gives TierMarker
 		end 'directive'
 	end 'spelling'
+
+	function isRepeatable() returns bool
+		return self == CaseDirective.env
+	end 'isRepeatable'
 
 	function isFlag() returns bool
 		return match self 'directive'
@@ -2246,6 +2283,7 @@ enum CaseDirective
 			network or
 			procs or
 			preempt or
+			env or
 			stdin or
 			runs or
 			process or
@@ -2489,6 +2527,90 @@ function parsePreemptValue(opening String, lineIndex ElementIndex, specPath File
 	requireSoleMarkerValue(opening, marker: PreemptMarker, accepted: String.from(PreemptEnvOffValue), lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
 	return SpecPreempt.off
 end 'parsePreemptValue'
+
+enum HarnessEnvVar
+	maxProcs
+	preempt
+	descendants
+end 'HarnessEnvVar'
+
+function harnessEnvName(owned HarnessEnvVar) returns String
+	return match owned 'owned'
+		maxProcs gives String.from(MaxProcsEnvName)
+		preempt gives String.from(PreemptEnvName)
+		descendants gives String.from(DescendantsEnvName)
+	end 'owned'
+end 'harnessEnvName'
+
+function harnessOwnedEnvNames() returns StringArray
+	let names = StringArray.create(0)
+
+	for owned in HarnessEnvVar.allCases 'eachOwned'
+		names.push(harnessEnvName(owned))
+	end 'eachOwned'
+
+	return names
+end 'harnessOwnedEnvNames'
+
+function envNameIsIdentifier(name String) returns bool
+	let bytes = name.toByteArray()
+
+	if bytes.isEmpty() 'noName'
+		return false
+	end 'noName'
+
+	let first = try bytes.get(0) otherwise panic("envNameIsIdentifier: the first of {bytes.count()} bytes is in bounds")
+
+	if first >= AsciiZeroDigit and first <= AsciiNineDigit 'startsWithADigit'
+		return false
+	end 'startsWithADigit'
+
+	for symbol in bytes 'eachByte'
+		if not isIdentifierByte(symbol) 'notAnIdentifierByte'
+			return false
+		end 'notAnIdentifierByte'
+	end 'eachByte'
+
+	return true
+end 'envNameIsIdentifier'
+
+function envValueHasControlCharacter(value String) returns bool
+	for cp in value.codepoints() 'eachCharacter'
+		let code = cp as FullRangeInt
+
+		if code < EnvFirstPrintableCodepoint or code == EnvDeleteCodepoint 'control'
+			return true
+		end 'control'
+	end 'eachCharacter'
+
+	return false
+end 'envValueHasControlCharacter'
+
+function parseEnvValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecEnvAssignment
+	let value = markerValueOf(opening)
+	let pieces = value.split(EnvAssignmentSeparator)
+	let name = try pieces.get(0) otherwise panic("SpecParser.parseEnvValue: a split yields at least one piece, so index 0 cannot be absent")
+
+	if pieces.count() < 2 'noSeparator'
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{EnvMarker} {value} -->`, which names no `{EnvAssignmentSeparator}`. The value is `NAME{EnvAssignmentSeparator}VALUE`: a bare name would set nothing in the child's environment while reading as though it did")
+	end 'noSeparator'
+
+	if not envNameIsIdentifier(name) 'badName'
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{EnvMarker} {value} -->`, and '{name}' is not an environment variable name: it is letters, digits and `_`, and does not start with a digit")
+	end 'badName'
+
+	if harnessOwnedEnvNames().contains(name) 'ownedByTheHarness'
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{EnvMarker} {value} -->`, and the harness sets '{name}' itself (`{ProcsMarker} … -->`, `{PreemptMarker} … -->` and descendant tracking), so this line would be overruled or would overrule it without a word")
+	end 'ownedByTheHarness'
+
+	let text = value.replaceFirst("{name}{EnvAssignmentSeparator}", with: "")
+
+	if envValueHasControlCharacter(text) 'badValue'
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{EnvMarker} {value} -->`, whose value holds a control character. An environment value is printable text: a control character cannot be written into every lane's launch the same way")
+	end 'badValue'
+
+	return SpecEnvAssignment.create(name, value: text)
+end 'parseEnvValue'
 
 // Whether a `<!-- runs: … -->` marker takes the case out of the shared pool.
 //

@@ -122,13 +122,17 @@ __str_bytes_view
 ```TargetIr:x64-windows
 data {
   __data_CharacterSet.whitespacesAndNewlines@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_aes_usable@32 = i64 0
+  __mrt_cpu_sha_usable@40 = i64 0
+  __mrt_hash_seed@48 = i64 0
+  __mrt_hash_tier@56 = i64 0
+  __slab_arena_list@64 = i64 0
+  __slab_arena_map_l1@72 = i64 0
+  __slab_state@80 = i64 0
+  __mrt_console_probe_stdin@88 = i8 0
+  __mrt_console_probe_stdout@89 = i8 0
+  __mrt_console_probe_stderr@90 = i8 0
+  __mrt_program_started@91 = i8 0
 }
 
 func @main {
@@ -143,7 +147,7 @@ func @main {
     x64.prologue 88
     x64.leaRegRdata rbx, [rip + __str_rec_39]  ; "a/b.txt"
   __il_body#152:
-    x64.leaRegRdata r9, [rip + __str_rec_65]  ; "://"
+    x64.leaRegRdata r9, [rip + __str_rec_64]  ; "://"
   __il_body#266:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
   __il_body#182:
@@ -180,7 +184,7 @@ func @main {
     x64.jmp __il_cont#151
   tryok#155:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRdata rdx, [rip + __str_rec_66]  ; "file"
+    x64.leaRegRdata rdx, [rip + __str_rec_65]  ; "file"
     x64.callDirect __str_eq
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
@@ -544,9 +548,9 @@ func @main {
     x64.movRegReg rbx, r8
     x64.jmp __il_cont#68
   ifcont#78:
-    x64.leaRegRdata r12, [rip + __str_rec_63]  ; "/"
+    x64.leaRegRdata r12, [rip + __str_rec_62]  ; "/"
     x64.storeSlotReg slot2, r12
-    x64.leaRegRdata r13, [rip + __str_rec_64]  ; "\\"
+    x64.leaRegRdata r13, [rip + __str_rec_63]  ; "\\"
     x64.storeSlotReg slot1, r13
   __il_body#242:
     x64.loadRegBaseDisp.word64 r14, [r12 + 8]
@@ -731,7 +735,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#98
   tryerr#99:
-    x64.leaRegRdata rcx, [rip + __str_blob_97]  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_96]  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -787,7 +791,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#104
   tryerr#105:
-    x64.leaRegRdata rcx, [rip + __str_blob_98]  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_97]  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -918,7 +922,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#23
   tryerr#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_72]  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_71]  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -947,7 +951,7 @@ func @main {
     x64.cmpRegImm32 r13, 1
     x64.jcc above, ifcont#8
   tooShort#6:
-    x64.leaRegRdata rcx, [rip + __str_rec_73]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_72]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
@@ -980,7 +984,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#13
   tryerr#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_74]  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_73]  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1013,7 +1017,7 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc above, scan#10
   whileexit#11:
-    x64.leaRegRdata rcx, [rip + __str_rec_73]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_72]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
@@ -1066,7 +1070,7 @@ func @main {
     x64.callDirect __managed_push
     x64.jmp __im_cont#203
   tryerr#274:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1078,7 +1082,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#194:
-    x64.leaRegRdata rcx, [rip + __str_blob_161]  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_158]  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1090,7 +1094,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#196:
-    x64.leaRegRdata rcx, [rip + __str_blob_162]  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_159]  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1102,7 +1106,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#252:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1114,7 +1118,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#166:
-    x64.leaRegRdata rcx, [rip + __str_blob_67]  ; "panic at FilePath.maxon:172: FilePath: drive-strip slice \xe2\x80\x94 the path opens with a slash\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at FilePath.maxon:172: FilePath: drive-strip slice \xe2\x80\x94 the path opens with a slash\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1126,7 +1130,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#260:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1138,7 +1142,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#264:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1150,7 +1154,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#234:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1162,7 +1166,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#240:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1174,7 +1178,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#110:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1186,7 +1190,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#112:
-    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1198,7 +1202,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#114:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1210,7 +1214,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#116:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1222,7 +1226,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#118:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1234,7 +1238,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#120:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1246,7 +1250,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#122:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1258,7 +1262,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#124:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1270,7 +1274,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#126:
-    x64.leaRegRdata rcx, [rip + __str_blob_192]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1282,7 +1286,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#128:
-    x64.leaRegRdata rcx, [rip + __str_blob_193]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1294,7 +1298,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#130:
-    x64.leaRegRdata rcx, [rip + __str_blob_194]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1306,7 +1310,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#40:
-    x64.leaRegRdata rcx, [rip + __str_blob_62]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_61]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1318,7 +1322,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#228:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1330,7 +1334,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#36:
-    x64.leaRegRdata rcx, [rip + __str_blob_163]  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_160]  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1342,7 +1346,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#216:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1382,10 +1386,14 @@ data {
   __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __mrt_hash_seed@40 = i64 0
+  __mrt_hash_tier@48 = i64 0
+  __slab_arena_list@56 = i64 0
+  __slab_arena_map_l1@64 = i64 0
+  __slab_state@72 = i64 0
+  __mrt_program_started@80 = i8 0
 }
 
 func @main {
@@ -1400,7 +1408,7 @@ func @main {
     x64.prologue 88
     x64.leaRegRdata rbx, [rip + __str_rec_39]  ; "a/b.txt"
   __il_body#130:
-    x64.leaRegRdata r9, [rip + __str_rec_65]  ; "://"
+    x64.leaRegRdata r9, [rip + __str_rec_64]  ; "://"
   __il_body#204:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
   __il_body#142:
@@ -1437,7 +1445,7 @@ func @main {
     x64.jmp __il_cont#129
   tryok#133:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRdata rdx, [rip + __str_rec_66]  ; "file"
+    x64.leaRegRdata rdx, [rip + __str_rec_65]  ; "file"
     x64.callDirect __str_eq
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
@@ -1612,9 +1620,9 @@ func @main {
     x64.movRegReg rbx, r8
     x64.jmp __il_cont#46
   ifcont#56:
-    x64.leaRegRdata r12, [rip + __str_rec_63]  ; "\\"
+    x64.leaRegRdata r12, [rip + __str_rec_62]  ; "\\"
     x64.storeSlotReg slot2, r12
-    x64.leaRegRdata r13, [rip + __str_rec_64]  ; "/"
+    x64.leaRegRdata r13, [rip + __str_rec_63]  ; "/"
     x64.storeSlotReg slot1, r13
   __il_body#196:
     x64.loadRegBaseDisp.word64 r14, [r12 + 8]
@@ -1799,7 +1807,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#76
   tryerr#77:
-    x64.leaRegRdata rcx, [rip + __str_blob_96]  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1855,7 +1863,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#82
   tryerr#83:
-    x64.leaRegRdata rcx, [rip + __str_blob_97]  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_96]  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1980,7 +1988,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#23
   tryerr#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_71]  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_70]  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2009,7 +2017,7 @@ func @main {
     x64.cmpRegImm32 r13, 1
     x64.jcc above, ifcont#8
   tooShort:
-    x64.leaRegRdata rcx, [rip + __str_rec_72]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_71]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, rbx
@@ -2042,7 +2050,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#13
   tryerr#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_73]  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_72]  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2075,7 +2083,7 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc above, scan#10
   whileexit#11:
-    x64.leaRegRdata rcx, [rip + __str_rec_72]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_71]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
@@ -2128,7 +2136,7 @@ func @main {
     x64.callDirect __managed_push
     x64.jmp __im_cont#163
   tryerr#210:
-    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2140,7 +2148,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#154:
-    x64.leaRegRdata rcx, [rip + __str_blob_160]  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_157]  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2152,7 +2160,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#156:
-    x64.leaRegRdata rcx, [rip + __str_blob_161]  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_158]  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2164,7 +2172,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#40:
-    x64.leaRegRdata rcx, [rip + __str_blob_62]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_61]  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2176,7 +2184,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#194:
-    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2188,7 +2196,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#88:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_184]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2200,7 +2208,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#90:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2212,7 +2220,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#92:
-    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2224,7 +2232,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#94:
-    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2236,7 +2244,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#96:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2248,7 +2256,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#98:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2260,7 +2268,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#100:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2272,7 +2280,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#102:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2284,7 +2292,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#104:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2296,7 +2304,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#106:
-    x64.leaRegRdata rcx, [rip + __str_blob_192]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2308,7 +2316,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#108:
-    x64.leaRegRdata rcx, [rip + __str_blob_193]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2320,7 +2328,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#188:
-    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2332,7 +2340,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#36:
-    x64.leaRegRdata rcx, [rip + __str_blob_162]  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_159]  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2344,7 +2352,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#176:
-    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2382,10 +2390,13 @@ func @__str_bytes_view {
 ```TargetIr:arm64-macos
 data {
   __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_cpu_aes_usable@8 = i64 1
+  __mrt_hash_seed@16 = i64 0
+  __mrt_hash_tier@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -2403,7 +2414,7 @@ func @main {
     arm64.storeSlotReg slot34, x19
     arm64.leaRdata x19, __str_rec_39  ; "a/b.txt"
   __il_body#130:
-    arm64.leaRdata x3, __str_rec_65  ; "://"
+    arm64.leaRdata x3, __str_rec_64  ; "://"
   __il_body#537:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
   __il_body#142:
@@ -2597,7 +2608,7 @@ func @main {
   __il_cont#545:
     arm64.movImm x0, 0
     arm64.storeSlotReg slot20, x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -2617,7 +2628,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -2637,7 +2648,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -2657,7 +2668,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -2679,7 +2690,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movImm x0, 0
     arm64.storeSlotReg slot10, x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -2699,7 +2710,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -2741,7 +2752,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#549
   __il_cont#544:
-    arm64.leaRdata x1, __str_rec_105  ; ":"
+    arm64.leaRdata x1, __str_rec_104  ; ":"
     arm64.bl urlByteIsOneOf
     arm64.cbz x0, ifcont#187
   colonFirst:
@@ -2751,7 +2762,7 @@ func @main {
     arm64.b exitdrop#180
   ifcont#187:
     arm64.movImm x22, 0
-    arm64.leaRdata x27, __str_rec_106  ; "/?#"
+    arm64.leaRdata x27, __str_rec_105  ; "/?#"
     arm64.b forhdr#670
   __il_body#677:
     arm64.movRegReg x0, x19
@@ -2772,7 +2783,7 @@ func @main {
     arm64.movRegReg x22, x20
   __il_cont#668:
     arm64.movImm x27, 0
-    arm64.leaRdata x28, __str_rec_105  ; ":"
+    arm64.leaRdata x28, __str_rec_104  ; ":"
     arm64.b forhdr#681
   __il_body#688:
     arm64.movRegReg x0, x19
@@ -3060,7 +3071,7 @@ func @main {
   __rc_ok#261:
     arm64.movImm x0, 1
     arm64.storeSlotReg slot6, x0
-    arm64.leaRdata x23, __str_rec_106  ; "/?#"
+    arm64.leaRdata x23, __str_rec_105  ; "/?#"
   __il_body#717:
     arm64.movRegReg x24, x22
     arm64.b forhdr#718
@@ -3083,7 +3094,7 @@ func @main {
     arm64.movRegReg x24, x20
   __il_cont#716:
     arm64.storeSlotReg slot7, x24
-    arm64.leaRdata x20, __str_rec_108  ; "@"
+    arm64.leaRdata x20, __str_rec_107  ; "@"
   __il_body#728:
     arm64.movRegReg x23, x22
     arm64.b forhdr#729
@@ -3166,7 +3177,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.b __il_cont#341
   __il_body#383:
-    arm64.leaRdata x20, __str_rec_119  ; "["
+    arm64.leaRdata x20, __str_rec_118  ; "["
   __il_body#613:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
   __il_body#614:
@@ -3215,7 +3226,7 @@ func @main {
   __il_cont#407:
     arm64.cbz x0, ifcont#398
   ipLiteral:
-    arm64.leaRdata x1, __str_rec_120  ; "]"
+    arm64.leaRdata x1, __str_rec_119  ; "]"
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.movRegReg x20, x0
@@ -3297,7 +3308,7 @@ func @main {
   scmerge#429:
     arm64.cbz x0, __il_body#465
   __il_body#437:
-    arm64.leaRdata x1, __str_rec_123  ; "."
+    arm64.leaRdata x1, __str_rec_122  ; "."
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.movRegReg x23, x0
@@ -3368,7 +3379,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#648
   __il_cont#645:
-    arm64.leaRdata x1, __str_rec_105  ; ":"
+    arm64.leaRdata x1, __str_rec_104  ; ":"
     arm64.bl urlIsComponentByte
     arm64.eor x0, x0, 1
     arm64.cbz x0, forstep#453
@@ -3397,7 +3408,7 @@ func @main {
     arm64.movImm x23, 0
     arm64.b __il_cont#424
   __il_body#465:
-    arm64.leaRdata x1, __str_rec_124  ; "::"
+    arm64.leaRdata x1, __str_rec_123  ; "::"
     arm64.movRegReg x0, x19
     arm64.bl String.split
     arm64.movRegReg x23, x0
@@ -3462,7 +3473,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#471
   tryerr#472:
-    arm64.leaRdata x27, __str_rec_72  ; ""
+    arm64.leaRdata x27, __str_rec_71  ; ""
     arm64.b trycont#473
   tryok#471:
     arm64.movRegReg x27, x0
@@ -3582,7 +3593,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.b __il_cont#382
   ifcont#398:
-    arm64.leaRdata x1, __str_rec_105  ; ":"
+    arm64.leaRdata x1, __str_rec_104  ; ":"
     arm64.loadRegSlot x0, slot33
     arm64.bl String.findFirst
     arm64.cmp x9, 0
@@ -3640,7 +3651,7 @@ func @main {
   ifcont#404:
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
-    arm64.leaRdata x23, __str_rec_72  ; ""
+    arm64.leaRdata x23, __str_rec_71  ; ""
     arm64.b whilehdr#413
   __il_body#632:
     arm64.loadRegSlot x0, slot33
@@ -3776,7 +3787,7 @@ func @main {
     arm64.bl String.sliceBytes
     arm64.movRegReg x23, x0
   __il_cont#597:
-    arm64.leaRdata x2, __str_rec_105  ; ":"
+    arm64.leaRdata x2, __str_rec_104  ; ":"
   __il_body#603:
     arm64.loadRegBaseDisp.word64 x4, [x23 + 8]
   __il_body#604:
@@ -4038,7 +4049,7 @@ func @main {
     arm64.xchgRegReg x23, x25
   ifcont#232:
     arm64.storeSlotReg slot31, x2
-    arm64.leaRdata x26, __str_rec_111  ; "?#"
+    arm64.leaRdata x26, __str_rec_110  ; "?#"
   __il_body#692:
     arm64.movRegReg x27, x19
     arm64.b forhdr#693
@@ -4103,7 +4114,7 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeSlotReg slot19, x0
     arm64.add x19, x27, 1
-    arm64.leaRdata x27, __str_rec_113  ; "#"
+    arm64.leaRdata x27, __str_rec_112  ; "#"
   __il_body#704:
     arm64.movRegReg x28, x19
     arm64.b forhdr#705
@@ -4283,7 +4294,7 @@ func @main {
     arm64.movRegReg x21, x19
   tryok#133:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.leaRdata x1, __str_rec_66  ; "file"
+    arm64.leaRdata x1, __str_rec_65  ; "file"
     arm64.bl __str_eq
     arm64.eor x0, x0, 1
     arm64.cbz x0, ifcont#137
@@ -4458,8 +4469,8 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.b __il_cont#46
   ifcont#56:
-    arm64.leaRdata x20, __str_rec_63  ; "\\"
-    arm64.leaRdata x21, __str_rec_64  ; "/"
+    arm64.leaRdata x20, __str_rec_62  ; "\\"
+    arm64.leaRdata x21, __str_rec_63  ; "/"
   __il_body#529:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
   __il_cont#528:
@@ -4637,7 +4648,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#76
   tryerr#77:
-    arm64.leaRdata x0, __str_blob_96  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
+    arm64.leaRdata x0, __str_blob_95  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -4693,7 +4704,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#82
   tryerr#83:
-    arm64.leaRdata x0, __str_blob_97  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
+    arm64.leaRdata x0, __str_blob_96  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -4822,7 +4833,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#23
   tryerr#24:
-    arm64.leaRdata x0, __str_blob_71  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_70  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -4854,7 +4865,7 @@ func @main {
     arm64.cmp x20, 1
     arm64.b.hi ifcont#8
   tooShort:
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
@@ -4887,7 +4898,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#13
   tryerr#14:
-    arm64.leaRdata x0, __str_blob_73  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    arm64.leaRdata x0, __str_blob_72  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -4923,7 +4934,7 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.hi scan#10
   whileexit#11:
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x22
@@ -4992,7 +5003,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont#163
   __rc_panic#306:
-    arm64.leaRdata x0, __str_blob_198  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_195  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5008,7 +5019,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#315:
-    arm64.leaRdata x0, __str_blob_199  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_196  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5024,7 +5035,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#575:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5040,7 +5051,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#276:
-    arm64.leaRdata x0, __str_blob_264  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_261  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5056,7 +5067,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#549:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5072,7 +5083,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#679:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5088,7 +5099,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#690:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5104,7 +5115,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#553:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5120,7 +5131,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#290:
-    arm64.leaRdata x0, __str_blob_263  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_260  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5136,7 +5147,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#206:
-    arm64.leaRdata x0, __str_blob_107  ; "panic at URL.maxon:150: URL.parse: scheme slice \xe2\x80\x94 colonPos from scan, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_106  ; "panic at URL.maxon:150: URL.parse: scheme slice \xe2\x80\x94 colonPos from scan, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5152,7 +5163,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#326:
-    arm64.leaRdata x0, __str_blob_98  ; "panic at String.maxon:699: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_97  ; "panic at String.maxon:699: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5168,7 +5179,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#339:
-    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5184,7 +5195,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#331:
-    arm64.leaRdata x0, __str_blob_99  ; "panic at String.maxon:702: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_98  ; "panic at String.maxon:702: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5200,7 +5211,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#258:
-    arm64.leaRdata x0, __str_blob_205  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_202  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5216,7 +5227,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#557:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5232,7 +5243,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#260:
-    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_203  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5248,7 +5259,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#569:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5264,7 +5275,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#262:
-    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_204  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5280,7 +5291,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#727:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5296,7 +5307,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#738:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5312,7 +5323,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#213:
-    arm64.leaRdata x0, __str_blob_109  ; "panic at URL.maxon:174: URL.parse: userinfo slice \xe2\x80\x94 atPos from scan, always valid\x0a"
+    arm64.leaRdata x0, __str_blob_108  ; "panic at URL.maxon:174: URL.parse: userinfo slice \xe2\x80\x94 atPos from scan, always valid\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5328,7 +5339,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#217:
-    arm64.leaRdata x0, __str_blob_110  ; "panic at URL.maxon:180: URL.parse: host slice \xe2\x80\x94 authStart and authEnd from scan, always valid\x0a"
+    arm64.leaRdata x0, __str_blob_109  ; "panic at URL.maxon:180: URL.parse: host slice \xe2\x80\x94 authStart and authEnd from scan, always valid\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5344,7 +5355,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#628:
-    arm64.leaRdata x0, __str_blob_200  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5360,7 +5371,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#622:
-    arm64.leaRdata x0, __str_blob_100  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_99  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5376,7 +5387,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#630:
-    arm64.leaRdata x0, __str_blob_201  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_198  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5392,7 +5403,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#624:
-    arm64.leaRdata x0, __str_blob_101  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_100  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5408,7 +5419,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#780:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5424,7 +5435,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#388:
-    arm64.leaRdata x0, __str_blob_121  ; "panic at URL.maxon:597: urlHostEndOf: an authority that opens with `[` has a character after it\x0a"
+    arm64.leaRdata x0, __str_blob_120  ; "panic at URL.maxon:597: urlHostEndOf: an authority that opens with `[` has a character after it\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5440,7 +5451,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#638:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5456,7 +5467,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#459:
-    arm64.leaRdata x0, __str_blob_209  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5472,7 +5483,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#644:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5488,7 +5499,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#461:
-    arm64.leaRdata x0, __str_blob_210  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5504,7 +5515,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#463:
-    arm64.leaRdata x0, __str_blob_211  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_208  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5520,7 +5531,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#648:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5536,7 +5547,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#470:
-    arm64.leaRdata x0, __str_blob_125  ; "panic at URL.maxon:663: urlIsIpv6Address: a split answers at least one part\x0a"
+    arm64.leaRdata x0, __str_blob_124  ; "panic at URL.maxon:663: urlIsIpv6Address: a split answers at least one part\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5552,7 +5563,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#768:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5568,7 +5579,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#395:
-    arm64.leaRdata x0, __str_blob_122  ; "panic at URL.maxon:601: urlHostEndOf: a `]` the search found has an index after it\x0a"
+    arm64.leaRdata x0, __str_blob_121  ; "panic at URL.maxon:601: urlHostEndOf: a `]` the search found has an index after it\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5584,7 +5595,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#503:
-    arm64.leaRdata x0, __str_blob_230  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_227  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5600,7 +5611,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#634:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5616,7 +5627,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#423:
-    arm64.leaRdata x0, __str_blob_217  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_214  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5632,7 +5643,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#760:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5648,7 +5659,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#352:
-    arm64.leaRdata x0, __str_blob_118  ; "panic at URL.maxon:573: urlHostAuthorityOf: a host ending before the authority's end has a character after it\x0a"
+    arm64.leaRdata x0, __str_blob_117  ; "panic at URL.maxon:573: urlHostAuthorityOf: a host ending before the authority's end has a character after it\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5664,7 +5675,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#380:
-    arm64.leaRdata x0, __str_blob_216  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.leaRdata x0, __str_blob_213  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5680,7 +5691,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#702:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5696,7 +5707,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#235:
-    arm64.leaRdata x0, __str_blob_112  ; "panic at URL.maxon:197: URL.parse: path slice \xe2\x80\x94 pathStart and pos within len\x0a"
+    arm64.leaRdata x0, __str_blob_111  ; "panic at URL.maxon:197: URL.parse: path slice \xe2\x80\x94 pathStart and pos within len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5712,7 +5723,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#561:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5728,7 +5739,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#714:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5744,7 +5755,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#240:
-    arm64.leaRdata x0, __str_blob_114  ; "panic at URL.maxon:209: URL.parse: query slice \xe2\x80\x94 queryStart and pos within len\x0a"
+    arm64.leaRdata x0, __str_blob_113  ; "panic at URL.maxon:209: URL.parse: query slice \xe2\x80\x94 queryStart and pos within len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5760,7 +5771,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#565:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5776,7 +5787,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#246:
-    arm64.leaRdata x0, __str_blob_115  ; "panic at URL.maxon:219: URL.parse: fragment slice \xe2\x80\x94 pos within len\x0a"
+    arm64.leaRdata x0, __str_blob_114  ; "panic at URL.maxon:219: URL.parse: fragment slice \xe2\x80\x94 pos within len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5792,7 +5803,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#543:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5808,7 +5819,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#154:
-    arm64.leaRdata x0, __str_blob_160  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_157  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5824,7 +5835,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#156:
-    arm64.leaRdata x0, __str_blob_161  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_158  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5840,7 +5851,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#40:
-    arm64.leaRdata x0, __str_blob_62  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    arm64.leaRdata x0, __str_blob_61  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5856,7 +5867,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#527:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5872,7 +5883,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#88:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_184  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5888,7 +5899,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#90:
-    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5904,7 +5915,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#92:
-    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5920,7 +5931,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#94:
-    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5936,7 +5947,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#96:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5952,7 +5963,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#98:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5968,7 +5979,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#100:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5984,7 +5995,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#102:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6000,7 +6011,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#104:
-    arm64.leaRdata x0, __str_blob_191  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6016,7 +6027,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#106:
-    arm64.leaRdata x0, __str_blob_192  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6032,7 +6043,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#108:
-    arm64.leaRdata x0, __str_blob_193  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6048,7 +6059,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#521:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6064,7 +6075,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#36:
-    arm64.leaRdata x0, __str_blob_162  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_159  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6080,7 +6091,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#509:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6122,10 +6133,14 @@ data {
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
   __mrt_hwcap_atomics@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_cpu_aes_usable@32 = i64 0
+  __mrt_cpu_sha_usable@40 = i64 0
+  __mrt_hash_seed@48 = i64 0
+  __mrt_hash_tier@56 = i64 0
+  __slab_arena_list@64 = i64 0
+  __slab_arena_map_l1@72 = i64 0
+  __slab_state@80 = i64 0
+  __mrt_program_started@88 = i8 0
 }
 
 func @main {
@@ -6143,7 +6158,7 @@ func @main {
     arm64.storeSlotReg slot34, x19
     arm64.leaRdata x19, __str_rec_39  ; "a/b.txt"
   __il_body#130:
-    arm64.leaRdata x3, __str_rec_65  ; "://"
+    arm64.leaRdata x3, __str_rec_64  ; "://"
   __il_body#537:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
   __il_body#142:
@@ -6337,7 +6352,7 @@ func @main {
   __il_cont#545:
     arm64.movImm x0, 0
     arm64.storeSlotReg slot20, x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -6357,7 +6372,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -6377,7 +6392,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -6397,7 +6412,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -6419,7 +6434,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movImm x0, 0
     arm64.storeSlotReg slot10, x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -6439,7 +6454,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x0, x22, 57
@@ -6481,7 +6496,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#549
   __il_cont#544:
-    arm64.leaRdata x1, __str_rec_105  ; ":"
+    arm64.leaRdata x1, __str_rec_104  ; ":"
     arm64.bl urlByteIsOneOf
     arm64.cbz x0, ifcont#187
   colonFirst:
@@ -6491,7 +6506,7 @@ func @main {
     arm64.b exitdrop#180
   ifcont#187:
     arm64.movImm x22, 0
-    arm64.leaRdata x27, __str_rec_106  ; "/?#"
+    arm64.leaRdata x27, __str_rec_105  ; "/?#"
     arm64.b forhdr#670
   __il_body#677:
     arm64.movRegReg x0, x19
@@ -6512,7 +6527,7 @@ func @main {
     arm64.movRegReg x22, x20
   __il_cont#668:
     arm64.movImm x27, 0
-    arm64.leaRdata x28, __str_rec_105  ; ":"
+    arm64.leaRdata x28, __str_rec_104  ; ":"
     arm64.b forhdr#681
   __il_body#688:
     arm64.movRegReg x0, x19
@@ -6800,7 +6815,7 @@ func @main {
   __rc_ok#261:
     arm64.movImm x0, 1
     arm64.storeSlotReg slot6, x0
-    arm64.leaRdata x23, __str_rec_106  ; "/?#"
+    arm64.leaRdata x23, __str_rec_105  ; "/?#"
   __il_body#717:
     arm64.movRegReg x24, x22
     arm64.b forhdr#718
@@ -6823,7 +6838,7 @@ func @main {
     arm64.movRegReg x24, x20
   __il_cont#716:
     arm64.storeSlotReg slot7, x24
-    arm64.leaRdata x20, __str_rec_108  ; "@"
+    arm64.leaRdata x20, __str_rec_107  ; "@"
   __il_body#728:
     arm64.movRegReg x23, x22
     arm64.b forhdr#729
@@ -6906,7 +6921,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.b __il_cont#341
   __il_body#383:
-    arm64.leaRdata x20, __str_rec_119  ; "["
+    arm64.leaRdata x20, __str_rec_118  ; "["
   __il_body#613:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
   __il_body#614:
@@ -6955,7 +6970,7 @@ func @main {
   __il_cont#407:
     arm64.cbz x0, ifcont#398
   ipLiteral:
-    arm64.leaRdata x1, __str_rec_120  ; "]"
+    arm64.leaRdata x1, __str_rec_119  ; "]"
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.movRegReg x20, x0
@@ -7037,7 +7052,7 @@ func @main {
   scmerge#429:
     arm64.cbz x0, __il_body#465
   __il_body#437:
-    arm64.leaRdata x1, __str_rec_123  ; "."
+    arm64.leaRdata x1, __str_rec_122  ; "."
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.movRegReg x23, x0
@@ -7108,7 +7123,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#648
   __il_cont#645:
-    arm64.leaRdata x1, __str_rec_105  ; ":"
+    arm64.leaRdata x1, __str_rec_104  ; ":"
     arm64.bl urlIsComponentByte
     arm64.eor x0, x0, 1
     arm64.cbz x0, forstep#453
@@ -7137,7 +7152,7 @@ func @main {
     arm64.movImm x23, 0
     arm64.b __il_cont#424
   __il_body#465:
-    arm64.leaRdata x1, __str_rec_124  ; "::"
+    arm64.leaRdata x1, __str_rec_123  ; "::"
     arm64.movRegReg x0, x19
     arm64.bl String.split
     arm64.movRegReg x23, x0
@@ -7202,7 +7217,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#471
   tryerr#472:
-    arm64.leaRdata x27, __str_rec_72  ; ""
+    arm64.leaRdata x27, __str_rec_71  ; ""
     arm64.b trycont#473
   tryok#471:
     arm64.movRegReg x27, x0
@@ -7322,7 +7337,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.b __il_cont#382
   ifcont#398:
-    arm64.leaRdata x1, __str_rec_105  ; ":"
+    arm64.leaRdata x1, __str_rec_104  ; ":"
     arm64.loadRegSlot x0, slot33
     arm64.bl String.findFirst
     arm64.cmp x9, 0
@@ -7380,7 +7395,7 @@ func @main {
   ifcont#404:
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
-    arm64.leaRdata x23, __str_rec_72  ; ""
+    arm64.leaRdata x23, __str_rec_71  ; ""
     arm64.b whilehdr#413
   __il_body#632:
     arm64.loadRegSlot x0, slot33
@@ -7516,7 +7531,7 @@ func @main {
     arm64.bl String.sliceBytes
     arm64.movRegReg x23, x0
   __il_cont#597:
-    arm64.leaRdata x2, __str_rec_105  ; ":"
+    arm64.leaRdata x2, __str_rec_104  ; ":"
   __il_body#603:
     arm64.loadRegBaseDisp.word64 x4, [x23 + 8]
   __il_body#604:
@@ -7778,7 +7793,7 @@ func @main {
     arm64.xchgRegReg x23, x25
   ifcont#232:
     arm64.storeSlotReg slot31, x2
-    arm64.leaRdata x26, __str_rec_111  ; "?#"
+    arm64.leaRdata x26, __str_rec_110  ; "?#"
   __il_body#692:
     arm64.movRegReg x27, x19
     arm64.b forhdr#693
@@ -7843,7 +7858,7 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeSlotReg slot19, x0
     arm64.add x19, x27, 1
-    arm64.leaRdata x27, __str_rec_113  ; "#"
+    arm64.leaRdata x27, __str_rec_112  ; "#"
   __il_body#704:
     arm64.movRegReg x28, x19
     arm64.b forhdr#705
@@ -8023,7 +8038,7 @@ func @main {
     arm64.movRegReg x21, x19
   tryok#133:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.leaRdata x1, __str_rec_66  ; "file"
+    arm64.leaRdata x1, __str_rec_65  ; "file"
     arm64.bl __str_eq
     arm64.eor x0, x0, 1
     arm64.cbz x0, ifcont#137
@@ -8198,8 +8213,8 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.b __il_cont#46
   ifcont#56:
-    arm64.leaRdata x20, __str_rec_63  ; "\\"
-    arm64.leaRdata x21, __str_rec_64  ; "/"
+    arm64.leaRdata x20, __str_rec_62  ; "\\"
+    arm64.leaRdata x21, __str_rec_63  ; "/"
   __il_body#529:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
   __il_cont#528:
@@ -8377,7 +8392,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#76
   tryerr#77:
-    arm64.leaRdata x0, __str_blob_96  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
+    arm64.leaRdata x0, __str_blob_95  ; "panic at String.maxon:577: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8433,7 +8448,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#82
   tryerr#83:
-    arm64.leaRdata x0, __str_blob_97  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
+    arm64.leaRdata x0, __str_blob_96  ; "panic at String.maxon:593: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8562,7 +8577,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#23
   tryerr#24:
-    arm64.leaRdata x0, __str_blob_71  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_70  ; "panic at FilePath.maxon:352: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8594,7 +8609,7 @@ func @main {
     arm64.cmp x20, 1
     arm64.b.hi ifcont#8
   tooShort:
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
@@ -8627,7 +8642,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#13
   tryerr#14:
-    arm64.leaRdata x0, __str_blob_73  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    arm64.leaRdata x0, __str_blob_72  ; "panic at FilePath.maxon:377: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8663,7 +8678,7 @@ func @main {
     arm64.cmp x0, 1
     arm64.b.hi scan#10
   whileexit#11:
-    arm64.leaRdata x0, __str_rec_72  ; ""
+    arm64.leaRdata x0, __str_rec_71  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x22
@@ -8732,7 +8747,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont#163
   __rc_panic#306:
-    arm64.leaRdata x0, __str_blob_198  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_195  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8748,7 +8763,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#315:
-    arm64.leaRdata x0, __str_blob_199  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_196  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8764,7 +8779,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#575:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8780,7 +8795,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#276:
-    arm64.leaRdata x0, __str_blob_264  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_261  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8796,7 +8811,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#549:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8812,7 +8827,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#679:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8828,7 +8843,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#690:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8844,7 +8859,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#553:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8860,7 +8875,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#290:
-    arm64.leaRdata x0, __str_blob_263  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_260  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8876,7 +8891,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#206:
-    arm64.leaRdata x0, __str_blob_107  ; "panic at URL.maxon:150: URL.parse: scheme slice \xe2\x80\x94 colonPos from scan, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_106  ; "panic at URL.maxon:150: URL.parse: scheme slice \xe2\x80\x94 colonPos from scan, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8892,7 +8907,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#326:
-    arm64.leaRdata x0, __str_blob_98  ; "panic at String.maxon:699: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_97  ; "panic at String.maxon:699: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8908,7 +8923,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#339:
-    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8924,7 +8939,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#331:
-    arm64.leaRdata x0, __str_blob_99  ; "panic at String.maxon:702: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_98  ; "panic at String.maxon:702: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8940,7 +8955,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#258:
-    arm64.leaRdata x0, __str_blob_205  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_202  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8956,7 +8971,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#557:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8972,7 +8987,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#260:
-    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_203  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8988,7 +9003,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#569:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9004,7 +9019,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#262:
-    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_204  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9020,7 +9035,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#727:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9036,7 +9051,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#738:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9052,7 +9067,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#213:
-    arm64.leaRdata x0, __str_blob_109  ; "panic at URL.maxon:174: URL.parse: userinfo slice \xe2\x80\x94 atPos from scan, always valid\x0a"
+    arm64.leaRdata x0, __str_blob_108  ; "panic at URL.maxon:174: URL.parse: userinfo slice \xe2\x80\x94 atPos from scan, always valid\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9068,7 +9083,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#217:
-    arm64.leaRdata x0, __str_blob_110  ; "panic at URL.maxon:180: URL.parse: host slice \xe2\x80\x94 authStart and authEnd from scan, always valid\x0a"
+    arm64.leaRdata x0, __str_blob_109  ; "panic at URL.maxon:180: URL.parse: host slice \xe2\x80\x94 authStart and authEnd from scan, always valid\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9084,7 +9099,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#628:
-    arm64.leaRdata x0, __str_blob_200  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9100,7 +9115,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#622:
-    arm64.leaRdata x0, __str_blob_100  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_99  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9116,7 +9131,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#630:
-    arm64.leaRdata x0, __str_blob_201  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_198  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9132,7 +9147,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#624:
-    arm64.leaRdata x0, __str_blob_101  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_100  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9148,7 +9163,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#780:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9164,7 +9179,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#388:
-    arm64.leaRdata x0, __str_blob_121  ; "panic at URL.maxon:597: urlHostEndOf: an authority that opens with `[` has a character after it\x0a"
+    arm64.leaRdata x0, __str_blob_120  ; "panic at URL.maxon:597: urlHostEndOf: an authority that opens with `[` has a character after it\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9180,7 +9195,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#638:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9196,7 +9211,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#459:
-    arm64.leaRdata x0, __str_blob_209  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9212,7 +9227,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#644:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9228,7 +9243,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#461:
-    arm64.leaRdata x0, __str_blob_210  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9244,7 +9259,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#463:
-    arm64.leaRdata x0, __str_blob_211  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_208  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9260,7 +9275,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#648:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9276,7 +9291,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#470:
-    arm64.leaRdata x0, __str_blob_125  ; "panic at URL.maxon:663: urlIsIpv6Address: a split answers at least one part\x0a"
+    arm64.leaRdata x0, __str_blob_124  ; "panic at URL.maxon:663: urlIsIpv6Address: a split answers at least one part\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9292,7 +9307,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#768:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9308,7 +9323,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#395:
-    arm64.leaRdata x0, __str_blob_122  ; "panic at URL.maxon:601: urlHostEndOf: a `]` the search found has an index after it\x0a"
+    arm64.leaRdata x0, __str_blob_121  ; "panic at URL.maxon:601: urlHostEndOf: a `]` the search found has an index after it\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9324,7 +9339,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#503:
-    arm64.leaRdata x0, __str_blob_230  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_227  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9340,7 +9355,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#634:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9356,7 +9371,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#423:
-    arm64.leaRdata x0, __str_blob_217  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_214  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9372,7 +9387,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#760:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9388,7 +9403,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#352:
-    arm64.leaRdata x0, __str_blob_118  ; "panic at URL.maxon:573: urlHostAuthorityOf: a host ending before the authority's end has a character after it\x0a"
+    arm64.leaRdata x0, __str_blob_117  ; "panic at URL.maxon:573: urlHostAuthorityOf: a host ending before the authority's end has a character after it\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9404,7 +9419,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#380:
-    arm64.leaRdata x0, __str_blob_216  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.leaRdata x0, __str_blob_213  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9420,7 +9435,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#702:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9436,7 +9451,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#235:
-    arm64.leaRdata x0, __str_blob_112  ; "panic at URL.maxon:197: URL.parse: path slice \xe2\x80\x94 pathStart and pos within len\x0a"
+    arm64.leaRdata x0, __str_blob_111  ; "panic at URL.maxon:197: URL.parse: path slice \xe2\x80\x94 pathStart and pos within len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9452,7 +9467,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#561:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9468,7 +9483,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#714:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9484,7 +9499,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#240:
-    arm64.leaRdata x0, __str_blob_114  ; "panic at URL.maxon:209: URL.parse: query slice \xe2\x80\x94 queryStart and pos within len\x0a"
+    arm64.leaRdata x0, __str_blob_113  ; "panic at URL.maxon:209: URL.parse: query slice \xe2\x80\x94 queryStart and pos within len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9500,7 +9515,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#565:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9516,7 +9531,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#246:
-    arm64.leaRdata x0, __str_blob_115  ; "panic at URL.maxon:219: URL.parse: fragment slice \xe2\x80\x94 pos within len\x0a"
+    arm64.leaRdata x0, __str_blob_114  ; "panic at URL.maxon:219: URL.parse: fragment slice \xe2\x80\x94 pos within len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9532,7 +9547,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#543:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9548,7 +9563,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#154:
-    arm64.leaRdata x0, __str_blob_160  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_157  ; "panic at FilePath.maxon:195: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9564,7 +9579,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#156:
-    arm64.leaRdata x0, __str_blob_161  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_158  ; "panic at FilePath.maxon:196: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9580,7 +9595,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#40:
-    arm64.leaRdata x0, __str_blob_62  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
+    arm64.leaRdata x0, __str_blob_61  ; "panic at FilePath.maxon:58: FilePath: invalid path\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9596,7 +9611,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#527:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9612,7 +9627,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#88:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_184  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9628,7 +9643,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#90:
-    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9644,7 +9659,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#92:
-    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9660,7 +9675,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#94:
-    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9676,7 +9691,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#96:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9692,7 +9707,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#98:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9708,7 +9723,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#100:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9724,7 +9739,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#102:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9740,7 +9755,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#104:
-    arm64.leaRdata x0, __str_blob_191  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9756,7 +9771,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#106:
-    arm64.leaRdata x0, __str_blob_192  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9772,7 +9787,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#108:
-    arm64.leaRdata x0, __str_blob_193  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9788,7 +9803,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#521:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9804,7 +9819,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#36:
-    arm64.leaRdata x0, __str_blob_162  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_159  ; "panic at FilePath.maxon:335: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9820,7 +9835,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   tryerr#509:
-    arm64.leaRdata x0, __str_blob_94  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_93  ; "panic at String.maxon:296: String.byteAtOrPanic: index out of bounds \xe2\x80\x94 caller guarantees index < byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -23115,13 +23130,17 @@ String.trim
 ```TargetIr:x64-windows
 data {
   __data_CharacterSet.whitespacesAndNewlines@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_aes_usable@32 = i64 0
+  __mrt_cpu_sha_usable@40 = i64 0
+  __mrt_hash_seed@48 = i64 0
+  __mrt_hash_tier@56 = i64 0
+  __slab_arena_list@64 = i64 0
+  __slab_arena_map_l1@72 = i64 0
+  __slab_state@80 = i64 0
+  __mrt_console_probe_stdin@88 = i8 0
+  __mrt_console_probe_stdout@89 = i8 0
+  __mrt_console_probe_stderr@90 = i8 0
+  __mrt_program_started@91 = i8 0
 }
 
 func @main {
@@ -23162,7 +23181,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_78]  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_76]  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -23224,7 +23243,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_64]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_63]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23251,7 +23270,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#34
   tryerr#35:
-    x64.leaRegRdata rcx, [rip + __str_blob_65]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_64]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23280,7 +23299,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#41
   tryerr#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_65]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23717,7 +23736,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#61:
-    x64.leaRegRdata rcx, [rip + __str_blob_117]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_114]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23729,7 +23748,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#63:
-    x64.leaRegRdata rcx, [rip + __str_blob_118]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_115]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23741,7 +23760,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#131:
-    x64.leaRegRdata rcx, [rip + __str_blob_124]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23753,7 +23772,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#134:
-    x64.leaRegRdata rcx, [rip + __str_blob_124]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23765,7 +23784,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#137:
-    x64.leaRegRdata rcx, [rip + __str_blob_125]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_122]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23777,7 +23796,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#65:
-    x64.leaRegRdata rcx, [rip + __str_blob_119]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_116]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23789,7 +23808,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_107]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23801,7 +23820,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_108]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_105]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23820,10 +23839,14 @@ data {
   __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __mrt_hash_seed@40 = i64 0
+  __mrt_hash_tier@48 = i64 0
+  __slab_arena_list@56 = i64 0
+  __slab_arena_map_l1@64 = i64 0
+  __slab_state@72 = i64 0
+  __mrt_program_started@80 = i8 0
 }
 
 func @main {
@@ -23863,7 +23886,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_78]  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_76]  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -23925,7 +23948,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_64]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_63]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23952,7 +23975,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#34
   tryerr#35:
-    x64.leaRegRdata rcx, [rip + __str_blob_65]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_64]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23981,7 +24004,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#41
   tryerr#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_65]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24418,7 +24441,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#61:
-    x64.leaRegRdata rcx, [rip + __str_blob_117]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_114]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24430,7 +24453,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#63:
-    x64.leaRegRdata rcx, [rip + __str_blob_118]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_115]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24442,7 +24465,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#131:
-    x64.leaRegRdata rcx, [rip + __str_blob_124]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24454,7 +24477,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#134:
-    x64.leaRegRdata rcx, [rip + __str_blob_124]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24466,7 +24489,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#137:
-    x64.leaRegRdata rcx, [rip + __str_blob_125]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_122]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24478,7 +24501,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#65:
-    x64.leaRegRdata rcx, [rip + __str_blob_119]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_116]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24490,7 +24513,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_107]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24502,7 +24525,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_108]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_105]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24519,722 +24542,9 @@ func @String.trim {
 ```TargetIr:arm64-macos
 data {
   __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_14  ; "  abc  "
-  __il_body#5:
-    arm64.leaGlobal x0, __data_CharacterSet.whitespacesAndNewlines
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
-  __il_cont#4:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl String.trim
-  __il_body#7:
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-  __il_cont#6:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_CharacterSet
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_78  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @String.trim {
-  entry:
-    arm64.prologue 112
-    arm64.storeSlotReg slot10, x28
-    arm64.storeSlotReg slot9, x27
-    arm64.storeSlotReg slot8, x26
-    arm64.storeSlotReg slot7, x25
-    arm64.storeSlotReg slot6, x24
-    arm64.storeSlotReg slot5, x23
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body#142:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.storeSlotReg slot0, x0
-  __il_cont#141:
-    arm64.cmp x0, 0
-    arm64.b.ne __il_body#146
-  __il_body#6:
-    arm64.movImm x1, 0
-  __il_body#144:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-  __il_cont#143:
-    arm64.loadRegBaseDisp.byte x3, [x19 + 48]
-    arm64.movRegReg x0, x19
-    arm64.bl String.sliceBytes
-  __il_cont#5:
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __il_body#146:
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-  __il_cont#145:
-    arm64.movImm x22, 0
-    arm64.b whilehdr#18
-  __il_body#148:
-    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
-  __il_cont#147:
-    arm64.cmp x22, x23
-    arm64.b.hs atEnd
-  ifcont#28:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl String.byteAt
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#29
-  tryerr#30:
-    arm64.leaRdata x0, __str_blob_64  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  tryok#29:
-    arm64.cmp x0, 128
-    arm64.b.ge ifcont#54
-  isAscii:
-    arm64.cmp x0, 13
-    arm64.b.ne ifcont#39
-  isCR:
-    arm64.add x1, x22, 1
-    arm64.cmp x1, x23
-    arm64.b.hs ifcont#39
-  hasNext:
-    arm64.movRegReg x0, x19
-    arm64.bl String.byteAt
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#34
-  tryerr#35:
-    arm64.leaRdata x0, __str_blob_65  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  tryok#34:
-    arm64.cmp x0, 10
-    arm64.b.ne ifcont#39
-  isCRLF:
-    arm64.add x23, x22, 2
-    arm64.cmp x23, x22
-    arm64.b.lo __rc_panic#61
-    arm64.b __il_cont#25
-  ifcont#39:
-    arm64.add x1, x22, 1
-    arm64.cmp x1, x23
-    arm64.b.hs ifelse#52
-  hasNextByte:
-    arm64.movRegReg x0, x19
-    arm64.bl String.byteAt
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#41
-  tryerr#42:
-    arm64.leaRdata x0, __str_blob_66  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  tryok#41:
-    arm64.cmp x0, 128
-    arm64.b.lt ifelse#50
-  nextIsMultibyte:
-    arm64.add x1, x22, 1
-    arm64.movRegReg x0, x19
-    arm64.bl utf8DecodeAt
-    arm64.bl graphemeBreakProperty
-    arm64.cmp x0, 4
-    arm64.movImm x1, 0
-    arm64.b.eq scmerge#45
-  andrhs#44:
-    arm64.cmp x0, 5
-    arm64.cset x1, ne
-  scmerge#45:
-    arm64.movImm x2, 0
-    arm64.cbz x1, critsplit#154
-  andrhs#46:
-    arm64.cmp x0, 8
-    arm64.cset x0, ne
-    arm64.b scmerge#47
-  critsplit#154:
-    arm64.movRegReg x0, x2
-  scmerge#47:
-    arm64.cbz x0, ifcont#54
-  notCombining:
-    arm64.add x23, x22, 1
-    arm64.b __il_cont#25
-  ifelse#50:
-    arm64.add x23, x22, 1
-    arm64.b __il_cont#25
-  ifcont#54:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl utf8DecodeAt
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl utf8ByteLengthAt
-    arm64.add x25, x22, x0
-    arm64.cmp x25, x22
-    arm64.b.lo __rc_panic#63
-  __rc_ok#62:
-    arm64.movRegReg x0, x24
-    arm64.bl graphemeBreakProperty
-    arm64.movRegReg x26, x0
-  __il_body#67:
-    arm64.movImm x0, 0
-  __il_cont#66:
-    arm64.movRegReg x1, x26
-    arm64.movRegReg x2, x24
-    arm64.bl graphemeStateUpdate
-    arm64.movRegReg x24, x0
-    arm64.b whilehdr#55
-  scan#56:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x25
-    arm64.bl utf8DecodeAt
-    arm64.movRegReg x27, x0
-    arm64.movRegReg x0, x27
-    arm64.bl graphemeBreakProperty
-    arm64.movRegReg x28, x0
-  __il_body#69:
-    arm64.cmp x26, 0
-    arm64.b.lt __rc_panic#131
-  __rc_chk#132:
-    arm64.cmp x26, 13
-    arm64.b.gt __rc_panic#131
-  __rc_ok#130:
-    arm64.cmp x28, 0
-    arm64.b.lt __rc_panic#134
-  __rc_chk#135:
-    arm64.cmp x28, 13
-    arm64.b.gt __rc_panic#134
-  __rc_ok#133:
-    arm64.cmp x27, 0
-    arm64.b.lt __rc_panic#137
-  __rc_chk#138:
-    arm64.movImm x16, 1114111
-    arm64.cmp x27, x16
-    arm64.b.gt __rc_panic#137
-  __rc_ok#136:
-    arm64.cmp x26, 1
-    arm64.cset x0, eq
-    arm64.movImm x1, 0
-    arm64.b.ne scmerge#71
-  andrhs#70:
-    arm64.cmp x28, 2
-    arm64.cset x1, eq
-  scmerge#71:
-    arm64.cbz x1, ifcont#73
-  gb3:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#73:
-    arm64.cmp x26, 3
-    arm64.movImm x1, 1
-    arm64.b.eq scmerge#75
-  orrhs#74:
-    arm64.movRegReg x1, x0
-  scmerge#75:
-    arm64.movImm x0, 1
-    arm64.cbnz x1, scmerge#77
-  orrhs#76:
-    arm64.cmp x26, 2
-    arm64.cset x0, eq
-  scmerge#77:
-    arm64.cbz x0, ifcont#79
-  gb4:
-    arm64.movImm x0, 1
-    arm64.b __il_cont#68
-  ifcont#79:
-    arm64.cmp x28, 3
-    arm64.movImm x0, 1
-    arm64.b.eq scmerge#81
-  orrhs#80:
-    arm64.cmp x28, 1
-    arm64.cset x0, eq
-  scmerge#81:
-    arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#158
-  orrhs#82:
-    arm64.cmp x28, 2
-    arm64.cset x0, eq
-    arm64.b scmerge#83
-  critsplit#158:
-    arm64.movRegReg x0, x1
-  scmerge#83:
-    arm64.cbz x0, ifcont#85
-  gb5:
-    arm64.movImm x0, 1
-    arm64.b __il_cont#68
-  ifcont#85:
-    arm64.cmp x26, 9
-    arm64.b.ne ifcont#95
-  gb6:
-    arm64.cmp x28, 9
-    arm64.movImm x0, 1
-    arm64.b.eq scmerge#88
-  orrhs#87:
-    arm64.cmp x28, 10
-    arm64.cset x0, eq
-  scmerge#88:
-    arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#160
-  orrhs#89:
-    arm64.cmp x28, 12
-    arm64.cset x0, eq
-    arm64.b scmerge#90
-  critsplit#160:
-    arm64.movRegReg x0, x1
-  scmerge#90:
-    arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#161
-  orrhs#91:
-    arm64.cmp x28, 13
-    arm64.cset x0, eq
-    arm64.b scmerge#92
-  critsplit#161:
-    arm64.movRegReg x0, x1
-  scmerge#92:
-    arm64.cbz x0, ifcont#95
-  gb6_inner:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#95:
-    arm64.cmp x26, 12
-    arm64.movImm x0, 1
-    arm64.b.eq scmerge#97
-  orrhs#96:
-    arm64.cmp x26, 10
-    arm64.cset x0, eq
-  scmerge#97:
-    arm64.cbz x0, ifcont#103
-  gb7:
-    arm64.cmp x28, 10
-    arm64.movImm x0, 1
-    arm64.b.eq scmerge#100
-  orrhs#99:
-    arm64.cmp x28, 11
-    arm64.cset x0, eq
-  scmerge#100:
-    arm64.cbz x0, ifcont#103
-  gb7_inner:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#103:
-    arm64.cmp x26, 13
-    arm64.movImm x0, 1
-    arm64.b.eq scmerge#105
-  orrhs#104:
-    arm64.cmp x26, 11
-    arm64.cset x0, eq
-  scmerge#105:
-    arm64.cbz x0, ifcont#109
-  gb8:
-    arm64.cmp x28, 11
-    arm64.b.ne ifcont#109
-  gb8_inner:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#109:
-    arm64.cmp x28, 4
-    arm64.movImm x0, 1
-    arm64.b.eq scmerge#111
-  orrhs#110:
-    arm64.cmp x28, 5
-    arm64.cset x0, eq
-  scmerge#111:
-    arm64.cbz x0, ifcont#113
-  gb9:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#113:
-    arm64.cmp x28, 8
-    arm64.b.ne ifcont#115
-  gb9a:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#115:
-    arm64.cmp x26, 7
-    arm64.b.ne ifcont#117
-  gb9b:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#117:
-    arm64.cmp x26, 5
-    arm64.movImm x0, 0
-    arm64.b.ne scmerge#119
-  andrhs#118:
-    arm64.movRegReg x0, x27
-    arm64.bl isExtendedPictographic
-  scmerge#119:
-    arm64.cbz x0, ifcont#123
-  __il_body#150:
-    arm64.and x0, x24, 1
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-  __il_cont#149:
-    arm64.cbz x0, ifcont#123
-  gb11_check:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#123:
-    arm64.cmp x26, 6
-    arm64.movImm x0, 0
-    arm64.b.ne scmerge#125
-  andrhs#124:
-    arm64.cmp x28, 6
-    arm64.cset x0, eq
-  scmerge#125:
-    arm64.cbz x0, ifcont#129
-  __il_body#140:
-    arm64.lsr x0, x24, 1
-    arm64.and x0, x0, 1
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-  __il_cont#139:
-    arm64.cbz x0, ifcont#129
-  gb12_odd:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#68
-  ifcont#129:
-    arm64.movImm x0, 1
-  __il_cont#68:
-    arm64.cbnz x0, breakFound
-  ifcont#59:
-    arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x28
-    arm64.movRegReg x2, x27
-    arm64.bl graphemeStateUpdate
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x25
-    arm64.bl utf8ByteLengthAt
-    arm64.add x0, x25, x0
-    arm64.cmp x0, x25
-    arm64.b.lo __rc_panic#65
-  __rc_ok#64:
-    arm64.movRegReg x25, x0
-    arm64.movRegReg x26, x28
-  whilehdr#55:
-    arm64.cmp x25, x23
-    arm64.b.lo scan#56
-    arm64.b whileexit
-  atEnd:
-    arm64.movRegReg x23, x22
-    arm64.b __il_cont#25
-  ifelse#52:
-    arm64.movRegReg x23, x1
-    arm64.b __il_cont#25
-  breakFound:
-    arm64.movRegReg x23, x25
-    arm64.b __il_cont#25
-  whileexit:
-    arm64.movRegReg x23, x25
-  __il_cont#25:
-    arm64.sub x2, x23, x22
-    arm64.cmp x23, x22
-    arm64.b.lo __rc_panic#24
-  __rc_ok#23:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl String.makeCharFromBytes
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x24
-    arm64.bl CharacterSet.contains
-    arm64.eor x0, x0, 1
-    arm64.cbz x0, ifcont#22
-  found#21:
-    arm64.movRegReg x0, x24
-    arm64.bl __str_decref
-    arm64.b __il_cont#16
-  ifcont#22:
-    arm64.movRegReg x0, x24
-    arm64.bl __str_decref
-    arm64.movRegReg x22, x23
-  whilehdr#18:
-    arm64.cmp x22, x21
-    arm64.b.lo __il_body#148
-  __il_cont#16:
-    arm64.loadRegSlot x0, slot0
-    arm64.cmp x22, x0
-    arm64.b.lo __il_body#8
-  allMatch:
-    arm64.movImm x1, 0
-    arm64.movImm x2, 0
-    arm64.movImm x3, 1
-    arm64.movRegReg x0, x19
-    arm64.bl String.sliceBytes
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __il_body#8:
-    arm64.loadRegSlot x21, slot0
-    arm64.b whilehdr#9
-  scan#10:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl findGraphemeStart
-    arm64.movRegReg x23, x0
-    arm64.sub x2, x21, x23
-    arm64.cmp x21, x23
-    arm64.b.lo __rc_panic#15
-  __rc_ok#14:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
-    arm64.bl String.makeCharFromBytes
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x24
-    arm64.bl CharacterSet.contains
-    arm64.eor x0, x0, 1
-    arm64.cbz x0, ifcont#13
-  found#12:
-    arm64.movRegReg x0, x24
-    arm64.bl __str_decref
-    arm64.b __il_cont#7
-  ifcont#13:
-    arm64.movRegReg x0, x24
-    arm64.bl __str_decref
-    arm64.movRegReg x21, x23
-  whilehdr#9:
-    arm64.cmp x21, x22
-    arm64.b.hi scan#10
-  __il_cont#7:
-    arm64.loadRegBaseDisp.byte x3, [x19 + 48]
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x21
-    arm64.bl String.sliceBytes
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#61:
-    arm64.leaRdata x0, __str_blob_117  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#63:
-    arm64.leaRdata x0, __str_blob_118  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#131:
-    arm64.leaRdata x0, __str_blob_124  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#134:
-    arm64.leaRdata x0, __str_blob_124  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#137:
-    arm64.leaRdata x0, __str_blob_125  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#65:
-    arm64.leaRdata x0, __str_blob_119  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_107  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#15:
-    arm64.leaRdata x0, __str_blob_108  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
-}
-```
-
-```TargetIr:arm64-linux
-data {
-  __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_cpu_aes_usable@8 = i64 1
+  __mrt_hash_seed@16 = i64 0
+  __mrt_hash_tier@24 = i64 0
   __slab_arena_list@32 = i64 0
   __slab_arena_map_l1@40 = i64 0
   __slab_state@48 = i64 0
@@ -25274,7 +24584,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_78  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_76  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -25342,7 +24652,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#29
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_64  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    arm64.leaRdata x0, __str_blob_63  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25373,7 +24683,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#34
   tryerr#35:
-    arm64.leaRdata x0, __str_blob_65  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.leaRdata x0, __str_blob_64  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25406,7 +24716,7 @@ func @String.trim {
     arm64.cmp x9, 0
     arm64.b.eq tryok#41
   tryerr#42:
-    arm64.leaRdata x0, __str_blob_66  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.leaRdata x0, __str_blob_65  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25815,7 +25125,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#61:
-    arm64.leaRdata x0, __str_blob_117  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_114  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25831,7 +25141,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#63:
-    arm64.leaRdata x0, __str_blob_118  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_115  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25847,7 +25157,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#131:
-    arm64.leaRdata x0, __str_blob_124  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25863,7 +25173,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#134:
-    arm64.leaRdata x0, __str_blob_124  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25879,7 +25189,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#137:
-    arm64.leaRdata x0, __str_blob_125  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_122  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25895,7 +25205,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#65:
-    arm64.leaRdata x0, __str_blob_119  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_116  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25911,7 +25221,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_107  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_104  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25927,7 +25237,727 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#15:
-    arm64.leaRdata x0, __str_blob_108  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_105  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+}
+```
+
+```TargetIr:arm64-linux
+data {
+  __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_cpu_aes_usable@32 = i64 0
+  __mrt_cpu_sha_usable@40 = i64 0
+  __mrt_hash_seed@48 = i64 0
+  __mrt_hash_tier@56 = i64 0
+  __slab_arena_list@64 = i64 0
+  __slab_arena_map_l1@72 = i64 0
+  __slab_state@80 = i64 0
+  __mrt_program_started@88 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_14  ; "  abc  "
+  __il_body#5:
+    arm64.leaGlobal x0, __data_CharacterSet.whitespacesAndNewlines
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+  __il_cont#4:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl String.trim
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+  __il_cont#6:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_CharacterSet
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_76  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @String.trim {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  __il_body#142:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.storeSlotReg slot0, x0
+  __il_cont#141:
+    arm64.cmp x0, 0
+    arm64.b.ne __il_body#146
+  __il_body#6:
+    arm64.movImm x1, 0
+  __il_body#144:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+  __il_cont#143:
+    arm64.loadRegBaseDisp.byte x3, [x19 + 48]
+    arm64.movRegReg x0, x19
+    arm64.bl String.sliceBytes
+  __il_cont#5:
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __il_body#146:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_cont#145:
+    arm64.movImm x22, 0
+    arm64.b whilehdr#18
+  __il_body#148:
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+  __il_cont#147:
+    arm64.cmp x22, x23
+    arm64.b.hs atEnd
+  ifcont#28:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#29
+  tryerr#30:
+    arm64.leaRdata x0, __str_blob_63  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryok#29:
+    arm64.cmp x0, 128
+    arm64.b.ge ifcont#54
+  isAscii:
+    arm64.cmp x0, 13
+    arm64.b.ne ifcont#39
+  isCR:
+    arm64.add x1, x22, 1
+    arm64.cmp x1, x23
+    arm64.b.hs ifcont#39
+  hasNext:
+    arm64.movRegReg x0, x19
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#34
+  tryerr#35:
+    arm64.leaRdata x0, __str_blob_64  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryok#34:
+    arm64.cmp x0, 10
+    arm64.b.ne ifcont#39
+  isCRLF:
+    arm64.add x23, x22, 2
+    arm64.cmp x23, x22
+    arm64.b.lo __rc_panic#61
+    arm64.b __il_cont#25
+  ifcont#39:
+    arm64.add x1, x22, 1
+    arm64.cmp x1, x23
+    arm64.b.hs ifelse#52
+  hasNextByte:
+    arm64.movRegReg x0, x19
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#41
+  tryerr#42:
+    arm64.leaRdata x0, __str_blob_65  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryok#41:
+    arm64.cmp x0, 128
+    arm64.b.lt ifelse#50
+  nextIsMultibyte:
+    arm64.add x1, x22, 1
+    arm64.movRegReg x0, x19
+    arm64.bl utf8DecodeAt
+    arm64.bl graphemeBreakProperty
+    arm64.cmp x0, 4
+    arm64.movImm x1, 0
+    arm64.b.eq scmerge#45
+  andrhs#44:
+    arm64.cmp x0, 5
+    arm64.cset x1, ne
+  scmerge#45:
+    arm64.movImm x2, 0
+    arm64.cbz x1, critsplit#154
+  andrhs#46:
+    arm64.cmp x0, 8
+    arm64.cset x0, ne
+    arm64.b scmerge#47
+  critsplit#154:
+    arm64.movRegReg x0, x2
+  scmerge#47:
+    arm64.cbz x0, ifcont#54
+  notCombining:
+    arm64.add x23, x22, 1
+    arm64.b __il_cont#25
+  ifelse#50:
+    arm64.add x23, x22, 1
+    arm64.b __il_cont#25
+  ifcont#54:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl utf8DecodeAt
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl utf8ByteLengthAt
+    arm64.add x25, x22, x0
+    arm64.cmp x25, x22
+    arm64.b.lo __rc_panic#63
+  __rc_ok#62:
+    arm64.movRegReg x0, x24
+    arm64.bl graphemeBreakProperty
+    arm64.movRegReg x26, x0
+  __il_body#67:
+    arm64.movImm x0, 0
+  __il_cont#66:
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x24
+    arm64.bl graphemeStateUpdate
+    arm64.movRegReg x24, x0
+    arm64.b whilehdr#55
+  scan#56:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.bl utf8DecodeAt
+    arm64.movRegReg x27, x0
+    arm64.movRegReg x0, x27
+    arm64.bl graphemeBreakProperty
+    arm64.movRegReg x28, x0
+  __il_body#69:
+    arm64.cmp x26, 0
+    arm64.b.lt __rc_panic#131
+  __rc_chk#132:
+    arm64.cmp x26, 13
+    arm64.b.gt __rc_panic#131
+  __rc_ok#130:
+    arm64.cmp x28, 0
+    arm64.b.lt __rc_panic#134
+  __rc_chk#135:
+    arm64.cmp x28, 13
+    arm64.b.gt __rc_panic#134
+  __rc_ok#133:
+    arm64.cmp x27, 0
+    arm64.b.lt __rc_panic#137
+  __rc_chk#138:
+    arm64.movImm x16, 1114111
+    arm64.cmp x27, x16
+    arm64.b.gt __rc_panic#137
+  __rc_ok#136:
+    arm64.cmp x26, 1
+    arm64.cset x0, eq
+    arm64.movImm x1, 0
+    arm64.b.ne scmerge#71
+  andrhs#70:
+    arm64.cmp x28, 2
+    arm64.cset x1, eq
+  scmerge#71:
+    arm64.cbz x1, ifcont#73
+  gb3:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#73:
+    arm64.cmp x26, 3
+    arm64.movImm x1, 1
+    arm64.b.eq scmerge#75
+  orrhs#74:
+    arm64.movRegReg x1, x0
+  scmerge#75:
+    arm64.movImm x0, 1
+    arm64.cbnz x1, scmerge#77
+  orrhs#76:
+    arm64.cmp x26, 2
+    arm64.cset x0, eq
+  scmerge#77:
+    arm64.cbz x0, ifcont#79
+  gb4:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#68
+  ifcont#79:
+    arm64.cmp x28, 3
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#81
+  orrhs#80:
+    arm64.cmp x28, 1
+    arm64.cset x0, eq
+  scmerge#81:
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#158
+  orrhs#82:
+    arm64.cmp x28, 2
+    arm64.cset x0, eq
+    arm64.b scmerge#83
+  critsplit#158:
+    arm64.movRegReg x0, x1
+  scmerge#83:
+    arm64.cbz x0, ifcont#85
+  gb5:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#68
+  ifcont#85:
+    arm64.cmp x26, 9
+    arm64.b.ne ifcont#95
+  gb6:
+    arm64.cmp x28, 9
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#88
+  orrhs#87:
+    arm64.cmp x28, 10
+    arm64.cset x0, eq
+  scmerge#88:
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#160
+  orrhs#89:
+    arm64.cmp x28, 12
+    arm64.cset x0, eq
+    arm64.b scmerge#90
+  critsplit#160:
+    arm64.movRegReg x0, x1
+  scmerge#90:
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#161
+  orrhs#91:
+    arm64.cmp x28, 13
+    arm64.cset x0, eq
+    arm64.b scmerge#92
+  critsplit#161:
+    arm64.movRegReg x0, x1
+  scmerge#92:
+    arm64.cbz x0, ifcont#95
+  gb6_inner:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#95:
+    arm64.cmp x26, 12
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#97
+  orrhs#96:
+    arm64.cmp x26, 10
+    arm64.cset x0, eq
+  scmerge#97:
+    arm64.cbz x0, ifcont#103
+  gb7:
+    arm64.cmp x28, 10
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#100
+  orrhs#99:
+    arm64.cmp x28, 11
+    arm64.cset x0, eq
+  scmerge#100:
+    arm64.cbz x0, ifcont#103
+  gb7_inner:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#103:
+    arm64.cmp x26, 13
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#105
+  orrhs#104:
+    arm64.cmp x26, 11
+    arm64.cset x0, eq
+  scmerge#105:
+    arm64.cbz x0, ifcont#109
+  gb8:
+    arm64.cmp x28, 11
+    arm64.b.ne ifcont#109
+  gb8_inner:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#109:
+    arm64.cmp x28, 4
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge#111
+  orrhs#110:
+    arm64.cmp x28, 5
+    arm64.cset x0, eq
+  scmerge#111:
+    arm64.cbz x0, ifcont#113
+  gb9:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#113:
+    arm64.cmp x28, 8
+    arm64.b.ne ifcont#115
+  gb9a:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#115:
+    arm64.cmp x26, 7
+    arm64.b.ne ifcont#117
+  gb9b:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#117:
+    arm64.cmp x26, 5
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge#119
+  andrhs#118:
+    arm64.movRegReg x0, x27
+    arm64.bl isExtendedPictographic
+  scmerge#119:
+    arm64.cbz x0, ifcont#123
+  __il_body#150:
+    arm64.and x0, x24, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+  __il_cont#149:
+    arm64.cbz x0, ifcont#123
+  gb11_check:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#123:
+    arm64.cmp x26, 6
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge#125
+  andrhs#124:
+    arm64.cmp x28, 6
+    arm64.cset x0, eq
+  scmerge#125:
+    arm64.cbz x0, ifcont#129
+  __il_body#140:
+    arm64.lsr x0, x24, 1
+    arm64.and x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+  __il_cont#139:
+    arm64.cbz x0, ifcont#129
+  gb12_odd:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#68
+  ifcont#129:
+    arm64.movImm x0, 1
+  __il_cont#68:
+    arm64.cbnz x0, breakFound
+  ifcont#59:
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x28
+    arm64.movRegReg x2, x27
+    arm64.bl graphemeStateUpdate
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.bl utf8ByteLengthAt
+    arm64.add x0, x25, x0
+    arm64.cmp x0, x25
+    arm64.b.lo __rc_panic#65
+  __rc_ok#64:
+    arm64.movRegReg x25, x0
+    arm64.movRegReg x26, x28
+  whilehdr#55:
+    arm64.cmp x25, x23
+    arm64.b.lo scan#56
+    arm64.b whileexit
+  atEnd:
+    arm64.movRegReg x23, x22
+    arm64.b __il_cont#25
+  ifelse#52:
+    arm64.movRegReg x23, x1
+    arm64.b __il_cont#25
+  breakFound:
+    arm64.movRegReg x23, x25
+    arm64.b __il_cont#25
+  whileexit:
+    arm64.movRegReg x23, x25
+  __il_cont#25:
+    arm64.sub x2, x23, x22
+    arm64.cmp x23, x22
+    arm64.b.lo __rc_panic#24
+  __rc_ok#23:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl String.makeCharFromBytes
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl CharacterSet.contains
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#22
+  found#21:
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.b __il_cont#16
+  ifcont#22:
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x22, x23
+  whilehdr#18:
+    arm64.cmp x22, x21
+    arm64.b.lo __il_body#148
+  __il_cont#16:
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x22, x0
+    arm64.b.lo __il_body#8
+  allMatch:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.movImm x3, 1
+    arm64.movRegReg x0, x19
+    arm64.bl String.sliceBytes
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __il_body#8:
+    arm64.loadRegSlot x21, slot0
+    arm64.b whilehdr#9
+  scan#10:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl findGraphemeStart
+    arm64.movRegReg x23, x0
+    arm64.sub x2, x21, x23
+    arm64.cmp x21, x23
+    arm64.b.lo __rc_panic#15
+  __rc_ok#14:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl String.makeCharFromBytes
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl CharacterSet.contains
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#13
+  found#12:
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.b __il_cont#7
+  ifcont#13:
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x21, x23
+  whilehdr#9:
+    arm64.cmp x21, x22
+    arm64.b.hi scan#10
+  __il_cont#7:
+    arm64.loadRegBaseDisp.byte x3, [x19 + 48]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl String.sliceBytes
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#61:
+    arm64.leaRdata x0, __str_blob_114  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#63:
+    arm64.leaRdata x0, __str_blob_115  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#131:
+    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#134:
+    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#137:
+    arm64.leaRdata x0, __str_blob_122  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#65:
+    arm64.leaRdata x0, __str_blob_116  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#24:
+    arm64.leaRdata x0, __str_blob_104  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#15:
+    arm64.leaRdata x0, __str_blob_105  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25948,7 +25978,7 @@ func @String.trim {
 <!-- test: string-byte-at-body -->
 `__managed_byte_at` — the THROWING, bounds-checked byte read behind `String.byteAt`. It leaves through the
 dual-register `errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`, which is exactly what
-`stdlib/String.maxon:285` declares. The corpus's `hashString` is what installs it here, and this block is
+`stdlib/String.maxon:285` declares. The program's `String.contains`, whose search reads through `byteAt`, is what installs it here, and this block is
 its only gate.
 
 ⚠ **THE READ IS THE BUFFER'S.** `String.byteAt` is a corpus declaration whose own
@@ -25959,11 +25989,11 @@ loud panic (`TargetPrinter.requireEveryNameRendered`), which is the whole reason
 
 ```maxon
 function main() returns ExitCode
-	return hashString("a") mod 7
+	return 6 if "abc".contains("b") else 1
 end 'main'
 ```
 ```exitcode
-3
+6
 ```
 ```RequiredFunctions
 __managed_byte_at
@@ -25986,82 +26016,235 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
-    x64.leaRegRdata rbx, [rip + __str_rec_1]  ; "a"
-  __il_body#5:
-    x64.movRegImm32 r12, 5381
-  __il_body#13:
-    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_cont#12:
-    x64.movRegImm32 r14, 0
-    x64.jmp forhdr
-  __il_body#15:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
-    x64.callDirect __managed_byte_at
+    x64.pushReg r15
+    x64.prologue 72
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "abc"
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "b"
+    x64.storeSlotReg slot2, rcx
+  __il_body#51:
+    x64.loadRegSlot rax, slot3
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_body#53:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+  __il_cont#52:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, ifcont#13
+  empty_needle:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#10
+  ifcont#13:
+    x64.cmpRegReg r12, rbx
+    x64.jcc belowEqual, ifcont#15
+  too_long:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#10
+  ifcont#15:
+    x64.movRegImm32 rdx, 0
+    x64.callDirect String.byteAt
+    x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.setccReg notEqual, rax
-    x64.jcc equal, tryok#16
-  tryerr#17:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr#11
-    x64.jmp tryok#10
+    x64.jcc notEqual, tryerr#17
   tryok#16:
-    x64.movRegReg rcx, r8
-  tryok#10:
-    x64.imulRegRegImm32 rax, r12, 33
-    x64.leaRegRegReg rax, rax, rcx
-  forstep:
+    x64.movRegImm32 r14, 0
+    x64.subRegReg rbx, rbx, r12
+    x64.jmp forhdr#18
+  search_loop:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc below, __rc_panic#29
+  __rc_ok#28:
+    x64.loadRegSlot rcx, slot3
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#23
+  tryok#22:
+    x64.cmpRegReg r8, r13
+    x64.jcc notEqual, forstep#20
+  firstByteMatch:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc below, __rc_panic#31
+  __il_body#35:
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr#36
+  compare_loop:
+    x64.leaRegRegReg rdx, r14, r15
+    x64.cmpRegReg rdx, r14
+    x64.jcc below, __rc_panic#47
+  __rc_ok#46:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect String.byteAt
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#41
+  tryok#40:
+    x64.cmpRegImm32 r15, 0
+    x64.jcc below, __rc_panic#49
+  __rc_ok#48:
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rdx, r15
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#43
+  tryok#42:
+    x64.loadRegSlot rax, slot1
+    x64.cmpRegReg rax, r8
+    x64.jcc equal, forstep#38
+  byte_check:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#34
+  forstep#38:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r15, rax
+  forhdr#36:
+    x64.storeSlotReg slot0, r15
+    x64.cmpRegReg r15, r12
+    x64.jcc below, compare_loop
+  forexit#39:
+    x64.movRegImm32 rax, 1
+  __il_cont#34:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep#20
+  found_check:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#33
+    x64.jmp __il_cont#10
+  forstep#20:
     x64.leaRegRegImm32 r14, r14, 1
-    x64.movRegReg r12, rax
-  forhdr:
-    x64.cmpRegReg r14, r13
-    x64.jcc below, __il_body#15
-  forexit:
-    x64.movRegImm32 rax, 4294967295
-    x64.andRegReg r12, r12, rax
+  forhdr#18:
+    x64.cmpRegReg r14, rbx
+    x64.jcc belowEqual, search_loop
+  forexit#21:
+    x64.movRegImm32 rax, 1
+  __il_cont#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#4
+  tryok#8:
+    x64.movRegImm32 rax, 1
   __il_cont#4:
-    x64.movRegImm rax, 2635249153387078803
-    x64.mulHighReg r12
-    x64.movRegReg rax, r12
-    x64.subRegReg rax, r12, rdx
-    x64.shrRegImm8 rax, rax, 1
-    x64.leaRegRegReg rax, rax, rdx
-    x64.shrRegImm8 rax, rax, 2
-    x64.imulRegRegImm32 rax, rax, 7
-    x64.movRegReg r8, r12
-    x64.subRegReg r8, r12, rax
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.epilogue 32
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 6
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 1
+  matchcont:
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
+  tryerr#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:1027: findIn: byteAt(0) OOB \xe2\x80\x94 needleLen > 0 checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at string-byte-at-body.test:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#29:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at String.maxon:1030: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at String.maxon:1030: findIn: byteAt OOB \xe2\x80\x94 i <= len - needleLen invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#31:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at String.maxon:1033: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#47:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#41:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#49:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#43:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#33:
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at String.maxon:1034: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -26131,81 +26314,235 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
-    x64.leaRegRdata rbx, [rip + __str_rec_1]  ; "a"
-  __il_body#5:
-    x64.movRegImm32 r12, 5381
-  __il_body#13:
-    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_cont#12:
-    x64.movRegImm32 r14, 0
-    x64.jmp forhdr
-  __il_body#15:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
-    x64.callDirect __managed_byte_at
+    x64.pushReg r15
+    x64.prologue 72
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "abc"
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "b"
+    x64.storeSlotReg slot2, rcx
+  __il_body#51:
+    x64.loadRegSlot rax, slot3
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_body#53:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+  __il_cont#52:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, ifcont#13
+  empty_needle:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#10
+  ifcont#13:
+    x64.cmpRegReg r12, rbx
+    x64.jcc belowEqual, ifcont#15
+  too_long:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#10
+  ifcont#15:
+    x64.movRegImm32 rdx, 0
+    x64.callDirect String.byteAt
+    x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.setccReg notEqual, rax
-    x64.jcc equal, tryok#16
-  tryerr#17:
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr#11
-    x64.jmp tryok#10
+    x64.jcc notEqual, tryerr#17
   tryok#16:
-    x64.movRegReg rcx, r8
-  tryok#10:
-    x64.imulRegRegImm32 rax, r12, 33
-    x64.leaRegRegReg rax, rax, rcx
-  forstep:
+    x64.movRegImm32 r14, 0
+    x64.subRegReg rbx, rbx, r12
+    x64.jmp forhdr#18
+  search_loop:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc below, __rc_panic#29
+  __rc_ok#28:
+    x64.loadRegSlot rcx, slot3
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#23
+  tryok#22:
+    x64.cmpRegReg r8, r13
+    x64.jcc notEqual, forstep#20
+  firstByteMatch:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc below, __rc_panic#31
+  __il_body#35:
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr#36
+  compare_loop:
+    x64.leaRegRegReg rdx, r14, r15
+    x64.cmpRegReg rdx, r14
+    x64.jcc below, __rc_panic#47
+  __rc_ok#46:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect String.byteAt
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#41
+  tryok#40:
+    x64.cmpRegImm32 r15, 0
+    x64.jcc below, __rc_panic#49
+  __rc_ok#48:
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rdx, r15
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#43
+  tryok#42:
+    x64.loadRegSlot rax, slot1
+    x64.cmpRegReg rax, r8
+    x64.jcc equal, forstep#38
+  byte_check:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#34
+  forstep#38:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r15, rax
+  forhdr#36:
+    x64.storeSlotReg slot0, r15
+    x64.cmpRegReg r15, r12
+    x64.jcc below, compare_loop
+  forexit#39:
+    x64.movRegImm32 rax, 1
+  __il_cont#34:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep#20
+  found_check:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#33
+    x64.jmp __il_cont#10
+  forstep#20:
     x64.leaRegRegImm32 r14, r14, 1
-    x64.movRegReg r12, rax
-  forhdr:
-    x64.cmpRegReg r14, r13
-    x64.jcc below, __il_body#15
-  forexit:
-    x64.movRegImm32 rax, 4294967295
-    x64.andRegReg r12, r12, rax
+  forhdr#18:
+    x64.cmpRegReg r14, rbx
+    x64.jcc belowEqual, search_loop
+  forexit#21:
+    x64.movRegImm32 rax, 1
+  __il_cont#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#4
+  tryok#8:
+    x64.movRegImm32 rax, 1
   __il_cont#4:
-    x64.movRegImm rax, 2635249153387078803
-    x64.mulHighReg r12
-    x64.movRegReg rax, r12
-    x64.subRegReg rax, r12, rdx
-    x64.shrRegImm8 rax, rax, 1
-    x64.leaRegRegReg rax, rax, rdx
-    x64.shrRegImm8 rax, rax, 2
-    x64.imulRegRegImm32 rax, rax, 7
-    x64.movRegReg r8, r12
-    x64.subRegReg r8, r12, rax
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.epilogue 32
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 6
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 1
+  matchcont:
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
+  tryerr#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:1027: findIn: byteAt(0) OOB \xe2\x80\x94 needleLen > 0 checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at string-byte-at-body.test:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#29:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at String.maxon:1030: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at String.maxon:1030: findIn: byteAt OOB \xe2\x80\x94 i <= len - needleLen invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#31:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at String.maxon:1033: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#47:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#41:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#49:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#43:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#33:
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at String.maxon:1034: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -26267,83 +26604,259 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1  ; "a"
-  __il_body#5:
-    arm64.movImm x20, 5381
-  __il_body#13:
+    arm64.leaRdata x19, __str_rec_2  ; "abc"
+    arm64.leaRdata x20, __str_rec_3  ; "b"
+  __il_body#51:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-  __il_cont#12:
-    arm64.movImm x22, 0
-    arm64.b forhdr
-  __il_body#15:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl __managed_byte_at
-    arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.b.eq tryok
-  tryerr#17:
+  __il_body#53:
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+  __il_cont#52:
+    arm64.cmp x22, 0
+    arm64.b.ne ifcont#13
+  empty_needle:
     arm64.movImm x0, 0
-    arm64.cbnz x1, tryerr#11
-  tryok:
-    arm64.movImm x16, 33
-    arm64.mul x1, x20, x16
-    arm64.add x0, x1, x0
-  forstep:
-    arm64.add x22, x22, 1
-    arm64.movRegReg x20, x0
-  forhdr:
+    arm64.b __il_cont#10
+  ifcont#13:
     arm64.cmp x22, x21
-    arm64.b.lo __il_body#15
-  forexit:
-    arm64.movImm x0, 4294967295
-    arm64.and x0, x20, x0
-  __il_cont#4:
-    arm64.movImm x1, 2635249153387078803
-    arm64.umulh x1, x1, x0
-    arm64.sub x2, x0, x1
-    arm64.lsr x2, x2, 1
-    arm64.add x1, x2, x1
-    arm64.lsr x1, x1, 2
-    arm64.movImm x16, 7
-    arm64.mul x1, x1, x16
-    arm64.sub x0, x0, x1
+    arm64.b.ls ifcont#15
+  too_long:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#10
+  ifcont#15:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl String.byteAt
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok#16:
+    arm64.movImm x24, 0
+    arm64.sub x21, x21, x22
+    arm64.b forhdr#18
+  search_loop:
+    arm64.cmp x24, 0
+    arm64.b.lo __rc_panic#29
+  __rc_ok#28:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#23
+  tryok#22:
+    arm64.cmp x0, x23
+    arm64.b.ne forstep#20
+  firstByteMatch:
+    arm64.cmp x24, 0
+    arm64.b.lo __rc_panic#31
+  __il_body#35:
+    arm64.movImm x25, 0
+    arm64.b forhdr#36
+  compare_loop:
+    arm64.add x1, x24, x25
+    arm64.cmp x1, x24
+    arm64.b.lo __rc_panic#47
+  __rc_ok#46:
+    arm64.movRegReg x0, x19
+    arm64.bl String.byteAt
+    arm64.movRegReg x26, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#41
+  tryok#40:
+    arm64.cmp x25, 0
+    arm64.b.lo __rc_panic#49
+  __rc_ok#48:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x25
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#43
+  tryok#42:
+    arm64.cmp x26, x0
+    arm64.b.eq forstep#38
+  byte_check:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#34
+  forstep#38:
+    arm64.add x25, x25, 1
+  forhdr#36:
+    arm64.cmp x25, x22
+    arm64.b.lo compare_loop
+  forexit#39:
+    arm64.movImm x0, 1
+  __il_cont#34:
+    arm64.cbz x0, forstep#20
+  found_check:
+    arm64.movImm x0, 0
+    arm64.cmp x24, 0
+    arm64.b.lt __rc_panic#33
+    arm64.b __il_cont#10
+  forstep#20:
+    arm64.add x24, x24, 1
+  forhdr#18:
+    arm64.cmp x24, x21
+    arm64.b.ls search_loop
+  forexit#21:
+    arm64.movImm x0, 1
+  __il_cont#10:
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.eq tryok#8
+  tryerr#9:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#4
+  tryok#8:
+    arm64.movImm x0, 1
+  __il_cont#4:
+    arm64.cbz x0, ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 6
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 1
+  matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
-  tryerr#11:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
+  tryerr#17:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:1027: findIn: byteAt(0) OOB \xe2\x80\x94 needleLen > 0 checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at string-byte-at-body.test:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#29:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at String.maxon:1030: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at String.maxon:1030: findIn: byteAt OOB \xe2\x80\x94 i <= len - needleLen invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#31:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at String.maxon:1033: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#47:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#41:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#49:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#43:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#33:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at String.maxon:1034: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
 }
 
@@ -26401,83 +26914,259 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1  ; "a"
-  __il_body#5:
-    arm64.movImm x20, 5381
-  __il_body#13:
+    arm64.leaRdata x19, __str_rec_2  ; "abc"
+    arm64.leaRdata x20, __str_rec_3  ; "b"
+  __il_body#51:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-  __il_cont#12:
-    arm64.movImm x22, 0
-    arm64.b forhdr
-  __il_body#15:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl __managed_byte_at
-    arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.b.eq tryok
-  tryerr#17:
+  __il_body#53:
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+  __il_cont#52:
+    arm64.cmp x22, 0
+    arm64.b.ne ifcont#13
+  empty_needle:
     arm64.movImm x0, 0
-    arm64.cbnz x1, tryerr#11
-  tryok:
-    arm64.movImm x16, 33
-    arm64.mul x1, x20, x16
-    arm64.add x0, x1, x0
-  forstep:
-    arm64.add x22, x22, 1
-    arm64.movRegReg x20, x0
-  forhdr:
+    arm64.b __il_cont#10
+  ifcont#13:
     arm64.cmp x22, x21
-    arm64.b.lo __il_body#15
-  forexit:
-    arm64.movImm x0, 4294967295
-    arm64.and x0, x20, x0
-  __il_cont#4:
-    arm64.movImm x1, 2635249153387078803
-    arm64.umulh x1, x1, x0
-    arm64.sub x2, x0, x1
-    arm64.lsr x2, x2, 1
-    arm64.add x1, x2, x1
-    arm64.lsr x1, x1, 2
-    arm64.movImm x16, 7
-    arm64.mul x1, x1, x16
-    arm64.sub x0, x0, x1
+    arm64.b.ls ifcont#15
+  too_long:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#10
+  ifcont#15:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl String.byteAt
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  tryok#16:
+    arm64.movImm x24, 0
+    arm64.sub x21, x21, x22
+    arm64.b forhdr#18
+  search_loop:
+    arm64.cmp x24, 0
+    arm64.b.lo __rc_panic#29
+  __rc_ok#28:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#23
+  tryok#22:
+    arm64.cmp x0, x23
+    arm64.b.ne forstep#20
+  firstByteMatch:
+    arm64.cmp x24, 0
+    arm64.b.lo __rc_panic#31
+  __il_body#35:
+    arm64.movImm x25, 0
+    arm64.b forhdr#36
+  compare_loop:
+    arm64.add x1, x24, x25
+    arm64.cmp x1, x24
+    arm64.b.lo __rc_panic#47
+  __rc_ok#46:
+    arm64.movRegReg x0, x19
+    arm64.bl String.byteAt
+    arm64.movRegReg x26, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#41
+  tryok#40:
+    arm64.cmp x25, 0
+    arm64.b.lo __rc_panic#49
+  __rc_ok#48:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x25
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#43
+  tryok#42:
+    arm64.cmp x26, x0
+    arm64.b.eq forstep#38
+  byte_check:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#34
+  forstep#38:
+    arm64.add x25, x25, 1
+  forhdr#36:
+    arm64.cmp x25, x22
+    arm64.b.lo compare_loop
+  forexit#39:
+    arm64.movImm x0, 1
+  __il_cont#34:
+    arm64.cbz x0, forstep#20
+  found_check:
+    arm64.movImm x0, 0
+    arm64.cmp x24, 0
+    arm64.b.lt __rc_panic#33
+    arm64.b __il_cont#10
+  forstep#20:
+    arm64.add x24, x24, 1
+  forhdr#18:
+    arm64.cmp x24, x21
+    arm64.b.ls search_loop
+  forexit#21:
+    arm64.movImm x0, 1
+  __il_cont#10:
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.eq tryok#8
+  tryerr#9:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#4
+  tryok#8:
+    arm64.movImm x0, 1
+  __il_cont#4:
+    arm64.cbz x0, ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 6
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 1
+  matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
-  tryerr#11:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
+  tryerr#17:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:1027: findIn: byteAt(0) OOB \xe2\x80\x94 needleLen > 0 checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at string-byte-at-body.test:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#29:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at String.maxon:1030: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at String.maxon:1030: findIn: byteAt OOB \xe2\x80\x94 i <= len - needleLen invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#31:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at String.maxon:1033: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#47:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#41:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at String.maxon:997: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#49:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#43:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at String.maxon:998: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#33:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at String.maxon:1034: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
 }
 
@@ -28711,8 +29400,8 @@ func @__sched_init_procs {
     x64.movRegReg rcx, r12
     x64.callDirect __slab_free
     x64.cmpRegImm32 r15, 32
-    x64.jcc less, critsplit#43
-  maxprocsreread:
+    x64.jcc less, critsplit#44
+  envreread:
     x64.movRegReg rcx, r13
     x64.callDirect __slab_free
     x64.movRegImm32 rcx, 32
@@ -28802,17 +29491,17 @@ func @__sched_init_procs {
     x64.callDirect __slab_free
     x64.movRegReg rcx, rbx
     x64.callDirect __slab_free
-    x64.cmpRegReg r14, r15
-    x64.jcc less, critsplit#44
-  maxprocsunfit:
     x64.movRegReg rcx, r12
-    x64.callDirect __slab_free
-    x64.jmp maxprocsrejected
+    x64.movRegReg rax, r14
+    x64.movRegReg rdx, r15
+    x64.jmp envhave
   critsplit#44:
-    x64.movRegReg rcx, r12
-    x64.jmp maxprocsparse
-  critsplit#43:
     x64.movRegReg rcx, r13
+    x64.movRegReg rax, r15
+    x64.movRegReg rdx, rbx
+  envhave:
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, maxprocsunfit
   maxprocsparse:
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.byte rdx, [rcx + 0]
@@ -28825,10 +29514,10 @@ func @__sched_init_procs {
     x64.loadRegBaseDisp.byte rdx, [rdx + 0]
     x64.cmpRegImm32 rdx, 48
     x64.jcc less, maxprocsrefused
-  decnotbelow#22:
+  decnotbelow#23:
     x64.cmpRegImm32 rdx, 57
     x64.jcc greater, maxprocsrefused
-  decdigit#23:
+  decdigit#24:
     x64.movRegImm32 rbx, 0
   reqprocsscan:
     x64.leaRegRegReg rdx, rcx, rax
@@ -28844,10 +29533,10 @@ func @__sched_init_procs {
   reqprocsdigit:
     x64.cmpRegImm32 rdx, 48
     x64.jcc less, maxprocsrefused
-  decnotbelow#24:
+  decnotbelow#25:
     x64.cmpRegImm32 rdx, 57
     x64.jcc greater, maxprocsrefused
-  decdigit#25:
+  decdigit#26:
     x64.leaRegRegImm32 rdx, rdx, -48
     x64.imulRegRegImm32 rsi, rbx, 10
     x64.leaRegRegReg rdx, rsi, rdx
@@ -28855,6 +29544,12 @@ func @__sched_init_procs {
     x64.cmpRegImm32 rdx, 2147483647
     x64.jcc lessEqual, critsplit#46
   maxprocsrefused:
+    x64.callDirect __slab_free
+    x64.jmp maxprocsrejected
+  critsplit#46:
+    x64.movRegReg rbx, rdx
+    x64.jmp reqprocsscan
+  maxprocsunfit:
     x64.callDirect __slab_free
   maxprocsrejected:
     x64.loadRegSlot rbx, slot0
@@ -28891,8 +29586,8 @@ func @__sched_init_procs {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#32
-  __rl_cont#31:
+    x64.jcc notEqual, __rl_slow#33
+  __rl_cont#32:
     x64.leaRegGlobal rax, __sched_procs
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
@@ -28920,10 +29615,10 @@ func @__sched_init_procs {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [r13], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#35
+    x64.jcc notEqual, __rl_slow#36
   __rl_owned:
     x64.storeBaseDispReg.word64 [r13 + 8], rax
-  __rl_cont#33:
+  __rl_cont#34:
     x64.movRegImm32 rcx, 968
     x64.callDirect __sched_arena_carve
     x64.movRegReg r14, r8
@@ -28936,12 +29631,12 @@ func @__sched_init_procs {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r13], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#36
-    x64.jmp __rl_slow#39
+    x64.jcc equal, __rl_cont#37
+    x64.jmp __rl_slow#40
   __rl_nested:
     x64.leaRegRegImm32 rax, rax, -1
     x64.storeBaseDispReg.word64 [r13 + 16], rax
-  __rl_cont#36:
+  __rl_cont#37:
     x64.aluBaseDispImm32.add [r12 + 0], -1
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rdx, 0
@@ -28981,8 +29676,8 @@ func @__sched_init_procs {
     x64.movRegImm32 rax, 0
     x64.xchg8 [rcx], rax <- rax
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __rl_slow#41
-  __rl_cont#40:
+    x64.jcc notEqual, __rl_slow#42
+  __rl_cont#41:
     x64.aluBaseDispImm32.add [rdx + 0], -1
     x64.movRegImm32 rcx, 65536
     x64.callDirect __gt_system_stack_alloc
@@ -29082,26 +29777,23 @@ func @__sched_init_procs {
   pnext:
     x64.movRegReg r12, r14
     x64.jmp ploop
-  critsplit#46:
-    x64.movRegReg rbx, rdx
-    x64.jmp reqprocsscan
-  __rl_slow#32:
+  __rl_slow#33:
     x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#31
-  __rl_slow#35:
+    x64.jmp __rl_cont#32
+  __rl_slow#36:
     x64.movRegReg rcx, r13
     x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#33
-  __rl_slow#39:
+    x64.jmp __rl_cont#34
+  __rl_slow#40:
     x64.movRegReg rcx, r13
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#36
-  __rl_slow#41:
+    x64.jmp __rl_cont#37
+  __rl_slow#42:
     x64.storeSlotReg slot1, rdx
     x64.movRegReg rdx, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rdx, slot1
-    x64.jmp __rl_cont#40
+    x64.jmp __rl_cont#41
   tlspastteb:
     x64.leaRegRdata rcx, [rip + __abort_msg_121]  ; "fatal error: runtime abort 121 (schedulerTlsSlotOutsideTheTeb)\x0a"
     x64.movRegImm32 rdx, 63

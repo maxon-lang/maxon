@@ -111,6 +111,7 @@ enum SoloReason
 	needsStdin
 	pinsProcessors
 	withdrawsPreemption
+	setsEnvironment
 	usesNetwork
 	needsItsOwnProcess
 
@@ -302,6 +303,10 @@ function placementOf(test SpecTest, irAction IrAction) returns Placement
 	if withdrawsPreemption(test) 'withdrawsPreemption'
 		return Placement.apart(SoloReason.withdrawsPreemption)
 	end 'withdrawsPreemption'
+
+	if not test.environment.isEmpty() 'setsEnvironment'
+		return Placement.apart(SoloReason.setsEnvironment)
+	end 'setsEnvironment'
 
 	if usesNetwork(test) 'usesNetwork'
 		return Placement.apart(SoloReason.usesNetwork)
@@ -1500,6 +1505,7 @@ function readAlone(observation RunObservation, caseIndex ElementIndex) returns R
 	return match observation 'observed'
 		completed(capture) gives readAloneCapture(capture, caseIndex: caseIndex)
 		failed or
+		notLaunched or
 		notRequired or
 		notRunnableHere gives observation
 	end 'observed'

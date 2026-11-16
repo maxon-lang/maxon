@@ -1,0 +1,210 @@
+let AesHashSavedXmmFirst = 6
+let AesHashSavedXmmCount = 5
+let AesHashFrameSlots = 10
+let AesHashFirstLaneRegister = 2
+
+let AesHashSeedState = X64Register.xmm0
+let AesHashKeyTemp = X64Register.xmm1
+let AesHashDataTemp = X64Register.xmm10
+let AesHashKeys = X64Register.r9
+let AesHashEnd = X64Register.rsi
+let AesHashLoopCounter = X64Register.r10
+
+function aesHashLane(index FullRangeInt) returns X64Register
+	return xmmState(AesHashFirstLaneRegister + index)
+end 'aesHashLane'
+
+function aesHashSavedDisp(asm X64RuntimeAsm, index FullRangeInt) returns Imm32
+	return ((asm.slotDisp(AesHashFrameSlots - 1) as FullRangeInt) + index * AesBlockBytes) as Imm32
+end 'aesHashSavedDisp'
+
+function emitAesHashSavedXmm(asm X64RuntimeAsm, transfer XmmTransfer)
+	for index in 0 upto AesHashSavedXmmCount 'eachSaved'
+		emitXmmTransfer(asm, transfer: transfer, xmm: xmmState(AesHashSavedXmmFirst + index), base: X64Register.rbp, disp: aesHashSavedDisp(asm, index: index))
+	end 'eachSaved'
+end 'emitAesHashSavedXmm'
+
+function emitAesHashRound(asm X64RuntimeAsm, state X64Register, key FullRangeInt)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: AesHashKeyTemp, base: AesHashKeys, disp: (key * AesBlockBytes) as Imm32)
+	encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: state, src: AesHashKeyTemp)
+end 'emitAesHashRound'
+
+function emitAesHashRoundAcross(asm X64RuntimeAsm, lanes FullRangeInt, key FullRangeInt)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: AesHashKeyTemp, base: AesHashKeys, disp: (key * AesBlockBytes) as Imm32)
+
+	for index in 0 upto lanes 'eachLane'
+		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: aesHashLane(index), src: AesHashKeyTemp)
+	end 'eachLane'
+end 'emitAesHashRoundAcross'
+
+function emitAesHashRounds(asm X64RuntimeAsm, lanes FullRangeInt, rounds AesHashRounds)
+	for key in aesHashRoundKeys(rounds) 'eachKey'
+		emitAesHashRoundAcross(asm, lanes: lanes, key: key)
+	end 'eachKey'
+end 'emitAesHashRounds'
+
+function emitAesHashFold(asm X64RuntimeAsm, lanes FullRangeInt)
+	for step in aesHashFoldSteps(lanes) 'eachPair'
+		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: aesHashLane(step.accumulator), src: aesHashLane(step.folded))
+	end 'eachPair'
+end 'emitAesHashFold'
+
+function emitAesHashFinish(asm X64RuntimeAsm)
+	emitAesHashRounds(asm, lanes: 1, rounds: AesHashRounds.finish)
+end 'emitAesHashFinish'
+
+function emitAesHashLaneLoads(asm X64RuntimeAsm, lanes FullRangeInt, startLanes FullRangeInt)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: AesHashKeyTemp, base: AesHashKeys, disp: (AesHashSecondKey * AesBlockBytes) as Imm32)
+
+	for index in 0 upto lanes 'eachLane'
+		let lane = aesHashLane(index)
+		let source = aesHashLaneSource(index, lanes: lanes, startLanes: startLanes)
+
+		if source.fromStart 'fromTheStart'
+			emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: lane, base: X64Register.rcx, disp: source.byteOffset as Imm32)
+		end 'fromTheStart' else 'fromTheEnd'
+			emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: lane, base: AesHashEnd, disp: source.byteOffset as Imm32)
+		end 'fromTheEnd'
+
+		emitXmmPxor(asm, dest: lane, src: AesHashSeedState)
+		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: AesHashSeedState, src: AesHashKeyTemp)
+	end 'eachLane'
+end 'emitAesHashLaneLoads'
+
+function emitAesHashLaneClass(asm X64RuntimeAsm, lanes FullRangeInt, savesRegisters bool)
+	if savesRegisters 'saves'
+		emitAesHashSavedXmm(asm, transfer: XmmTransfer.store)
+	end 'saves'
+
+	encodeLeaRegBaseIndexScale(asm.code, dest: AesHashEnd, base: X64Register.rcx, index: X64Register.rdx, scale: MemoryIndexScale.byOne)
+	emitAesHashLaneLoads(asm, lanes: lanes, startLanes: lanes shr 1)
+	emitAesHashRounds(asm, lanes: lanes, rounds: AesHashRounds.laneClass)
+	emitAesHashFold(asm, lanes: lanes)
+	emitAesHashFinish(asm)
+
+	if savesRegisters 'restores'
+		emitAesHashSavedXmm(asm, transfer: XmmTransfer.load)
+	end 'restores'
+end 'emitAesHashLaneClass'
+
+function emitAesHashLongClass(asm X64RuntimeAsm)
+	let loop = asm.newLabel()
+
+	emitAesHashSavedXmm(asm, transfer: XmmTransfer.store)
+	encodeLeaRegBaseIndexScale(asm.code, dest: AesHashEnd, base: X64Register.rcx, index: X64Register.rdx, scale: MemoryIndexScale.byOne)
+	emitAesHashLaneLoads(asm, lanes: AesHashOctetLanes, startLanes: 0)
+
+	encodeLeaRegRegImm32(asm.code, dest: AesHashLoopCounter, base: X64Register.rdx, disp: -1)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: AesHashLoopCounter, count: AesHashOctetShift)
+
+	asm.placeLabel(loop)
+	emitAesHashRoundAcross(asm, lanes: AesHashOctetLanes, key: AesHashFirstKey)
+
+	for index in 0 upto AesHashOctetLanes 'eachLane'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: AesHashDataTemp, base: X64Register.rcx, disp: (index * AesBlockBytes) as Imm32)
+		encodeAesNiRegReg(asm.code, instruction: AesNiInstruction.aesenc, dest: aesHashLane(index), src: AesHashDataTemp)
+	end 'eachLane'
+
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: AesHashOctetBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: AesHashLoopCounter, imm: 1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: loop)
+
+	emitAesHashRounds(asm, lanes: AesHashOctetLanes, rounds: AesHashRounds.wholeInput)
+	emitAesHashFold(asm, lanes: AesHashOctetLanes)
+	emitAesHashFinish(asm)
+	emitAesHashSavedXmm(asm, transfer: XmmTransfer.load)
+end 'emitAesHashLongClass'
+
+function emitAesHashTailClass(asm X64RuntimeAsm)
+	let gathered = asm.newLabel()
+	let bytes = asm.newLabel()
+	let quarters = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rsi, src: X64Register.rsi, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: gathered)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: AesHashQuarterTailBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: bytes)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: AesHashHalfTailBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: quarters)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rcx, disp: aesHashBackOffset(AesHashHalfTailBytes) as Imm32, wide: true, index: X64Register.rdx)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: gathered)
+
+	asm.placeLabel(quarters)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: aesHashBackOffset(AesHashQuarterTailBytes) as Imm32, wide: false, index: X64Register.rdx)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rdi, count: AesHashQuarterBits)
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rdi, wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: gathered)
+
+	asm.placeLabel(bytes)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rdx, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: X64Register.rdi, count: 1)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: 0, index: X64Register.rdi)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rdi, count: AesHashByteBits)
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rdi, wide: true)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: aesHashBackOffset(1) as Imm32, index: X64Register.rdx)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rdi, count: AesHashByteBits * 2)
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rdi, wide: true)
+
+	asm.placeLabel(gathered)
+
+	let lane = aesHashLane(0)
+
+	encodePinsrq(asm.code, dest: lane, src: X64Register.rax, lane: 0)
+	encodePinsrq(asm.code, dest: lane, src: X64Register.rsi, lane: 1)
+	emitXmmPxor(asm, dest: lane, src: AesHashSeedState)
+	emitAesHashRounds(asm, lanes: 1, rounds: AesHashRounds.wholeInput)
+end 'emitAesHashTailClass'
+
+function buildAesHashChunk() returns FunctionCodeChunk
+	let asm = X64RuntimeAsm.beginFunction(AesHashFrameSlots)
+	let tail = asm.newLabel()
+	let pair = asm.newLabel()
+	let quad = asm.newLabel()
+	let octet = asm.newLabel()
+	let done = asm.newLabel()
+
+	emitLeaString(asm, dest: AesHashKeys, bytes: aesHashKeyBytes())
+	encodePinsrq(asm.code, dest: AesHashSeedState, src: X64Register.r8, lane: 0)
+	encodePinsrq(asm.code, dest: AesHashSeedState, src: X64Register.rdx, lane: 1)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: AesHashKeyTemp, base: AesHashKeys, disp: (AesHashSeedKey * AesBlockBytes) as Imm32)
+	emitXmmPxor(asm, dest: AesHashSeedState, src: AesHashKeyTemp)
+	emitAesHashRound(asm, state: AesHashSeedState, key: AesHashFirstKey)
+
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: AesHashTailBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: tail)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: AesHashPairBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: pair)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: AesHashQuadBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: quad)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: AesHashOctetBytes)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: octet)
+
+	emitAesHashLongClass(asm)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(tail)
+	emitAesHashTailClass(asm)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(pair)
+	emitAesHashLaneClass(asm, lanes: AesHashPairLanes, savesRegisters: false)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(quad)
+	emitAesHashLaneClass(asm, lanes: AesHashQuadLanes, savesRegisters: false)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(octet)
+	emitAesHashLaneClass(asm, lanes: AesHashOctetLanes, savesRegisters: true)
+
+	asm.placeLabel(done)
+	encodeMovqGprXmm(asm.code, dest: X64Register.rax, src: aesHashLane(0))
+
+	return asm.finishFunction(cryptoChunkName(CryptoRoutine.aesHash))
+end 'buildAesHashChunk'

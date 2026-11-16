@@ -1,0 +1,125 @@
+public typealias RepeatCount = int(1 to u64.max)
+public typealias IterationDivisor = int(1 to u64.max)
+
+enum UsageError implements Error
+	notPositiveInteger
+end 'UsageError'
+
+let defaultRepeats = 5
+let defaultDivisor = 1
+
+// On wasm this program reads no arguments, so `defaultRepeats` and `wasmDivisor` must equal REPEATS and
+// WASM_DIVISOR in scripts/bench-aes.py, which hands them to the Go arms; a mismatch fails its agreement
+// check on iterations and repeats.
+let wasmDivisor = 10
+let usageExit = 2
+let resolutionSamples = 16
+let digestMask = 0xFFFFFF
+
+public type Settings
+	public let repeats as RepeatCount
+	public let divisor as IterationDivisor
+
+	static function create(repeats RepeatCount, divisor IterationDivisor) returns Settings
+		return Self{repeats: repeats, divisor: divisor}
+	end 'create'
+end 'Settings'
+
+#if not os(Wasi)
+	function positiveArgument(position Count, fallback Count) returns Count throws UsageError
+		let value = try CommandLine.readOptionalIntArgument(position, otherwise: fallback) otherwise throw UsageError.notPositiveInteger
+
+		if value == 0 'zero'
+			throw UsageError.notPositiveInteger
+		end 'zero'
+
+		return value
+	end 'positiveArgument'
+
+	function readSettings() returns Settings throws UsageError
+		let repeats = try positiveArgument(1, fallback: defaultRepeats)
+		let divisor = try positiveArgument(2, fallback: defaultDivisor)
+
+		return Settings.create(repeats as RepeatCount, divisor: divisor as IterationDivisor)
+	end 'readSettings'
+#endif
+
+public function filled(count Count, seed Byte) returns ByteArray
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto count 'eachByte'
+		bytes.push(((i + (seed as Count)) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'filled'
+
+public function digest(bytes ByteArray) returns Count
+	var sum = 0 as Count
+
+	for (iter, byte) in bytes.withIterator() 'eachByte'
+		sum = (sum + (byte as Count) * (iter.index() + 1)) and digestMask
+	end 'eachByte'
+
+	return sum
+end 'digest'
+
+public function iterationsOf(workload Workload, divisor IterationDivisor) returns Count
+	let scaled = try (baseIterationsOf(workload) / (divisor as Count)) otherwise panic("{benchmarkName}: an IterationDivisor is positive")
+
+	return scaled if scaled > 0 else 1
+end 'iterationsOf'
+
+function clockResolution() returns DurationNanos
+	var smallest = u64.max as DurationNanos
+
+	for _ in 0 upto resolutionSamples 'eachSample'
+		let first = Clock.nowNanos()
+		var step = Clock.elapsedNanos(first)
+
+		while step == 0 'sameReading'
+			step = Clock.elapsedNanos(first)
+		end 'sameReading'
+
+		smallest = step if step < smallest else smallest
+	end 'eachSample'
+
+	return smallest
+end 'clockResolution'
+
+function measure(workload Workload, f Fixtures, settings Settings)
+	let iterations = iterationsOf(workload, divisor: settings.divisor)
+	var best = u64.max as DurationNanos
+	var answer = 0 as Count
+
+	for _ in 0 upto (settings.repeats as Count) 'eachRepeat'
+		let start = Clock.nowNanos()
+		let outcome = runOnce(workload, f: f, iterations: iterations)
+		let took = Clock.elapsedNanos(start)
+		best = took if took < best else best
+		answer = outcome.answer()
+	end 'eachRepeat'
+
+	print("{nameOf(workload)} {bytesOf(workload)} {iterations} {settings.repeats} {best} {answer}\n")
+end 'measure'
+
+function main() returns ExitCode
+	#if os(Wasi)
+		let settings = Settings.create(defaultRepeats, divisor: wasmDivisor)
+	#else
+		let settings = try readSettings() otherwise 'unusable'
+			printError("{benchmarkName}: usage: {benchmarkName} [repeats [divisor]], both positive integers\n")
+			return usageExit
+		end 'unusable'
+	#endif
+
+	let f = Fixtures.create(settings)
+
+	print("clock {clockResolution()}\n")
+
+	for workload in Workload.allCases 'eachWorkload'
+		measure(workload, f: f, settings: settings)
+	end 'eachWorkload'
+
+	return 0
+end 'main'

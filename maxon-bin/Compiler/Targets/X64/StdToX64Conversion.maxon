@@ -258,7 +258,10 @@ let CreateNew = 1  // dwCreationDisposition — create, failing on an existing p
 // `MoveFileExW`'s dwFlags. REPLACE_EXISTING makes publishing the destination atomic rather than a
 // delete-then-rename with a window where neither name exists; WRITE_THROUGH flushes the metadata so a crash
 // straight after the call cannot lose the new name.
-let MoveFileReplaceWriteThrough = 9  // MOVEFILE_REPLACE_EXISTING (1) | MOVEFILE_WRITE_THROUGH (8)
+let MoveFileReplaceExisting = 0x1
+let MoveFileWriteThrough = 0x8
+let MoveFileReplaceWriteThrough = MoveFileReplaceExisting or MoveFileWriteThrough
+let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
 let FileFlagBackupSemantics = 0x02000000
 let NoDesiredAccess = 0x0
 let FinalPathNormalizedDos = 0x0
@@ -1233,6 +1236,7 @@ export type StdToX64Lowering
 			osFileSize or
 			osFileDelete or
 			osFileRename or
+			osFileRenameNew or
 			osFileFindFirst or
 			osFileFindClose or
 			osFileFindNext or
@@ -1613,7 +1617,8 @@ export type StdToX64Lowering
 			osFileOpenCreateNew(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, disposition: CreateNew, linuxFlags: LinuxOpenCreateExclusiveFlags, mode: PosixCreateFileMode as MachineWord, dstBlock: dstBlock)
 			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerOsFileSize(resultId, handleId: handleId, sizeOutPtrId: sizeOutPtrId, dstBlock: dstBlock)
 			osFileDelete(resultId, pathPtrId) then self.lowerOsFileDelete(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
-			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
+			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, moveFlags: MoveFileReplaceWriteThrough, chunk: HostFileRenameName, dstBlock: dstBlock)
+			osFileRenameNew(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, moveFlags: MoveFileWriteThrough, chunk: HostFileRenameNewName, dstBlock: dstBlock)
 			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
 
@@ -1753,6 +1758,7 @@ export type StdToX64Lowering
 			osFileSize or
 			osFileDelete or
 			osFileRename or
+			osFileRenameNew or
 			osFileFindFirst or
 			osFileFindClose or
 			osFileFindNext or
@@ -4535,17 +4541,17 @@ export type StdToX64Lowering
 
 	// ⭐ **`MoveFileExW(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`** — three
 	// register arguments, the BOOL captured. See `MoveFileReplaceWriteThrough` for the flags.
-	function lowerOsFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
+	function lowerOsFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, moveFlags MachineWord, chunk ByteArray, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsFileRenameWin64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
-			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostFileRenameName), args: twoArgs(oldPathPtrId, second: newPathPtrId), dstBlock: dstBlock)
+			importCall then self.lowerOsFileRenameWin64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, moveFlags: moveFlags, dstBlock: dstBlock)
+			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(chunk), args: twoArgs(oldPathPtrId, second: newPathPtrId), dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileRename'
 
-	function lowerOsFileRenameWin64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
+	function lowerOsFileRenameWin64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, moveFlags MachineWord, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(oldPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(newPathPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: MoveFileReplaceWriteThrough))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: moveFlags))
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.MoveFileExW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsFileRenameWin64'
 
@@ -5404,6 +5410,7 @@ export type StdToX64Lowering
 			osFileSize or
 			osFileDelete or
 			osFileRename or
+			osFileRenameNew or
 			osFileFindFirst or
 			osFileFindClose or
 			osFileFindNext or
@@ -5660,6 +5667,7 @@ export type StdToX64Lowering
 			osFileSize or
 			osFileDelete or
 			osFileRename or
+			osFileRenameNew or
 			osFileFindFirst or
 			osFileFindClose or
 			osFileFindNext or

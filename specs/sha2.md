@@ -21,6 +21,10 @@ category: crypto
 The digests follow FIPS 180-4. A `Digest` gives the one-shot digest of the concatenation of its chunks, however
 the message was split. Using a `Digest` after `finalize()` is a programming error.
 
+SHA-256 compresses on the CPU's SHA instructions where it has them (SHA-NI on x64, the ARMv8 SHA2 extension on
+arm64) and on a portable compression otherwise; the two give the same digests. SHA-384 and SHA-512 always
+use the portable compression.
+
 The vectors are the NIST CAVP short-message entries at the padding boundaries and the FIPS 180-4 examples, with
 the digests of RFC 6234 section 8.5. Each line prints a vector's id and the digest computed for it.
 
@@ -327,7 +331,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Sha2.maxon:424: Digest.finalize was called after finalize
+panic at Sha2.maxon:454: Digest.finalize was called after finalize
 Stack trace:
   in Digest.requireOpen
   in Digest.finalize
@@ -351,10 +355,105 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Sha2.maxon:424: Digest.update was called after finalize
+panic at Sha2.maxon:454: Digest.update was called after finalize
 Stack trace:
   in Digest.requireOpen
   in Digest.update
   in main
   in mrt_start
+```
+
+<!-- test: sha2.the-hardware-and-software-compressions-agree -->
+<!-- tier: stdlib -->
+SHA-256 has two compressions: the SHA instructions (SHA-NI on x64, the ARMv8 SHA2 extension on arm64) where
+the CPU has them, and the portable one everywhere else. `Digest.create` takes the hardware one when it can,
+and `Digest.build(algorithm, software: true)` forces the portable one. Both give the FIPS 180-4 digests — the
+empty message, `abc`, the two-block example and a million `a`s fed as a thousand chunks — and agree at every
+length around the block and padding boundaries. SHA-384 and SHA-512 have no hardware compression.
+```maxon
+typealias LengthList = Array with Count
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function letters(count Count) returns ByteArray
+	let bytes = ByteArray.create(0)
+
+	for _ in 0 upto count 'eachLetter'
+		bytes.push(0x61)
+	end 'eachLetter'
+
+	return bytes
+end 'letters'
+
+function digestOf(digest Digest, chunk ByteArray, times Count) returns String
+	for _ in 0 upto times 'eachChunk'
+		digest.update(chunk)
+	end 'eachChunk'
+
+	return toHex(digest.finalize())
+end 'digestOf'
+
+function report(name String, chunk ByteArray, times Count)
+	let hardware = digestOf(Digest.create(HashAlgorithm.sha256), chunk: chunk, times: times)
+	let software = digestOf(Digest.build(HashAlgorithm.sha256, software: true), chunk: chunk, times: times)
+	print("{name} [{hardware}] agree: {hardware == software}\n")
+end 'report'
+
+function hardwareExpected() returns bool
+	#if arch(x64) or arch(arm64)
+		return __Builtins.cpuHasSha()
+	#else
+		return false
+	#endif
+end 'hardwareExpected'
+
+function main() returns ExitCode
+	print("sha256 hardware as the cpu allows: {Digest.create(HashAlgorithm.sha256).usesHardware() == hardwareExpected()}\n")
+	print("forced software: {not Digest.build(HashAlgorithm.sha256, software: true).usesHardware()}\n")
+	print("sha384 software: {not Digest.create(HashAlgorithm.sha384).usesHardware()}\n")
+	print("sha512 software: {not Digest.create(HashAlgorithm.sha512).usesHardware()}\n")
+
+	report("empty", chunk: ByteArray.create(0), times: 1)
+	report("abc", chunk: "abc".toByteArray(), times: 1)
+	report("two-block", chunk: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".toByteArray(), times: 1)
+	report("million", chunk: letters(1000), times: 1000)
+
+	let lengths = LengthList from [1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 1000]
+	var disagreements = 0 as Count
+
+	for length in lengths 'eachLength'
+		let message = letters(length)
+		let hardware = digestOf(Digest.create(HashAlgorithm.sha256), chunk: message, times: 1)
+		let software = digestOf(Digest.build(HashAlgorithm.sha256, software: true), chunk: message, times: 1)
+
+		if hardware != software 'differs'
+			disagreements = disagreements + 1
+		end 'differs'
+	end 'eachLength'
+
+	print("boundary disagreements={disagreements}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sha256 hardware as the cpu allows: true
+forced software: true
+sha384 software: true
+sha512 software: true
+empty [e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855] agree: true
+abc [ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad] agree: true
+two-block [248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1] agree: true
+million [cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0] agree: true
+boundary disagreements=0
 ```

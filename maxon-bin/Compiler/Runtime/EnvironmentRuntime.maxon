@@ -27,13 +27,14 @@ function environmentSnapshotShape(target Target) returns EnvironmentSnapshotShap
 	end 'os'
 end 'environmentSnapshotShape'
 
-export function environmentArrivesAsHostList(target Target) returns bool
+function environmentArrivesAsHostList(target Target) returns bool
 	return environmentSnapshotShape(target) == EnvironmentSnapshotShape.hostEntryList
 end 'environmentArrivesAsHostList'
 
 let EnvironmentRuntimePrefix = b"__env_"
 
 export let EnvironmentEntryName = b"__env_entry"
+let EnvironmentReadName = b"__env_read"
 export let EnvironmentListLabel = b"__env_list"
 export let EnvironmentCountLabel = b"__env_count"
 
@@ -49,23 +50,30 @@ let EnvWalkBytes = 24
 // One `char *`. Both lanes that answer `pointerVector` are 64-bit.
 let EnvPointerStride = 8
 let EnvironmentRecordBytes = CanonicalPairBytes * 2
+let EnvironmentReadParams = 3
 
 export function isEnvironmentRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: EnvironmentRuntimePrefix)
 end 'isEnvironmentRuntimeCallee'
 
+export function environmentIsReadByName(usage RuntimeUsage) returns bool
+	return usage.usesGt or usage.usesTerminalDetection or usage.usesHash
+end 'environmentIsReadByName'
+
+export function environmentReadsThroughCapture(usage RuntimeUsage, target Target) returns bool
+	return environmentIsReadByName(usage) and environmentArrivesAsHostList(target)
+end 'environmentReadsThroughCapture'
+
+export function environmentIsCaptured(usage RuntimeUsage, target Target) returns bool
+	return (usage.usesEnvironment or environmentIsReadByName(usage)) and environmentArrivesAsHostList(target)
+end 'environmentIsCaptured'
+
 export function environmentRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	let out = DataSectionEntryArray.create(0)
 
-	if not usage.usesEnvironment 'noEnvironment'
-		return out
-	end 'noEnvironment'
-
-	match environmentSnapshotShape(target) 'shape'
-		nulSeparatedBlock or
-		pointerVector then break
-		hostEntryList then pushCapturedEnvironmentGlobals(out)
-	end 'shape'
+	if environmentIsCaptured(usage, target: target) 'captured'
+		pushCapturedEnvironmentGlobals(out)
+	end 'captured'
 
 	return out
 end 'environmentRuntimeGlobals'
@@ -90,15 +98,17 @@ end 'pushCapturedEnvironmentGlobals'
 // ANSWER is identical on every lane (the index-th entry, or empty past the end); only the structure
 // being indexed differs, and that structure is the platform's, not this compiler's choice.
 export function installEnvironmentRuntime(module StdModule, usage RuntimeUsage, target Target)
-	if not usage.usesEnvironment 'noEnvironment'
-		return
-	end 'noEnvironment'
+	if usage.usesEnvironment 'entriesAsked'
+		match environmentSnapshotShape(target) 'shape'
+			nulSeparatedBlock then buildEnvironmentEntryFromBlock(module)
+			pointerVector then buildEnvironmentEntryFromVector(module)
+			hostEntryList then buildEnvironmentEntryFromHostList(module)
+		end 'shape'
+	end 'entriesAsked'
 
-	match environmentSnapshotShape(target) 'shape'
-		nulSeparatedBlock then buildEnvironmentEntryFromBlock(module)
-		pointerVector then buildEnvironmentEntryFromVector(module)
-		hostEntryList then buildEnvironmentEntryFromHostList(module)
-	end 'shape'
+	if environmentReadsThroughCapture(usage, target: target) 'readAsked'
+		buildEnvironmentRead(module)
+	end 'readAsked'
 end 'installEnvironmentRuntime'
 
 // `__env_entry`'s answer when the host handed over no environment: an owned one-byte record holding
@@ -114,6 +124,80 @@ function emitEnvironmentUnreadable(module StdModule, block IrBlock, ids ValueMin
 	emitStoreField(module, block: block, record: record, offset: ManagedRecordLengthOffset, value: one)
 	return record
 end 'emitEnvironmentUnreadable'
+
+function buildEnvironmentRead(module StdModule)
+	let func = IrFunction.createFromStd(EnvironmentReadName, returnType: StdReturnType.value(StdType.i64), paramCount: EnvironmentReadParams, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(EnvironmentReadParams)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let search = module.addBlock(func, label: b"envrsearch", heat: BlockHeat.normal)
+	let compare = module.addBlock(func, label: b"envrcompare", heat: BlockHeat.normal)
+	let terminated = module.addBlock(func, label: b"envrterminated", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"envrstep", heat: BlockHeat.normal)
+	let advance = module.addBlock(func, label: b"envradvance", heat: BlockHeat.normal)
+	let matched = module.addBlock(func, label: b"envrmatched", heat: BlockHeat.normal)
+	let fits = module.addBlock(func, label: b"envrfits", heat: BlockHeat.normal)
+	let tooSmall = module.addBlock(func, label: b"envrtoosmall", heat: BlockHeat.normal)
+	let missing = module.addBlock(func, label: b"envrmissing", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: EnvironmentReadParams)
+	let name = 0
+	let buffer = 1
+	let capacity = 2
+
+	let count = emitLoadGlobalWord(module, block: entry, label: EnvironmentCountLabel, ids: ids)
+	let firstEntry = emitConst(module, block: entry, value: 0, ids: ids)
+	let searchIndex = addI64BlockArg(search, ids: ids)
+	emitBranchCarrying(module, from: entry, to: search, values: argsOf(firstEntry))
+
+	let compareIndex = addI64BlockArg(compare, ids: ids)
+	let comparePosition = addI64BlockArg(compare, ids: ids)
+	let pastLast = emitCmp(module, block: search, a: searchIndex, b: count, pred: StdCmpPred.ge, ids: ids)
+	let firstPosition = emitConst(module, block: search, value: 0, ids: ids)
+	module.setTerminator(search, op: StdOp.condBranch(pastLast, thenBlockId: missing.id, elseBlockId: compare.id))
+	pushBranchEdge(search, to: compare, values: twoArgs(searchIndex, second: firstPosition))
+
+	let namePair = emitCapturedListSlotAddress(module, block: compare, listLabel: EnvironmentListLabel, index: compareIndex, stride: EnvironmentRecordBytes, ids: ids)
+	let nameSource = emitLoadCanonicalWord(module, block: compare, pair: namePair, offset: CanonicalPairPointerOffset, ids: ids)
+	let nameBytes = emitLoadCanonicalWord(module, block: compare, pair: namePair, offset: CanonicalPairLengthOffset, ids: ids)
+	emitBranchOnCompareValues(module, block: compare, a: comparePosition, pred: StdCmpPred.eq, b: nameBytes, whenTrue: terminated, whenFalse: step, ids: ids)
+
+	let wantedEnd = emitLoadByteIndexed(module, block: terminated, base: name, index: comparePosition, ids: ids)
+	emitBranchOnCompare(module, block: terminated, value: wantedEnd, pred: StdCmpPred.eq, against: 0, whenTrue: matched, whenFalse: advance, ids: ids)
+
+	let wanted = emitLoadByteIndexed(module, block: step, base: name, index: comparePosition, ids: ids)
+	let found = emitLoadByteIndexed(module, block: step, base: nameSource, index: comparePosition, ids: ids)
+	let same = emitCmp(module, block: step, a: wanted, b: found, pred: StdCmpPred.eq, ids: ids)
+	let wantedLive = emitCompareWithConstant(module, block: step, value: wanted, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let agrees = emitBin(module, block: step, a: same, b: wantedLive, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let oneStep = emitConst(module, block: step, value: 1, ids: ids)
+	let nextPosition = emitBin(module, block: step, a: comparePosition, b: oneStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.condBranch(agrees, thenBlockId: compare.id, elseBlockId: advance.id))
+	pushBranchEdge(step, to: compare, values: twoArgs(compareIndex, second: nextPosition))
+
+	let oneEntry = emitConst(module, block: advance, value: 1, ids: ids)
+	let nextEntry = emitBin(module, block: advance, a: compareIndex, b: oneEntry, opcode: StdBinOpcode.add, ids: ids)
+	emitBranchCarrying(module, from: advance, to: search, values: argsOf(nextEntry))
+
+	let pairBytes = emitConst(module, block: matched, value: CanonicalPairBytes, ids: ids)
+	let valuePair = emitBin(module, block: matched, a: namePair, b: pairBytes, opcode: StdBinOpcode.add, ids: ids)
+	let valueSource = emitLoadCanonicalWord(module, block: matched, pair: valuePair, offset: CanonicalPairPointerOffset, ids: ids)
+	let valueBytes = emitLoadCanonicalWord(module, block: matched, pair: valuePair, offset: CanonicalPairLengthOffset, ids: ids)
+	emitBranchOnCompareValues(module, block: matched, a: valueBytes, pred: StdCmpPred.lt, b: capacity, whenTrue: fits, whenFalse: tooSmall, ids: ids)
+
+	let copied = emitForwardCopy(module, func: func, cur: fits, dest: buffer, src: valueSource, byteCount: valueBytes, ids: ids)
+	let nul = emitConst(module, block: copied, value: 0, ids: ids)
+	emitStoreByte(module, block: copied, base: buffer, index: valueBytes, value: nul, ids: ids)
+	module.setTerminator(copied, op: StdOp.ret(valueBytes))
+
+	let withTerminator = emitConst(module, block: tooSmall, value: 1, ids: ids)
+	let needed = emitBin(module, block: tooSmall, a: valueBytes, b: withTerminator, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(tooSmall, op: StdOp.ret(needed))
+
+	emitConstReturn(module, block: missing, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildEnvironmentRead'
 
 function buildEnvironmentEntryFromHostList(module StdModule)
 	let func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())

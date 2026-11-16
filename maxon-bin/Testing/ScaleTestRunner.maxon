@@ -113,6 +113,7 @@ let RungMetricsSuffix = ".metrics.tsv"
 let RungOutputSuffix = ".out"
 let LintMetricsInfix = ".lint"
 let DebugSidecarSuffix = ".mxdbg"
+let ScaleHashSeedValue = "5ca1ab1e0ddba115"
 
 // The compiler must be given a RELATIVE rung path, and this is load-bearing rather than tidy.
 //
@@ -647,7 +648,10 @@ function measuredCompile(compilerExe FilePath, root FilePath, rung ScaleRung, su
 
 	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
 
-	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: WorkingDirectory.inherit) otherwise (e) 'spawnFailed'
+	let pinnedSeed = EnvMap.create()
+	pinnedSeed.upsert(hashSeedVariable(), value: ScaleHashSeedValue)
+
+	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: WorkingDirectory.inherit, environment: Environment.inheritUpdating(pinnedSeed)) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("`maxon {subcommand}` spawn failed: {e.displayReason()}")
 	end 'spawnFailed'
 

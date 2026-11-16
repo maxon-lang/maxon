@@ -1,0 +1,24 @@
+let HashBenchmarkDirName = "bench/hash"
+let HashBenchmarkProgram = "hash.maxon"
+let HashBenchmarkRepeats = "1"
+let HashBenchmarkDivisor = "1000"
+let HashBenchmarkExitCode = 0
+let HashBenchmarkTierVariable = "MAXON_HASH_TIER"
+let HashBenchmarkTiers = ["", "software"]
+
+// What bench/hash/go prints for `1 1000` with the clock line and the bestNanos field removed: Go
+// hash/maphash, map and crypto/sha256 are the oracle.
+let HashBenchmarkAnswer = "string-8 8 2000 1 2000\nstring-16 16 2000 1 2000\nstring-64 64 2000 1 2000\nstring-1k 1024 200 1 200\nstring-64k 65536 2 1 2\nmap-string-insert 0 1000 1 1999\nmap-string-lookup 0 1000 1 499500\nset-int-insert 0 1000 1 1000\nset-int-contains 0 1000 1 1000\narray-hash-16 128 1000 1 1000\narray-hash-1024 8192 50 1 50\nhasher-fields 0 2000 1 2000\nhasher-object 0 2000 1 2000\nsha256-1m 1048576 1 1 75100\n"
+
+test 'the hash benchmark computes the digests Go computes on every tier'
+	requireExampleBuild(HashBenchmarkProgram, directory: HashBenchmarkDirName, companions: [BenchmarkCommonProgram])
+
+	for tier in HashBenchmarkTiers 'eachTier'
+		let run = runBuiltExample(HashBenchmarkProgram, arguments: [HashBenchmarkRepeats, HashBenchmarkDivisor], directory: HashBenchmarkDirName, environment: [HashBenchmarkTierVariable: tier])
+
+		Expect.equal(run.exitCode, expected: HashBenchmarkExitCode, message: "`{run.commandLine}` with {HashBenchmarkTierVariable}={tier} exited {run.exitCode}. It wrote to stderr: {run.stderr}")
+		Expect.equal(withoutBestNanos(run.stdout), expected: HashBenchmarkAnswer, message: "`{run.commandLine}` with {HashBenchmarkTierVariable}={tier} did not print the digests the Go program prints. It wrote to stderr: {run.stderr}")
+	end 'eachTier'
+
+	discardStagedDir(exampleStagingDir(HashBenchmarkProgram, directory: HashBenchmarkDirName))
+end 'the hash benchmark computes the digests Go computes on every tier'

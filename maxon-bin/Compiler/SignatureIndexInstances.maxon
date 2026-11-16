@@ -107,7 +107,7 @@ extension ProgramSignatures
 	// An extension's `implements` moves no name and no value, so this mix is what carries an edit of it to
 	// the reader's parse memo.
 	function mixExtensionConformance(conformer ByteArray, names NameRoster)
-		self.hash = mixDeclaredConformances(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeExtensionConformance), bytes: conformer), conformsTo: names, shape: SignatureDiscriminator.declShapeExtensionConformance)
+		self.hash = mixDeclaredConformances(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeExtensionConformance), bytes: conformer), conformsTo: names, shape: SignatureDiscriminator.declShapeExtensionConformance)
 	end 'mixExtensionConformance'
 
 	function forgetConformanceMemos()
@@ -1962,7 +1962,7 @@ extension ProgramSignatures
 		if self.baseline.settled 'pastTheBaseline'
 			self.journal.noteTupleAliasWrite(name, prior: priorTupleAliasAt(self.tupleAliases, name: name), priorClaimants: priorTupleAliasClaimantsAt(self.multiplyDeclaredTupleAliases, name: name, declPath: alias.claim.declFilePath.toString()))
 		end 'pastTheBaseline' else 'beforeTheBaseline'
-			self.hash = Hasher.combined(mixDeclaringTier(mixBytes(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeTupleAlias), bytes: name), bytes: alias.tupleName), visibility: alias.claim.visibility, declFilePath: alias.claim.declFilePath), value: alias.capability.ordinal as HashDigest)
+			self.hash = KeyedHasher.combined(mixDeclaringTier(mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeTupleAlias), bytes: name), bytes: alias.tupleName), visibility: alias.claim.visibility, declFilePath: alias.claim.declFilePath), value: alias.capability.ordinal as HashDigest)
 		end 'beforeTheBaseline'
 
 		// Ahead of the `upsert`: the incumbent `indexTupleAliasDeclaration` reads is the declaration
@@ -3064,6 +3064,10 @@ extension ProgramSignatures
 			return ArrayElementClass.namedValue
 		end 'theUndeclaredByteElement'
 
+		if self.containsEnumInAnyFile(name) and not self.enumNameIsBoxed(name) 'aPayloadFreeEnum'
+			return ArrayElementClass.namedValue
+		end 'aPayloadFreeEnum'
+
 		if not self.settledDeclarations().typeAliases.anyFileDeclares(name) 'noFileDeclaresIt'
 			return ArrayElementClass.notBitwise
 		end 'noFileDeclaresIt'
@@ -3071,28 +3075,33 @@ extension ProgramSignatures
 		return ArrayElementClass.floatValue if self.settledDeclarations().typeAliases.declaredAsFloatInAnyFile(name) else ArrayElementClass.namedValue
 	end 'namedElementClass'
 
+	function elementConformerName(element MaxonType) returns immutable ByteArray
+		return freeze self.conformerNameOfType(element, idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath).toByteArray()
+	end 'elementConformerName'
+
 	function elementDeclaresItsOwn(element MaxonType, member ByteArray) returns bool
-		return self.userDeclaresMemberInAnyFile(self.conformerNameOfType(element, idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath).toByteArray(), member: member)
+		return self.userDeclaresMemberInAnyFile(self.elementConformerName(element), member: member)
 	end 'elementDeclaresItsOwn'
 
-	function elementLoadsAsItsValue(id GenericInstanceId) returns bool
-		if self.arrayElementSize(id) >= ThirtyTwoBitElementBytes 'aWordOrWider'
-			return true
-		end 'aWordOrWider'
+	export function conformerHashesAsStorage(typeName ByteArray) returns bool
+		if self.userDeclaresMemberInAnyFile(typeName, member: EqualsMethodName) or self.userDeclaresMemberInAnyFile(typeName, member: HashMethodName) 'customEquality'
+			return false
+		end 'customEquality'
 
-		return match self.elementIntegerValueRange(id, readerFilePath: CompilerOwnedDeclFilePath) 'range'
-			notIntegerValued gives false
-			inclusive(low, _) gives low >= 0
-		end 'range'
-	end 'elementLoadsAsItsValue'
+		if typeName.equals(IntConformerName) or self.nameIsAnUndeclaredByteElement(typeName) 'aPlainWord'
+			return true
+		end 'aPlainWord'
+
+		return self.containsEnumInAnyFile(typeName) and not self.enumNameIsBoxed(typeName)
+	end 'conformerHashesAsStorage'
 
 	export function arrayBitwiseKind(id GenericInstanceId) returns ArrayBitwiseKind
 		return match self.arrayElementClass(id) 'class'
 			notBitwise gives ArrayBitwiseKind.neither
 			floatValue gives self.floatArrayBitwiseKind(id)
-			integer gives self.afterUserDeclarations(id, natural: ArrayBitwiseKind.equalsAndHash)
-			namedValue gives self.afterUserDeclarations(id, natural: ArrayBitwiseKind.equalsAndHash if self.elementLoadsAsItsValue(id) else ArrayBitwiseKind.equalsOnly)
-			booleanOrExitCode gives self.afterUserDeclarations(id, natural: ArrayBitwiseKind.equalsOnly)
+			integer or
+			namedValue or
+			booleanOrExitCode gives self.afterUserDeclarations(id)
 		end 'class'
 	end 'arrayBitwiseKind'
 
@@ -3104,37 +3113,27 @@ extension ProgramSignatures
 		return ArrayBitwiseKind.neither
 	end 'floatArrayBitwiseKind'
 
-	function afterUserDeclarations(id GenericInstanceId, natural ArrayBitwiseKind) returns ArrayBitwiseKind
+	function afterUserDeclarations(id GenericInstanceId) returns ArrayBitwiseKind
 		let element = self.containerElementType(id)
 
 		if self.elementDeclaresItsOwn(element, member: EqualsMethodName) 'theProgramOwnsEquals'
 			return ArrayBitwiseKind.neither
 		end 'theProgramOwnsEquals'
 
-		if natural == ArrayBitwiseKind.equalsAndHash and self.elementDeclaresItsOwn(element, member: HashMethodName) 'theProgramOwnsHash'
+		if not self.conformerHashesAsStorage(self.elementConformerName(element)) 'theElementDoesNotHashAsStorage'
 			return ArrayBitwiseKind.equalsOnly
-		end 'theProgramOwnsHash'
+		end 'theElementDoesNotHashAsStorage'
 
-		if natural == ArrayBitwiseKind.equalsAndHash 'hashedNatively'
-			self.requireNativeHashSlotWidth(id)
-		end 'hashedNatively'
-
-		return natural
+		return ArrayBitwiseKind.equalsAndHash
 	end 'afterUserDeclarations'
-
-	function requireNativeHashSlotWidth(id GenericInstanceId)
-		let stride = self.arrayElementSize(id)
-
-		if stride < 0 or stride == EightBitElementBytes or stride == SixteenBitElementBytes or stride == ThirtyTwoBitElementBytes or stride == SixtyFourBitElementBytes 'onTheLadder'
-			return
-		end 'onTheLadder'
-
-		panic("SignatureIndex.requireNativeHashSlotWidth: an array element slot of {stride} bytes is hashed natively, but only 1, 2, 4 and 8-byte slots and sub-byte packed slots load zero-extended inside [-2^32, 2^32), where the native hash and the stdlib body agree")
-	end 'requireNativeHashSlotWidth'
 
 	export function calleeIsArrayRecordMember(callee ByteArray, member ByteArray) returns bool
 		return qualifiedNameIs(callee, typeName: self.arrayRecordBaseName(), member: member)
 	end 'calleeIsArrayRecordMember'
+
+	export function arrayHashMethodName() returns immutable ByteArray
+		return qualifiedMethodName(self.arrayRecordBaseName(), methodName: HashMethodName)
+	end 'arrayHashMethodName'
 
 	// ⭐⭐ **THE DECLARED RANGE OF AN `Array` INSTANCE'S ELEMENT, AS `readerFilePath` RESOLVES IT** — the
 	// BOUNDS twin of `arrayElementSize`, and the question a value being stored INTO the instance has to be
@@ -8959,11 +8958,8 @@ extension ProgramSignatures
 	// `function pair() returns (String, Num)` in the same tree compiles and runs, which is what localizes it
 	// to the substituted mint and not to tuples.
 	//
-	// It answers with the LAYOUTS rather than with the names, because its one caller needs the field list to
-	// synthesize a cascade and a name would only send it back here. ⚠ **ONE CALLER, TWICE PER COMPILE**: the
-	// clone side reads the same roster (`MmRuntime.installStructRuntimeEntries`) — once for the drop
-	// entries and once for the clone entries, each behind that installer's own "is anything referenced at all"
-	// gate, so a program that neither drops nor clones still walks this registry zero times.
+	// It answers with the LAYOUTS rather than with the names, because its caller, `structRuntimeRoster`,
+	// needs the field list to synthesize a cascade and a name would only send it back here.
 	export function tupleLayouts() returns SettledStructLayoutArray
 		self.requireWholeProgramIndex("tupleLayouts")
 

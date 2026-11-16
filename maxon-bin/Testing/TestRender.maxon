@@ -232,13 +232,13 @@ function durationText(nanos DurationNanos) returns String
 end 'durationText'
 
 // ⭐ **THE TAIL OF A RUN: one detail block per failure, then the counts, then the footer.**
-function testRunSummary(report TestRunReport, color bool, showTiming bool) returns String
+function testRunSummary(report TestRunReport, pins HashPins, color bool, showTiming bool) returns String
 	var summary = ""
 
 	for file in report.files 'eachFile'
 		for result in file.results 'eachResult'
 			if result.isFailure() 'notGreen'
-				summary.append(failureDetail(file.file, result: result, color: color))
+				summary.append(failureDetail(file.file, result: result, pins: pins, color: color))
 			end 'notGreen'
 		end 'eachResult'
 	end 'eachFile'
@@ -281,7 +281,7 @@ end 'failCountText'
 //
 // ⚠ The label here is always RED, where the per-test line paints `didNotRun` yellow: this section is
 // the failure report, and every heading in it heads a failure.
-function failureDetail(path FilePath, result UnitTestResult, color bool) returns String
+function failureDetail(path FilePath, result UnitTestResult, pins HashPins, color bool) returns String
 	var detail = "\n{painted(outcomeSpelling(result.outcome).label, code: SgrRed, color: color)}  {reportPathDisplay(path)} > {result.test.displayName}\n"
 
 	match result.thrown 'unhandledError'
@@ -297,16 +297,14 @@ function failureDetail(path FilePath, result UnitTestResult, color bool) returns
 
 			detail.append("{line}\n")
 		end 'eachLine'
-
-		return detail
-	end 'itWroteSomething'
-
-	// A test throws exactly `TestFailure`, so a failure with no `threw` report is the test's OWN
-	// assertion. With nothing on stderr either, the report would otherwise be a bare headline — say
-	// which of the two it is, rather than leaving a reader to wonder whether output was lost.
-	if not hasThrownReport(result.thrown) and result.outcome == UnitTestOutcome.failed 'saidNothingAtAll'
+	end 'itWroteSomething' else if not hasThrownReport(result.thrown) and result.outcome == UnitTestOutcome.failed 'saidNothingAtAll'
+		// A test throws exactly `TestFailure`, so a failure with no `threw` report is the test's OWN
+		// assertion. With nothing on stderr either, the report would otherwise be a bare headline — say
+		// which of the two it is, rather than leaving a reader to wonder whether output was lost.
 		detail.append("{ReportIndent}{NoAssertionMessageText}\n")
 	end 'saidNothingAtAll'
+
+	detail.append("{ReportIndent}{pins.reportLine()}\n")
 
 	return detail
 end 'failureDetail'
@@ -402,7 +400,7 @@ end 'TestRunEmptiness'
 // `emptiness` says WHY a run has no results, when it has none. It is carried because the text face says it and this
 // must not say less: "no tests exist" and "no test matched the filter" are different problems with the
 // same exit code, and a machine reader that cannot tell them apart cannot act.
-function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmptiness) returns String
+function testRunJson(report TestRunReport, pins HashPins, showTiming bool, emptiness TestRunEmptiness) returns String
 	let doc = JsonDoc.create()
 	let keys = StringArray.create(0)
 	let children = JsonNodeIdArray.create(0)
@@ -439,7 +437,7 @@ function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmp
 
 	for file in report.files 'eachFile'
 		for result in file.results 'eachResult'
-			results.push(testResultNode(doc, path: file.file, result: result, showTiming: showTiming))
+			results.push(testResultNode(doc, path: file.file, result: result, pins: pins, showTiming: showTiming))
 		end 'eachResult'
 	end 'eachFile'
 
@@ -450,7 +448,7 @@ function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmp
 	return Json.stringify(doc)
 end 'testRunJson'
 
-function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, showTiming bool) returns JsonNodeId
+function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, pins HashPins, showTiming bool) returns JsonNodeId
 	let keys = StringArray.create(0)
 	let children = JsonNodeIdArray.create(0)
 
@@ -474,6 +472,11 @@ function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, showT
 	if not result.output.isEmpty() 'itWroteSomething'
 		pushJsonString(doc, keys: keys, children: children, key: "output", value: result.output)
 	end 'itWroteSomething'
+
+	if result.isFailure() 'namesThePins'
+		pushJsonString(doc, keys: keys, children: children, key: "hashSeed", value: pins.seed)
+		pushJsonString(doc, keys: keys, children: children, key: "hashTier", value: pins.tier)
+	end 'namesThePins'
 
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'testResultNode'

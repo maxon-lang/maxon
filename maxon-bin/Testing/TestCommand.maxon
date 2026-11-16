@@ -118,6 +118,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 	let tests = compiled.tests
 	let groups = compiled.groups
 	let color = reportColorEnabled(args.colorMode)
+	let pins = HashPins.forRun(hashTierFor(target, launcher: HashTierLauncher.spawnsDirectly))
 	let filtered = selectionFor(groups, total: tests.count() as ReportedTestCount, patterns: patterns)
 	let selected = filtered.selected
 
@@ -126,11 +127,11 @@ export function runTest(args MaxonArgs) returns ExitCode
 	end 'listOnly'
 
 	if tests.isEmpty() 'noTestsAtAll'
-		return reportNothingToRun(noTestsFoundReason(subject), args: args, color: color)
+		return reportNothingToRun(noTestsFoundReason(subject), args: args, pins: pins, color: color)
 	end 'noTestsAtAll'
 
 	if filtered.unmatchedPatterns.count() > 0 'filterMatchedNothing'
-		return reportNothingToRun("no test matched {quotedPatterns(filtered.unmatchedPatterns)}", args: args, color: color)
+		return reportNothingToRun("no test matched {quotedPatterns(filtered.unmatchedPatterns)}", args: args, pins: pins, color: color)
 	end 'filterMatchedNothing'
 
 	// Under `--json` stdout carries exactly one JSON document, so the report goes to stderr.
@@ -138,7 +139,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return NothingRanExitCode
 	end 'refusedRecord'
 
-	let exit = compileAndRunTests(args, subject: subject, target: target, groups: groups, selected: selected, color: color)
+	let exit = compileAndRunTests(args, subject: subject, target: target, groups: groups, selected: selected, pins: pins, color: color)
 
 	if exitSucceeded(exit) 'allPassed'
 		recordProjectRelease(subject)
@@ -582,10 +583,10 @@ end 'printTestList'
 // A run that found nothing to do fails, and says why in the report's own voice rather than as an
 // error, because nothing went wrong with the harness — there is simply nothing green to claim. It
 // therefore goes to stdout, where the rest of the report goes.
-function reportNothingToRun(reason String, args MaxonArgs, color bool) returns ExitCode
+function reportNothingToRun(reason String, args MaxonArgs, pins HashPins, color bool) returns ExitCode
 	if args.jsonReport 'machineReadable'
 		let empty = TestRunReport.create(TestFileResultsArray.create(0), compileMs: 0, runMs: 0, bailed: false)
-		let document = testRunJson(empty, showTiming: args.showTiming, emptiness: TestRunEmptiness.nothingRan(reason))
+		let document = testRunJson(empty, pins: pins, showTiming: args.showTiming, emptiness: TestRunEmptiness.nothingRan(reason))
 		print("{document}\n")
 	end 'machineReadable' else 'human'
 		print(testEmptyRunNote(reason, color: color))
@@ -682,19 +683,19 @@ function buildTestBinary(subject TestSubject, target Target, groups TestFileGrou
 	return TestBinaryBuild.built(staged, binary: product.outputPath)
 end 'buildTestBinary'
 
-function compileAndRunTests(args MaxonArgs, subject TestSubject, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+function compileAndRunTests(args MaxonArgs, subject TestSubject, target Target, groups TestFileGroupArray, selected TestSelection, pins HashPins, color bool) returns ExitCode
 	let compileStarted = Clock.nowMs()
 
 	match buildTestBinary(subject, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
 		failed(exitCode) then return exitCode
-		built(staged, binary) then return runBuiltTests(args, staged: staged, binary: binary, compileMs: Clock.elapsedMs(compileStarted), selected: selected, color: color)
+		built(staged, binary) then return runBuiltTests(args, staged: staged, binary: binary, compileMs: Clock.elapsedMs(compileStarted), selected: selected, pins: pins, color: color)
 	end 'build'
 end 'compileAndRunTests'
 
-function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, compileMs DurationMs, selected TestSelection, color bool) returns ExitCode
+function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, compileMs DurationMs, selected TestSelection, pins HashPins, color bool) returns ExitCode
 	let runStarted = Clock.nowMs()
 
-	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs, tracksDescendants: staged.tracksDescendants)
+	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs, tracksDescendants: staged.tracksDescendants, pins: pins)
 	removeEndedRunsScratch(plan.buildDirectory())
 
 	let progress = TestRunProgress.create()
@@ -714,10 +715,10 @@ function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, 
 	let report = TestRunReport.create(files, compileMs: compileMs, runMs: Clock.elapsedMs(runStarted), bailed: progress.bailed)
 
 	if args.jsonReport 'machineReadable'
-		let document = testRunJson(report, showTiming: args.showTiming, emptiness: TestRunEmptiness.hasResults)
+		let document = testRunJson(report, pins: pins, showTiming: args.showTiming, emptiness: TestRunEmptiness.hasResults)
 		print("{document}\n")
 	end 'machineReadable' else 'human'
-		print(testRunSummary(report, color: color, showTiming: args.showTiming))
+		print(testRunSummary(report, pins: pins, color: color, showTiming: args.showTiming))
 	end 'human'
 
 	if tallyTestRun(report.files).failed > 0 'somethingIsNotGreen'

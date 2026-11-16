@@ -1055,6 +1055,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, globalData 
 		appendHostListCapture(runBody, globalData: globalData, importFuncIdx: GetEnvironmentImportFuncIdx, listLabel: EnvironmentListLabel, countLabel: EnvironmentCountLabel)
 	end 'environmentList'
 
+	appendHashInitCall(runBody, funcNames: funcNames, startsHash: stub.startsHash)
 	appendModuleInitCall(runBody, funcNames: funcNames, initGlobals: initGlobals)
 
 	runBody.call(mainFuncIdx)
@@ -1129,6 +1130,14 @@ function appendModuleInitCall(runBody WasmBody, funcNames FunctionNameIndex, ini
 
 	runBody.call(try wasmFuncIdxOf(funcNames, callee: ModuleInitName) otherwise panic("appendModuleInitCall: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__module_init` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leave every managed global's slot null"))
 end 'appendModuleInitCall'
+
+function appendHashInitCall(runBody WasmBody, funcNames FunctionNameIndex, startsHash bool)
+	if not startsHash 'noHashing'
+		return
+	end 'noHashing'
+
+	runBody.call(try wasmFuncIdxOf(funcNames, callee: HashInitName) otherwise panic("appendHashInitCall: `EntryStubCalls.startsHash` says this program hashes, so `__hash_init` must be in this module — its absence means the root was pruned"))
+end 'appendHashInitCall'
 
 // ⭐ **A RELEASE GATE on the wasm exit path** — `__maxon_global_cleanup` and
 // `__maxon_registry_release`, the siblings of the native stubs'
@@ -1326,6 +1335,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -1968,6 +1978,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or
@@ -2522,6 +2533,7 @@ type WasmFuncEmitter
 			osFileSize or
 			osFileDelete or
 			osFileRename or
+			osFileRenameNew or
 			osFileFindFirst or
 			osFileFindClose or
 			osFileFindNext or
@@ -2713,6 +2725,7 @@ type WasmFuncEmitter
 			osFileSize or
 			osFileDelete or
 			osFileRename or
+			osFileRenameNew or
 			osFileFindFirst or
 			osFileFindClose or
 			osFileFindNext or
@@ -2824,7 +2837,7 @@ type WasmFuncEmitter
 			// neither — so this is a permanent absence rather than an unwritten lowering.
 			osHostProcess then panic("emitBodyOp: `osHostProcess` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll(resultId, verb, microsecondsId, _, _, _, _) then self.emitOsNetpoll(resultId, verb: verb, microsecondsId: microsecondsId)
-			cryptoRoutine then panic("emitBodyOp: `cryptoRoutine` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `cpuFeatureProbe` on this lane, so a hardware AES call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past it")
+			cryptoRoutine then panic("emitBodyOp: `cryptoRoutine` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `cpuFeatureProbe` on this lane, so a hardware crypto call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past it")
 			osSocketOverlapped then panic("emitBodyOp: `osSocketOverlapped` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `managedSocket` on this lane, so a socket call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 			osPathQuery then panic("emitBodyOp: `osPathQuery` has no wasm32-wasi spelling — it is emitted only by the `PATH` walk, by `__md_resolve_path` and by `__md_delete`; WASI has no process-spawn primitive, so a subprocess call is refused at its own source span (E3074) and the `PATH` walk is never installed, and a resolve (`FilePath.resolvedPhysically`) or a `Directory.delete` is refused earlier by E3104; this is the backstop for a compiler bug that got one past those refusals")
 			osSocketServe then panic("emitBodyOp: `osSocketServe` has no wasm32-wasi spelling — binding, listening and accepting need `wasi:sockets`, which this lane does not use, so `TargetFacilities.targetProvidesFacility` denies `managedSocket` here and a listener call is refused at its own source span (E3104); this is the backstop for a compiler bug that got one past that gate")

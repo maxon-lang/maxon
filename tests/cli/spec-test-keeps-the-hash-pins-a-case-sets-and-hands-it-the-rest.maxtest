@@ -1,0 +1,52 @@
+let SpecTestKeepsTheHashPinsCaseDirName = "spec-test-keeps-the-hash-pins"
+let UnpinnedCaseName = "unpinned"
+let PinnedBothCaseName = "pinned-both"
+let PinnedSeedCaseName = "pinned-seed"
+let PinnedTierCaseName = "pinned-tier"
+let BothPinnedSeed = "fedcba9876543210"
+let SeedOnlyPinnedSeed = "0123456789abcdef"
+
+test 'a case that pins a hash seed or tier reports its own, and a case that pins neither is handed the run draw'
+	requireHeldOutsideCheckout(SpecTestKeepsTheHashPinsCaseDirName, check: SpecTestKeepsTheHashPins.create())
+end 'a case that pins a hash seed or tier reports its own, and a case that pins neither is handed the run draw'
+
+type SpecTestKeepsTheHashPins implements OutsideCheckoutCase
+	static function create() returns SpecTestKeepsTheHashPins
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cases = HashReportCaseArray.create(0)
+		cases.push(HashReportCase.create(UnpinnedCaseName, seed: HashPinUnset, tier: HashPinUnset))
+		cases.push(HashReportCase.create(PinnedBothCaseName, seed: BothPinnedSeed, tier: HashTierSoftware))
+		cases.push(HashReportCase.create(PinnedSeedCaseName, seed: SeedOnlyPinnedSeed, tier: HashPinUnset))
+		cases.push(HashReportCase.create(PinnedTierCaseName, seed: HashPinUnset, tier: HashTierSoftware))
+
+		let specDir = stagedHashReportSpec(dir, cases: cases)
+		let said = runHashReportSpec(dir, specDir: specDir, seed: HashPinUnset, tier: HashPinUnset)
+
+		let unpinned = try hashSpecFailureOf(said, caseName: UnpinnedCaseName)
+		let both = try hashSpecFailureOf(said, caseName: PinnedBothCaseName)
+		let seedOnly = try hashSpecFailureOf(said, caseName: PinnedSeedCaseName)
+		let tierOnly = try hashSpecFailureOf(said, caseName: PinnedTierCaseName)
+
+		try Expect.equal(both.pins.seed, expected: BothPinnedSeed, message: "`{PinnedBothCaseName}` pins {HashSeedVariable}={BothPinnedSeed} and its failure names the seed {both.pins.seed}.")
+		try Expect.equal(both.pins.tier, expected: HashTierSoftware, message: "`{PinnedBothCaseName}` pins {HashTierVariable}={HashTierSoftware} and its failure names the tier {both.pins.tier}.")
+
+		try Expect.equal(seedOnly.pins.seed, expected: SeedOnlyPinnedSeed, message: "`{PinnedSeedCaseName}` pins {HashSeedVariable}={SeedOnlyPinnedSeed} and its failure names the seed {seedOnly.pins.seed}.")
+		try Expect.equal(seedOnly.pins.tier, expected: unpinned.pins.tier, message: "`{PinnedSeedCaseName}` pins a seed and no tier, so it is handed the run's tier {unpinned.pins.tier}, and its failure names the tier {seedOnly.pins.tier}.")
+
+		try Expect.equal(tierOnly.pins.tier, expected: HashTierSoftware, message: "`{PinnedTierCaseName}` pins {HashTierVariable}={HashTierSoftware} and its failure names the tier {tierOnly.pins.tier}.")
+		try Expect.equal(tierOnly.pins.seed, expected: unpinned.pins.seed, message: "`{PinnedTierCaseName}` pins a tier and no seed, so it is handed the run's seed {unpinned.pins.seed}, and its failure names the seed {tierOnly.pins.seed}.")
+
+		try Expect.notEqual(unpinned.pins.seed, expected: BothPinnedSeed, message: "the run's drawn seed is a case's own pin, so a pin cannot be told from a draw.")
+		try Expect.notEqual(unpinned.pins.seed, expected: SeedOnlyPinnedSeed, message: "the run's drawn seed is a case's own pin, so a pin cannot be told from a draw.")
+
+		let program = try builtHashReportProgram(dir)
+
+		try requireFailureReproduced(dir, program: program, failure: unpinned, which: "the failure of `{HashReportSpecName}/{UnpinnedCaseName}`")
+		try requireFailureReproduced(dir, program: program, failure: both, which: "the failure of `{HashReportSpecName}/{PinnedBothCaseName}`")
+		try requireFailureReproduced(dir, program: program, failure: seedOnly, which: "the failure of `{HashReportSpecName}/{PinnedSeedCaseName}`")
+		try requireFailureReproduced(dir, program: program, failure: tierOnly, which: "the failure of `{HashReportSpecName}/{PinnedTierCaseName}`")
+	end 'requireHeldIn'
+end 'SpecTestKeepsTheHashPins'

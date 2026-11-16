@@ -1,0 +1,25 @@
+let TestKeepsTheHashPinCaseDirName = "test-keeps-the-hash-pin"
+let LaunchSeed = "0123456789abcdef"
+
+test 'a maxon test run launched with one hash pin keeps it and is handed the other'
+	requireHeldOutsideCheckout(TestKeepsTheHashPinCaseDirName, check: TestKeepsTheHashPin.create())
+end 'a maxon test run launched with one hash pin keeps it and is handed the other'
+
+type TestKeepsTheHashPin implements OutsideCheckoutCase
+	static function create() returns TestKeepsTheHashPin
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let testDir = stagedHashReportTest(dir)
+		let drawn = try hashTestFailureOf(runHashReportTest(dir, testDir: testDir, seed: HashPinUnset, tier: HashPinUnset))
+
+		let seedOnly = try hashTestFailureOf(runHashReportTest(dir, testDir: testDir, seed: LaunchSeed, tier: HashPinUnset))
+		try Expect.equal(seedOnly.pins.seed, expected: LaunchSeed, message: "a maxon test run launched with {HashSeedVariable}={LaunchSeed} names the seed {seedOnly.pins.seed}.")
+		try Expect.equal(seedOnly.pins.tier, expected: drawn.pins.tier, message: "a maxon test run launched with a seed and no tier is handed the host's tier {drawn.pins.tier}, and names the tier {seedOnly.pins.tier}.")
+
+		let tierOnly = try hashTestFailureOf(runHashReportTest(dir, testDir: testDir, seed: HashPinUnset, tier: HashTierSoftware))
+		try Expect.equal(tierOnly.pins.tier, expected: HashTierSoftware, message: "a maxon test run launched with {HashTierVariable}={HashTierSoftware} names the tier {tierOnly.pins.tier}.")
+		try Expect.notEqual(tierOnly.pins.seed, expected: seedOnly.pins.seed, message: "a maxon test run launched with a tier and no seed names {seedOnly.pins.seed}, the seed of the run before it, instead of drawing its own.")
+	end 'requireHeldIn'
+end 'TestKeepsTheHashPin'

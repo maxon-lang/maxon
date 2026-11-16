@@ -550,6 +550,10 @@ let Arm64OpAese = 0x4E284800
 let Arm64OpAesd = 0x4E285800
 let Arm64OpAesmc = 0x4E286800
 let Arm64OpAesimc = 0x4E287800
+let Arm64OpSha256h = 0x5E004000
+let Arm64OpSha256h2 = 0x5E005000
+let Arm64OpSha256su0 = 0x5E282800
+let Arm64OpSha256su1 = 0x5E006000
 let Arm64OpLdrQ = 0x3DC00000
 let Arm64OpStrQ = 0x3D800000
 let Arm64OpPmull = 0x0EE0E000
@@ -3012,12 +3016,12 @@ end 'encodeArm64FunctionChunk'
 // managed top-level global), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, gatesDescendants bool, os Os, entryFunction ByteArray)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, debugStream: debugStream, dumpCoverage: dumpCoverage, releasesRegistry: releasesRegistry, os: os, entryFunction: entryFunction))
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, startsHash bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, gatesDescendants bool, os Os, entryFunction ByteArray)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, startsHash: startsHash, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, debugStream: debugStream, dumpCoverage: dumpCoverage, releasesRegistry: releasesRegistry, os: os, entryFunction: entryFunction))
 
 	// Directly behind the stub — the layout `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
-		chunks.push(buildArm64MainThreadEntryChunk(initGlobals, gatesDescendants: gatesDescendants, entryFunction: entryFunction))
+		chunks.push(buildArm64MainThreadEntryChunk(initGlobals, startsHash: startsHash, gatesDescendants: gatesDescendants, entryFunction: entryFunction))
 	end 'mainIsAGreenThread'
 end 'appendArm64RuntimeChunks'
 
@@ -3292,7 +3296,7 @@ export function finishArm64Backend(stdModule StdModule, target Target, globalDat
 	// Its by-name calls read `Project.entryStubCalls`, the record the reachability roots and the inliner's
 	// census were built from, so the stub calls exactly what those kept alive.
 	let stub = project.entryStubCalls
-	appendArm64RuntimeChunks(entryChunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, gatesDescendants: stub.gatesDescendants, os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(entryChunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, startsHash: stub.startsHash, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, gatesDescendants: stub.gatesDescendants, os: target.os, entryFunction: project.entryFunctionName)
 
 	placeChunksAhead(entryChunks, chunks: chunks)
 
@@ -3323,6 +3327,14 @@ export function finishArm64Backend(stdModule StdModule, target Target, globalDat
 		chunks.push(buildArm64AesGcmDecryptChunk())
 		chunks.push(buildArm64AesGcmFinishChunk())
 	end 'hardwareAes'
+
+	if hardwareShaChunksAreEmitted(usage, target: target) 'hardwareSha'
+		chunks.push(buildArm64Sha256BlocksChunk(globalData))
+	end 'hardwareSha'
+
+	if hardwareHashChunksAreEmitted(usage, target: target) 'hardwareHash'
+		chunks.push(buildArm64AesHashChunk(globalData))
+	end 'hardwareHash'
 
 	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which
 	// is what lets both build under the shared `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's

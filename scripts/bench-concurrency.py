@@ -436,7 +436,7 @@ def print_metric_table(title, key, decimals, cells, maxon_labels):
 
 
 def write_log_rows(cells, maxon_labels, context, args, host):
-    note = args.note.replace("|", "/")
+    note = bench_common.note_cell(args.note)
     for cell in cells:
         for label in maxon_labels:
             stats = cell["stats"]

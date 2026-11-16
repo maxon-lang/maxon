@@ -7,6 +7,8 @@ let CpuFeatureRuntimeCallPrefix = b"__cpufeat_"
 
 export let CpuAesUsableName = b"__cpufeat_aes_usable"
 export let CpuAesUsableLabel = b"__mrt_cpu_aes_usable"
+export let CpuShaUsableName = b"__cpufeat_sha_usable"
+export let CpuShaUsableLabel = b"__mrt_cpu_sha_usable"
 export let CpuFeatureProbeName = b"mrt_cpu_feature_probe"
 
 let CpuFeaturePresentSeed = 1
@@ -14,6 +16,10 @@ let CpuFeaturePresentSeed = 1
 export function isCpuFeatureRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CpuFeatureRuntimeCallPrefix)
 end 'isCpuFeatureRuntimeCallee'
+
+export function isCpuFeatureProbeCallee(callee ByteArray) returns bool
+	return callee.equals(CpuAesUsableName) or callee.equals(CpuShaUsableName)
+end 'isCpuFeatureProbeCallee'
 
 enum CpuFeatureSource
 	cpuid
@@ -55,6 +61,11 @@ export function cpuFeaturesAreProbed(usage RuntimeUsage, target Target) returns 
 	end 'source'
 end 'cpuFeaturesAreProbed'
 
+function pushCpuFeatureFlags(out DataSectionEntryArray, reach DataReach, seed FullRangeInt = 0)
+	pushRuntimeGlobal(out, label: CpuAesUsableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: reach, seed: seed)
+	pushRuntimeGlobal(out, label: CpuShaUsableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: reach, seed: seed)
+end 'pushCpuFeatureFlags'
+
 export function cpuFeatureRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	let out = DataSectionEntryArray.create(0)
 
@@ -64,8 +75,8 @@ export function cpuFeatureRuntimeGlobals(usage RuntimeUsage, target Target) retu
 
 	match cpuFeatureSource(target) 'source'
 		cpuid or
-		auxiliaryVector then pushRuntimeGlobal(out, label: CpuAesUsableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
-		alwaysPresent then pushRuntimeGlobal(out, label: CpuAesUsableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked, seed: CpuFeaturePresentSeed)
+		auxiliaryVector then pushCpuFeatureFlags(out, reach: DataReach.declared)
+		alwaysPresent then pushCpuFeatureFlags(out, reach: DataReach.walked, seed: CpuFeaturePresentSeed)
 		absent then break
 	end 'source'
 

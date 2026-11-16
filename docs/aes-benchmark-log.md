@@ -10,7 +10,8 @@ dated, and the ratio columns are the numbers the AES parity work drives to 1.0 o
   datapoint, and a row that moved the wrong way is a reading to explain.
 - **Rows rot.** Re-measure before planning from one; an A/B is two arms in ONE session, interleaved,
   never a before/after across a source change.
-- **Only rows from one lane and host compare.** Each row names both.
+- **Only rows from one lane and host compare.** Each row names both: the host cell holds the OS, the machine, the CPU model
+  and the Go version the row ran (the OS and the machine only, in the first rows).
 
 Columns: `Maxon` and the Go columns are the best time of `runs` interleaved process runs, each of which
 already took the best of 5 repetitions: MB/s, or microseconds per operation for key setup. `vs ...` is the

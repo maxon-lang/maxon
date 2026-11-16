@@ -1708,7 +1708,7 @@ termination rule cannot pass unnoticed.
 ⚠⚠ **THE MESSAGE DOES NOT SHOW THAT DEPTH.** A diagnostic prints the returned value's type in its source
 form, `((int, int), int)`, and the declared type as the alias spells it, `P` — so the pinned text names the
 alias rather than the nest the termination rule built. Internally a nested element is cited by a token that is
-`fnv1a64` of the cited tuple's registered name (`ProgramSignatures.tupleElementTokenFor`), a pure function of
+the SHA-256 digest of the cited tuple's registered name (`ProgramSignatures.tupleElementTokenFor`), a pure function of
 the structure, so an unrelated tuple interned first moves no citation, and emission orders by the mangled
 label (`SignatureIndex.mangleTypeArg`) rather than by any dense instance id.
 ```maxon

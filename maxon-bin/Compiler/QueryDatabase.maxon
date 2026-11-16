@@ -739,7 +739,7 @@ export type RowSetOverrides
 	var tables as RowSetOverrideMap
 
 	export static function create() returns RowSetOverrides
-		return Self{program: Hasher.empty(), tables: RowSetOverrideMap.create()}
+		return Self{program: startDigest(), tables: RowSetOverrideMap.create()}
 	end 'create'
 
 	// Keep the tables only if they were filed for `sources`.
@@ -783,7 +783,7 @@ export type InstantiatedByAParse
 	export var digest as HashDigest
 
 	export static function create() returns InstantiatedByAParse
-		return Self{names: InstantiatedTypeNameSet.create(), digest: Hasher.empty()}
+		return Self{names: InstantiatedTypeNameSet.create(), digest: startDigest()}
 	end 'create'
 
 	export function file(name ByteArray)
@@ -792,7 +792,7 @@ export type InstantiatedByAParse
 		end 'filedAlready'
 
 		self.names.insert(name)
-		self.digest = self.digest xor mixBytes(Hasher.empty(), bytes: name)
+		self.digest = self.digest xor digestOfBytes(name)
 	end 'file'
 
 	export function drop(name ByteArray)
@@ -800,7 +800,7 @@ export type InstantiatedByAParse
 			panic("InstantiatedByAParse.drop: '{String.from(name)}' is not filed — only a filed name can be found needless")
 		end 'neverFiled'
 
-		self.digest = self.digest xor mixBytes(Hasher.empty(), bytes: name)
+		self.digest = self.digest xor digestOfBytes(name)
 	end 'drop'
 end 'InstantiatedByAParse'
 

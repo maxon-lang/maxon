@@ -435,10 +435,11 @@ type SpecPlan
 	export let specName as String
 	export let runs as SpecRuns
 	export let testNames as StringArray
+	let pinsIfDead as HashPinsAtFailureArray
 	export let weight as JobWeight
 
-	static function create(specName String, runs SpecRuns, testNames StringArray, weight JobWeight) returns SpecPlan
-		return Self{specName: specName, runs: runs, testNames: testNames, weight: weight}
+	static function create(specName String, runs SpecRuns, testNames StringArray, pinsIfDead HashPinsAtFailureArray, weight JobWeight) returns SpecPlan
+		return Self{specName: specName, runs: runs, testNames: testNames, pinsIfDead: pinsIfDead, weight: weight}
 	end 'create'
 end 'SpecPlan'
 
@@ -525,14 +526,16 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 			end 'inAnotherShard'
 
 			let testNames = StringArray.create(tests.count(), zeroed: false)
+			let pinsIfDead = HashPinsAtFailureArray.create(tests.count(), zeroed: false)
 			var weight = 0 as JobWeight
 
 			for test in tests 'eachTest'
 				testNames.push(test.name)
+				pinsIfDead.push(hashPinsIfWorkerDies(test))
 				weight = weight + (test.source.byteLength() as JobWeight)
 			end 'eachTest'
 
-			plans.push(SpecPlan.create(specName, runs: runs, testNames: testNames, weight: weight))
+			plans.push(SpecPlan.create(specName, runs: runs, testNames: testNames, pinsIfDead: pinsIfDead, weight: weight))
 		end 'eachJob'
 	end 'eachSpec'
 
@@ -776,8 +779,12 @@ end 'runSpecJob'
 // It is EXPORTED because the runner emits it and the pool decodes it: one spelling, in the file that
 // owns the wire.
 function emitWorkerStep(step WorkerStep, label String)
-	print("{WorkerStepMarker}{stepToken(step)}{ProtocolFieldSep}{label}\n")
+	print("{workerStepLine(step, label: label)}\n")
 end 'emitWorkerStep'
+
+function workerStepLine(step WorkerStep, label String) returns String
+	return "{WorkerStepMarker}{stepToken(step)}{ProtocolFieldSep}{label}"
+end 'workerStepLine'
 
 // The wire spelling of a step kind, and — in `stepFromToken` — its inverse. A pair rather than a
 // comparison at each site, for `TestOutcome.token`/`decodeVerdict`'s reason: the encode is exhaustive
@@ -1443,13 +1450,42 @@ function lastStepIn(lines StringArray) returns LastStep
 
 	for line in lines 'eachLine'
 		if line.startsWith(WorkerStepMarker) 'isBreadcrumb'
-			let cut = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerStepMarker), expected: "label", line: line)
-			last = LastStep.started(stepFromToken(cut.field, line: line), label: cut.rest.trim())
+			last = breadcrumbOf(line)
 		end 'isBreadcrumb'
 	end 'eachLine'
 
 	return last
 end 'lastStepIn'
+
+function breadcrumbOf(line String) returns LastStep
+	let cut = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerStepMarker), expected: "label", line: line)
+
+	return LastStep.started(stepFromToken(cut.field, line: line), label: cut.rest.trim())
+end 'breadcrumbOf'
+
+function breadcrumbStartsAProgram(crumb LastStep) returns bool
+	return match crumb 'crumb'
+		none gives false
+		started(step, _) gives stepStartsAProgram(step)
+	end 'crumb'
+end 'breadcrumbStartsAProgram'
+
+function stepStartsAProgram(step WorkerStep) returns bool
+	return match step 'step'
+		compile gives false
+		run gives true
+	end 'step'
+end 'stepStartsAProgram'
+
+function workerStartedARun(lines StringArray) returns bool
+	for line in lines 'eachLine'
+		if line.startsWith(WorkerStepMarker) and breadcrumbStartsAProgram(breadcrumbOf(line)) 'aRunStep'
+			return true
+		end 'aRunStep'
+	end 'eachLine'
+
+	return false
+end 'workerStartedARun'
 
 // A FINISHED job's drained lines reduced to what the record checks are entitled to count: the READY
 // terminator dropped, every breadcrumb dropped, everything else kept in order.
@@ -1515,7 +1551,7 @@ type PersistentWorkerHandle
 	// worker that selected a different set than the parent counted returns records the parent never
 	// asked for, and `resultsFromLines` panics. This list is this function's selection parameters; a new
 	// one joins it in the same edit.
-	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
+	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, pins HashPins) returns PersistentWorkerHandle throws SubprocessError
 		let argv = StringArray.create(0)
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
@@ -1539,7 +1575,10 @@ type PersistentWorkerHandle
 
 		argv.push("{WorkerRunDirFlagPrefix}{specRunWorkingDir().filename()}")
 
-		let child = try StreamingSubprocess.spawn(Executable.path(harnessExe), arguments: argv)
+		let hashPinOverrides = EnvMap.create()
+		pins.addTo(hashPinOverrides)
+
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(harnessExe), arguments: argv, workingDirectory: WorkingDirectory.inherit, environment: Environment.inheritUpdating(hashPinOverrides))
 		let stdout = try child.takeStdout()
 		let stderr = try child.takeStderr()
 		let output = spawn WorkerOutput.create(stdout)
@@ -1760,11 +1799,17 @@ end 'deadWorkerStderr'
 // the reason: rerouting a dead worker's job to a surviving one would turn a hard bug into an
 // intermittently green suite. Failing it keeps the bug loud AND keeps the other ~200 specs reporting,
 // which holds a compiler panic's cost at one named FAIL rather than the whole run.
-function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArray
+function deadJobResults(plan SpecPlan, reason String, pins HashPins, startedARun bool) returns SpecTestResultArray
 	let results = SpecTestResultArray.create(plan.testNames.count(), zeroed: false)
 
-	for testName in plan.testNames 'eachTest'
-		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason)))
+	for (iter, testName) in plan.testNames.withIterator() 'eachTest'
+		var phase = HashPinsAtFailure.compilerOnly
+
+		if startedARun 'aProgramMayHaveRun'
+			phase = try plan.pinsIfDead.get(iter.index()) otherwise panic("deadJobResults: the plan of {plan.specName} holds one pin phase per test name")
+		end 'aProgramMayHaveRun'
+
+		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: outcomeNamingHashPins(TestOutcome.fail(reason), runPins: pins, phase: phase)))
 	end 'eachTest'
 
 	return results
@@ -1987,13 +2032,7 @@ function requireWorkerExitDecodeHolds()
 	checkParentKillReportsNoCode(broken)
 	checkDeadJobReasonCarriesTheCode(broken)
 
-	if broken.isEmpty() 'everyRowHeld'
-		return
-	end 'everyRowHeld'
-
-	// `panic` takes a string literal (a `let`-bound String is rejected), so the list is interpolated.
-	let report = indentedList(broken, indent: BrokenExitRowIndent)
-	panic("SpecWorkerPool: {broken.count()} row(s) of the worker exit-status decode no longer hold. A worker that dies leaves its exit code and nothing else, so a decode that has stopped agreeing with the OS turns every death into the same unattributable wall of FAILs.{report}")
+	requireEveryRowHeld(broken, headline: "SpecWorkerPool: {broken.count()} row(s) of the worker exit-status decode no longer hold. A worker that dies leaves its exit code and nothing else, so a decode that has stopped agreeing with the OS turns every death into the same unattributable wall of FAILs.", indent: BrokenExitRowIndent)
 end 'requireWorkerExitDecodeHolds'
 
 // How deep one failing row sits under the sentence that introduces it — `SpecVerdictSelfTest`'s depth,
@@ -2039,6 +2078,52 @@ function checkDeadJobReasonCarriesTheCode(broken StringArray)
 
 	broken.push("the per-test FAIL reason for a worker that died reads '{reason}', which does not carry its exit status. A filtered re-run shows only these lines.\n")
 end 'checkDeadJobReasonCarriesTheCode'
+
+let SelfTestCompilerPinLine = "    MAXON_HASH_SEED=aaaaaaaaaaaaaaaa MAXON_HASH_TIER=software"
+let SelfTestProgramPinLine = "    program: MAXON_HASH_SEED=1111111111111111 MAXON_HASH_TIER=software"
+let SelfTestRunSeed = "aaaaaaaaaaaaaaaa"
+let SelfTestCaseSeed = "1111111111111111"
+let SelfTestStepLabel = "a-spec/a-case"
+
+function requireDeadJobPinsHold()
+	let broken = StringArray.create(0)
+
+	let runPins = HashPins.create(SelfTestRunSeed, tier: String.from(HashTierSoftwareName))
+	let caseAssignments = SpecEnvAssignmentArray.create(1, zeroed: false)
+	caseAssignments.push(SpecEnvAssignment.create(hashSeedVariable(), value: SelfTestCaseSeed))
+
+	let plan = SpecPlan.create("a-spec", runs: SpecRuns.shared, testNames: StringArray from ["a-case"], pinsIfDead: HashPinsAtFailureArray from [HashPinsAtFailure.eitherPhase(caseAssignments)], weight: 1)
+
+	let compileLine = workerStepLine(WorkerStep.compile, label: SelfTestStepLabel)
+	let runLine = workerStepLine(WorkerStep.run, label: SelfTestStepLabel)
+	let compileOnly = StringArray from [compileLine]
+	let compileThenRun = StringArray from [compileLine, runLine]
+
+	checkDeadJobEndsWith(broken, plan: plan, runPins: runPins, lines: compileOnly, expected: SelfTestCompilerPinLine, what: "a worker that died after COMPILE and before any RUN")
+	checkDeadJobEndsWith(broken, plan: plan, runPins: runPins, lines: compileThenRun, expected: "{SelfTestCompilerPinLine}\n{SelfTestProgramPinLine}", what: "a worker that died after a RUN step began")
+
+	requireEveryRowHeld(broken, headline: "SpecWorkerPool: {broken.count()} row(s) of the dead-job pin report no longer hold. A job a worker died in names the pins of the phase that could have killed it, and a pair that disagrees with what ran sends the reader to reproduce a failure under values it never saw.", indent: BrokenExitRowIndent)
+end 'requireDeadJobPinsHold'
+
+function checkDeadJobEndsWith(broken StringArray, plan SpecPlan, runPins HashPins, lines StringArray, expected String, what String)
+	let results = deadJobResults(plan, reason: "a-reason", pins: runPins, startedARun: workerStartedARun(lines))
+	let first = try results.get(0) otherwise panic("checkDeadJobEndsWith: a plan of one test yields one result")
+
+	match first.outcome 'outcome'
+		fail(reason) then noteReasonUnless(broken, reason: reason, endsWith: expected, what: what)
+		pass or
+		skipped or
+		notRunHere then broken.push("the dead job of {what} did not fail.\n")
+	end 'outcome'
+end 'checkDeadJobEndsWith'
+
+function noteReasonUnless(broken StringArray, reason String, endsWith String, what String)
+	if reason.endsWith(endsWith) 'holds'
+		return
+	end 'holds'
+
+	broken.push("the FAIL of {what} reads '{reason}', and does not end with the pin lines it owes:\n{endsWith}\n")
+end 'noteReasonUnless'
 
 // Report a dead worker ONCE: which job, what it was in the middle of, and everything the worker
 // managed to say. The per-test FAIL reasons are one line each; this is where the stack trace is.
@@ -2220,6 +2305,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 
 	// A worker death is not reproducible on demand, so the exit-status decode is what can be gated.
 	requireWorkerExitDecodeHolds()
+	requireDeadJobPinsHold()
 
 	let suitePlan = try buildPlans(specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	let plans = suitePlan.plans
@@ -2258,7 +2344,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		poolSize = jobCount as WorkerCount
 	end 'moreWorkersThanJobs'
 
-	let workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	let pins = HashPins.forRun(hashTierFor(effectiveTarget, launcher: HashTierLauncher.specLane))
+	let workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, pins: pins)
 
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
@@ -2411,7 +2498,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				let workerExit = (try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")).exitAfterDeath(killedByDeadline)
 				reportDeadWorker(try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction"), specName: job.specName, lastStep: lastStep, exit: workerExit)
 
-				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(workerId, specName: job.specName, lastStep: lastStep, exit: workerExit))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
+				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(workerId, specName: job.specName, lastStep: lastStep, exit: workerExit), pins: pins, startedARun: workerStartedARun(lines))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
 
 				// ⚠ THE CPU TALLY MUST COVER THESE TESTS TOO. `runSpecPool`'s own cross-check requires
 				// exactly one reading per reported test, and a job that printed no WORKER_JOB_CPU record
@@ -2422,7 +2509,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				// The dead handle is released HERE and the slot given a fresh worker, so `shutdownPool`
 				// neither shuts down a corpse nor counts it twice: the death is tallied once, now.
 				releaseAfterDeath(try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction"))
-				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
+				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, pins: pins)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
 
 				deadWorkers = deadWorkers + 1
@@ -2612,11 +2699,11 @@ end 'settleRunWorkingDir'
 // A worker that cannot be spawned, or that says anything other than WORKER_READY, is a PANIC.
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
-function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
+function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, pins HashPins) returns PersistentWorkerHandleArray
 	let workers = PersistentWorkerHandleArray.create(count as ElementIndex, zeroed: false)
 
 	for i in 0 upto count as ElementIndex 'spawnPhase'
-		workers.push(spawnWorker(harnessExe, workerId: i as WorkerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
+		workers.push(spawnWorker(harnessExe, workerId: i as WorkerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, pins: pins))
 	end 'spawnPhase'
 
 	for i in 0 upto count as ElementIndex 'readyPhase'
@@ -2629,8 +2716,8 @@ end 'spawnPool'
 // ONE worker's spawn, without its hello — the half `spawnPool` fires N of and a respawn fires one of.
 // Shared so the command line a worker is launched with, and the sentence a failure to launch it
 // prints, exist once.
-function spawnWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	return try PersistentWorkerHandle.spawnNoWait(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'spawnFailed'
+function spawnWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, pins HashPins) returns PersistentWorkerHandle
+	return try PersistentWorkerHandle.spawnNoWait(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, pins: pins) otherwise (e) 'spawnFailed'
 		panic("spec worker pool: could not spawn worker {workerId}: {e.displayReason()}")
 	end 'spawnFailed'
 end 'spawnWorker'
@@ -2650,8 +2737,8 @@ end 'awaitWorkerHello'
 // It keeps the DEAD worker's id, deliberately. The id is a SLOT number everywhere it is read (the
 // wedge report indexes by it, and so does every message), so minting a new one would make the report
 // stop lining up with the pool it describes.
-function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	let handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, pins HashPins) returns PersistentWorkerHandle
+	let handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, pins: pins)
 	awaitWorkerHello(handle)
 	return handle
 end 'spawnReadyWorker'

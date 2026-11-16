@@ -1,0 +1,77 @@
+typealias Score = int(0 to 1000)
+
+enum Colour
+	red
+	green
+	blue
+end 'Colour'
+
+enum Planet
+	mercury
+	venus
+	earth
+end 'Planet'
+
+enum Mineral
+	quartzite
+	feldspar
+	obsidian
+end 'Mineral'
+
+union Reading
+	missing
+	celsius(degrees Score)
+	label(text String)
+end 'Reading'
+
+type Inventory
+	let names as StringArray
+	let owner as String
+
+	static function create(owner String) returns Inventory
+		return Self{names: StringArray.create(0), owner: owner}
+	end 'create'
+end 'Inventory'
+
+function main() returns ExitCode
+	let given = CommandLine.args().count() as Score
+	let wide = given > 5
+	let colour = try Colour.fromRawValue(given) otherwise Colour.red
+	let planet = try Planet.fromName("venus" if wide else "earth") otherwise Planet.mercury
+	let weekday = try Weekday.fromRawValue(given + 1) otherwise Weekday.monday
+	let suit = try Suit.fromName("hearts" if wide else "spades") otherwise Suit.clubs
+	let bare = try Reading.fromName("missing" if wide else "label") otherwise Reading.missing
+	let reading = try Reading.fromName("celsius", given) otherwise bare
+	let shelf = Shelf.create("left" if wide else "right")
+	let inventory = Inventory.create("owner {given}")
+	inventory.names.push(shelf.label)
+	shelf.items.push(inventory.owner)
+
+	let stoneHead = "feld" if wide else "obsid"
+	let stoneTail = "spar" if wide else "ian"
+	let mineral = try Mineral.fromName("{stoneHead}{stoneTail}") otherwise Mineral.quartzite
+	let reedHead = "sack" if wide else "crum"
+	let reedTail = "but" if wide else "horn"
+	let instrument = try Instrument.fromName("{reedHead}{reedTail}") otherwise Instrument.theorbo
+
+	let crate = Crate.create("crate {given}")
+	crate.contents.push(shelf.label)
+	let pallet = Pallet.create("dock {given}")
+	pallet.crates.push(crate.clone())
+	let manifest = Manifest.create(pallet.clone())
+	manifest.cargo.push(Cargo.boxed(crate.clone()))
+	manifest.cargo.push(Cargo.stacked(pallet.clone()))
+	manifest.cargo.push(Cargo.loose(inventory.owner))
+	let copied = manifest.clone()
+
+	let degrees = match reading 'read'
+		celsius(d) gives d
+		label gives 2
+		missing gives 1
+	end 'read'
+
+	let ordinals = (colour.ordinal + planet.ordinal + weekday.ordinal + suit.ordinal + mineral.ordinal + instrument.ordinal) as Score
+	let held = (inventory.names.count() + shelf.items.count() + copied.cargo.count() + copied.pallet.crates.count()) as Score
+
+	return (ordinals + degrees + held) as ExitCode
+end 'main'

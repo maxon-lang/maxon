@@ -4520,7 +4520,7 @@ function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreShape
 		return RuntimeStoreShape.intoAnyOperand
 	end 'noRosterEntryWearsThisShape'
 
-	if effectFreeRuntimeCallee(callee) or takesRecordsOutCallee(callee) or copiesItsSourceCallee(callee) or isHardwareAesRuntimeCallee(callee) 'storesNothingItWasHanded'
+	if effectFreeRuntimeCallee(callee) or takesRecordsOutCallee(callee) or copiesItsSourceCallee(callee) or isHardwareCryptoRuntimeCallee(callee) 'storesNothingItWasHanded'
 		return RuntimeStoreShape.nothing
 	end 'storesNothingItWasHanded'
 
@@ -4627,12 +4627,12 @@ function rawResourceWritingCallee(callee ByteArray) returns bool
 end 'rawResourceWritingCallee'
 
 // The operand a call to a runtime callee writes: its receiver, or for a hardware AES callee the operand
-// `AesWrittenOperandPosition` names, which is where the parser notes write-blame. `EffectSummary` asks
+// `HardwareCryptoWrittenOperandPosition` names, which is where the parser notes write-blame. `EffectSummary` asks
 // here so that both agree.
 function writtenOperandOf(callee ByteArray) returns ParamCount
-	if isHardwareAesRuntimeCallee(callee) 'aesCipher'
-		return AesWrittenOperandPosition as ParamCount
-	end 'aesCipher'
+	if isHardwareCryptoWriterCallee(callee) 'hardwareCrypto'
+		return HardwareCryptoWrittenOperandPosition as ParamCount
+	end 'hardwareCrypto'
 
 	return ReceiverParamPosition
 end 'writtenOperandOf'
@@ -4647,7 +4647,7 @@ function receiverWritingRuntimeCallee(callee ByteArray) returns bool
 		removesElements or
 		writesRawElements or
 		movesLayout gives true
-		notOne gives listMutatorCallee(callee) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName) or isHardwareAesRuntimeCallee(callee)
+		notOne gives listMutatorCallee(callee) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName) or isHardwareCryptoWriterCallee(callee)
 	end 'mutation'
 end 'receiverWritingRuntimeCallee'
 
@@ -4662,13 +4662,13 @@ function ownershipBookkeepingCallee(callee ByteArray) returns bool
 end 'ownershipBookkeepingCallee'
 
 function containerReadCallee(callee ByteArray) returns bool
-	return isWordGetCallee(callee) or callee.equals(ManagedCreateName) or isManagedSizedCreateCallee(callee) or callee.equals(ManagedMemCreateName) or callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedSlotUnfilledName) or callee.equals(ManagedFirstName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedEqName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or callee.equals(ManagedCursorCreateName) or callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorIndexName) or callee.equals(ManagedCursorPeekName) or callee.equals(ListCreateName) or callee.equals(ListCountName) or callee.equals(ListIsEmptyName) or callee.equals(ListNodeValueName) or callee.equals(ListHeadCheckedName) or callee.equals(ListTailCheckedName) or callee.equals(ListNodeNextCheckedName) or callee.equals(ListNodePrevCheckedName) or callee.equals(StrEqName) or callee.equals(StrBytesViewName) or callee.equals(StrToBytesName) or callee.equals(StrFromBytesName) or callee.equals(StrOfBufferName)
+	return isWordGetCallee(callee) or callee.equals(ManagedCreateName) or isManagedSizedCreateCallee(callee) or callee.equals(ManagedMemCreateName) or callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedSlotUnfilledName) or callee.equals(ManagedFirstName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedEqName) or isManagedArrayHashCallee(callee) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or callee.equals(ManagedCursorCreateName) or callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorIndexName) or callee.equals(ManagedCursorPeekName) or callee.equals(ListCreateName) or callee.equals(ListCountName) or callee.equals(ListIsEmptyName) or callee.equals(ListNodeValueName) or callee.equals(ListHeadCheckedName) or callee.equals(ListTailCheckedName) or callee.equals(ListNodeNextCheckedName) or callee.equals(ListNodePrevCheckedName) or callee.equals(StrEqName) or callee.equals(StrBytesViewName) or callee.equals(StrToBytesName) or callee.equals(StrFromBytesName) or callee.equals(StrOfBufferName)
 end 'containerReadCallee'
 
 // ⭐ **A VALUE IN, A VALUE OUT.** A Unicode table lookup, an enum's name/raw-value lookup, a `Character`
 // primitive, a number's decimal rendering: each answers from its arguments and a `.rdata` table.
 function pureComputationCallee(callee ByteArray) returns bool
-	return isUcdRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee) or checkedDivisionExpansion(callee) or callee.equals(CharAtName) or callee.equals(CharAsciiValueName) or callee.equals(CharCmpName) or callee.equals(CharFromCodepointName) or callee.equals(IntToStringName) or callee.equals(UIntToStringName) or callee.equals(BoolToStringName)
+	return isUcdRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee) or checkedDivisionExpansion(callee) or callee.equals(CharAtName) or callee.equals(CharAsciiValueName) or callee.equals(CharCmpName) or callee.equals(CharFromCodepointName) or callee.equals(IntToStringName) or callee.equals(UIntToStringName) or callee.equals(BoolToStringName) or isHashRuntimeCallee(callee)
 end 'pureComputationCallee'
 
 // A checked divide or modulo is arithmetic behind a guard: two of the three kinds raise on a zero divisor and

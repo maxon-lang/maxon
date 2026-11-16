@@ -3107,7 +3107,7 @@ end 'emitCurrentThreadOrZero'
 // A word union's `__destruct_<U>(word)` masks the pointer out of the word and switches on the
 // stored tag; its retain twin `__uretain_<U>(word)` is synthesized when the module references it.
 export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
-	for (_, layout) in project.enumTypes 'each'
+	for layout in enumLayoutsInNameOrder(project) 'each'
 		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout) 'noManaged'
 			continue
 		end 'noManaged'
@@ -3319,13 +3319,9 @@ function payloadFieldCascades(layout EnumLayout, field PayloadField, project Pro
 
 	let name = try project.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("payloadFieldCascades: the payload type id is not in the project interner")
 
-	for entry in structRuntimeRoster(project, signatures: signatures) 'eachStruct'
-		if entry.layout.name.equals(name) 'theStruct'
-			return structManagedFieldCascades(entry.layout, typeNames: entry.typeNames, signatures: signatures, action: action)
-		end 'theStruct'
-	end 'eachStruct'
+	let entry = try structRosterEntryNamed(project, signatures: signatures, name: name) otherwise panic("payloadFieldCascades: the payload struct '{String.from(name)}' is in no struct roster; unboxedPayloadShapeOf admits only a declared struct or a base-layout instance")
 
-	panic("payloadFieldCascades: the payload struct '{String.from(name)}' is in no struct roster; unboxedPayloadShapeOf admits only a declared struct or a base-layout instance")
+	return structManagedFieldCascades(entry.layout, typeNames: entry.typeNames, signatures: signatures, action: action)
 end 'payloadFieldCascades'
 
 function synthesizeUnboxedUnionWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
@@ -3412,7 +3408,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 		declareStructLayoutDropNeeds(usage, entry: entry, signatures: signatures)
 	end 'eachStruct'
 
-	for (_, layout) in project.enumTypes 'eachUnion'
+	for layout in enumLayoutsInNameOrder(project) 'eachUnion'
 		if usage.neededDestructors.contains(destructorSymbol(layout.name)) 'referenced'
 			usage.usesHeap = true
 			declareUnionPayloadDropNeeds(usage, layout: layout, project: project, signatures: signatures)
@@ -3665,7 +3661,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 		work.register(dictionaryDestructorSymbol(entry.layout.name), node: CascadeNode.structLayoutDictionary(entry))
 	end 'eachStruct'
 
-	for (_, layout) in project.enumTypes 'eachUnion'
+	for layout in enumLayoutsInNameOrder(project) 'eachUnion'
 		work.register(destructorSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
 	end 'eachUnion'
 
@@ -3956,51 +3952,6 @@ function installOneStructRuntimeEntry(module StdModule, entry StructRosterEntry,
 		shareWalk then installOneStructCascade(module, layout: entry.layout, typeNames: entry.typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.shareWalk)
 	end 'entry'
 end 'installOneStructRuntimeEntry'
-
-// ⭐⭐ **THE ONE ROSTER OF LAYOUTS A PER-STRUCT RUNTIME ENTRY MAY BE SYNTHESIZED FOR — TWO REGISTRIES, ONE
-// DERIVATION.** Every per-struct walk — the installers and the cascade-need walks alike —
-// must agree about WHICH LAYOUTS EXIST, and the way they came to disagree is that each spelled the walk
-// itself; a missing body is `bakeFuncAbs64Relocs: … it was never installed`, a BACKEND PANIC rather than a
-// diagnostic. What stays per-entry is the ADMISSION TEST, which is genuinely different
-// (`installOneStructDestructor` gates on a managed field, `installOneStructCascade` deliberately does not).
-//
-// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED
-// ONE.** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
-// ARTIFACT's own layouts, so it holds every tuple the source SPELLS and no tuple minted by SUBSTITUTION —
-// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE, straight into the
-// whole-program index. The parser emits the drop call either way, so a substituted tuple missing
-// here is a BACKEND panic (`resolveCallFixups: call to unknown function '__destruct___Tuple2…'`)
-// rather than a leak.
-//
-// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED; THIS WALK MUST NOT OWN ALL TUPLES.**
-// The two registries are NOT two views of one table for a tuple: a sweep key is `(spelling, file)`
-// and only a CANONICAL name is a whole-program identity, so the index can hold a layout whose
-// elements were resolved in a different file's scope from the one `commitStructTypes` committed.
-// The project's entry is the authoritative resolved one wherever it exists; this walk supplies only
-// what nothing committed.
-//
-// ⚠⚠ **THE TWO REGISTRIES HAND OVER LAYOUTS FROM TWO NAME SPACES, AND THE INTERNER TRAVELS WITH THE
-// LAYOUT (`StructRosterEntry`).** A `project.structTypes` layout's field-type ids index `project.typeNames`;
-// an INTERNED TUPLE comes out of the signature index and its ids index that index's table. Resolving both
-// against the project's misreads them — see `ProgramSignatures.indexTypeNames` for the panic it produced on
-// this compiler's own source, and for why a misread that happens to land on a declared type is worse.
-export function structRuntimeRoster(project Project, signatures ProgramSignatures) returns StructRosterEntryArray
-	let roster = StructRosterEntryArray.create(0)
-
-	for (_, layout) in project.structTypes 'eachCommitted'
-		roster.push(StructRosterEntry.create(layout, typeNames: project.typeNames))
-	end 'eachCommitted'
-
-	let indexTypeNames = signatures.indexTypeNames()
-
-	for layout in signatures.tupleLayouts() 'eachInternedTuple'
-		if not project.structTypes.contains(layout.name) 'notCommitted'
-			roster.push(StructRosterEntry.create(layout, typeNames: indexTypeNames))
-		end 'notCommitted'
-	end 'eachInternedTuple'
-
-	return roster
-end 'structRuntimeRoster'
 
 // One layout's cascade, or nothing when it is unreferenced or owns nothing droppable.
 function installOneStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, needed DestructorSet)
@@ -4516,7 +4467,7 @@ export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures
 		work.register(perTypeCascadeSymbol(action, typeName: entry.layout.name), node: CascadeNode.structLayout(entry))
 	end 'eachStruct'
 
-	for (_, layout) in project.enumTypes 'eachUnion'
+	for layout in enumLayoutsInNameOrder(project) 'eachUnion'
 		work.register(perTypeCascadeSymbol(action, typeName: layout.name), node: CascadeNode.declaredUnion(layout))
 	end 'eachUnion'
 
@@ -4734,7 +4685,7 @@ function installUnionCascades(module StdModule, project Project, signatures Prog
 		return
 	end 'noneReferenced'
 
-	for (_, layout) in project.enumTypes 'each'
+	for layout in enumLayoutsInNameOrder(project) 'each'
 		if needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'referenced'
 			module.spans.current = sourceSpanOf(project, filePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
 			synthesizeUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)

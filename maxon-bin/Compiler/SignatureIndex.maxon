@@ -719,7 +719,7 @@ function mixDeclaredConformances(state HashDigest, conformsTo NameRoster, shape 
 	var out = state
 
 	for name in conformsTo 'eachConformance'
-		out = mixBytes(Hasher.combined(out, value: shape), bytes: name)
+		out = mixBytes(KeyedHasher.combined(out, value: shape), bytes: name)
 	end 'eachConformance'
 
 	return out
@@ -739,7 +739,7 @@ function namesNotYetDeclared(declared NameRoster, extra NameRoster) returns Name
 end 'namesNotYetDeclared'
 
 function mixVisibilityTier(state HashDigest, visibility Visibility) returns HashDigest
-	return Hasher.combined(state, value: tierOrdinal(visibility) as HashDigest)
+	return KeyedHasher.combined(state, value: tierOrdinal(visibility) as HashDigest)
 end 'mixVisibilityTier'
 
 // Visibility verdicts read the declaring FILE as well as the tier, so a declaration that moves to
@@ -3904,10 +3904,10 @@ function mixImageBoxTree(state HashDigest, nodes ImmortalBoxNodeArray, root Elem
 	end 'notBelowItsNamer'
 
 	let node = try nodes.get(root) otherwise panic("mixImageBoxTree: node id {root} is outside a {nodes.count()}-entry arena — the walk that built it answers with a root it appended")
-	var mixed = Hasher.combined(mixBytes(state, bytes: node.bytes), value: node.columns.count() as HashDigest)
+	var mixed = KeyedHasher.combined(mixBytes(state, bytes: node.bytes), value: node.columns.count() as HashDigest)
 
 	for column in node.columns 'eachSlot'
-		mixed = mixImageBoxSlot(Hasher.combined(mixed, value: column.offset as HashDigest), nodes: nodes, below: root, value: column.value)
+		mixed = mixImageBoxSlot(KeyedHasher.combined(mixed, value: column.offset as HashDigest), nodes: nodes, below: root, value: column.value)
 	end 'eachSlot'
 
 	return mixed
@@ -3917,8 +3917,8 @@ end 'mixImageBoxTree'
 // whole subtree, recursed through the door above under the bound that door enforces.
 function mixImageBoxSlot(state HashDigest, nodes ImmortalBoxNodeArray, below ElementIndex, value ImmortalBoxSlotValue) returns HashDigest
 	return match value 'slot'
-		emptyArray(elementSize, elementDestroy) gives mixOwnershipCallee(Hasher.combined(Hasher.combined(state, value: SignatureDiscriminator.imageBoxSlotShapeEmptyArray), value: elementSize as HashDigest), callee: elementDestroy)
-		box(child) gives mixImageBoxTree(Hasher.combined(state, value: SignatureDiscriminator.imageBoxSlotShapeNestedBox), nodes: nodes, root: child, below: below)
+		emptyArray(elementSize, elementDestroy) gives mixOwnershipCallee(KeyedHasher.combined(KeyedHasher.combined(state, value: SignatureDiscriminator.imageBoxSlotShapeEmptyArray), value: elementSize as HashDigest), callee: elementDestroy)
+		box(child) gives mixImageBoxTree(KeyedHasher.combined(state, value: SignatureDiscriminator.imageBoxSlotShapeNestedBox), nodes: nodes, root: child, below: below)
 	end 'slot'
 end 'mixImageBoxSlot'
 
@@ -4067,24 +4067,22 @@ end 'cacheReadTypeParamPositionArray'
 // every build. It is `tupleElementTokenFor`'s mechanism on the sibling problem — read that
 // function for the collision argument, which is this one's too.
 //
-// ⭐ **THE JOIN IS `mixBytes`' TRAILING LENGTH TAG, NOT A SEPARATOR CHARACTER**, and that is stronger than
-// a `#`: it is what keeps `("ab","c")` apart from `("a","bc")` (`ContentHash.mixBytes`, and
-// `mixInterfaceFormals` already spends it on exactly this shape). It also allocates NOTHING — no joined
-// String is built — which matters because this runs at every bare `T` in every generic body, in both the
-// sweep and the real parse.
+// ⭐ **THE JOIN IS THE FIRST NAME'S LENGTH, WHICH `outputDigestOfPair` LEADS THE MESSAGE WITH, NOT A
+// SEPARATOR CHARACTER**, and that is stronger than a `#`: it is what keeps `("ab","c")` apart from
+// `("a","bc")`.
 //
 // ⚠ **64 BITS IS LOAD-BEARING AND IS WRITTEN DOWN HERE.** At N = 10^4 distinct type parameters,
 // P(collision) ≈ N²/2^65 ≈ 5×10⁻¹²; a 40-bit digest would be ≈ 5×10⁻⁵ — a number a real program can hit.
 // Do not narrow it, and note that a collision is DETECTED rather than assumed:
 // `ProgramSignatures.recordTypeParamToken` stops the compile on one.
 function typeParamTokenFor(declaringTypeName ByteArray, paramName ByteArray) returns TypeParamId
-	// ⭐⭐ **MASKED TO 63 BITS SO THE TOKEN FITS THE ID COLUMN IT RIDES.** An FNV digest sets bit 63 about
+	// ⭐⭐ **MASKED TO 63 BITS SO THE TOKEN FITS THE ID COLUMN IT RIDES.** A digest sets bit 63 about
 	// half the time, and a `typeParameter` value travels the same `nameId` column as an interned
 	// `TypeNameId` and a `GenericInstanceId` — both dense COUNTERS. Widening that column to admit a
 	// negative would have made three id types unguarded to carry one hash; narrowing the hash keeps all
 	// three checked quantities. 63 bits is the same collision argument 64 was: these tokens are compared
 	// for equality within one declaration's handful of parameters, never ordered and never packed.
-	return mixBytes(mixBytes(Hasher.empty(), bytes: declaringTypeName), bytes: paramName) and i64.max
+	return outputDigestOfPair(declaringTypeName, second: paramName) and i64.max
 end 'typeParamTokenFor'
 
 // ⭐ **WHICH POSITION IN `declarationName`'s OWN `uses` LIST THE TOKEN `token` NAMES — the door for a caller
@@ -4726,8 +4724,8 @@ end 'ForwardCall'
 // here rather than hashing as an existing one.
 function foldCallability(state HashDigest, callability DeclCallability) returns HashDigest
 	return match callability 'c'
-		freeFunction gives Hasher.combined(state, value: SignatureDiscriminator.freeFunctionDecl)
-		methodOf(typeName) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.methodDecl), bytes: typeName)
+		freeFunction gives KeyedHasher.combined(state, value: SignatureDiscriminator.freeFunctionDecl)
+		methodOf(typeName) gives mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.methodDecl), bytes: typeName)
 	end 'c'
 end 'foldCallability'
 
@@ -6084,13 +6082,13 @@ function noteRequirementByRefMasks(iface IrInterface, signatures ProgramSignatur
 end 'noteRequirementByRefMasks'
 
 function witnessByRefMasksDigest(masks WitnessByRefMaskMap) returns HashDigest
-	var members = Hasher.empty()
+	var members = startDigest()
 
 	for (key, mask) in masks 'eachMask'
-		members = members xor mixBytes(Hasher.combined(Hasher.empty(), value: mask as HashDigest), bytes: key)
+		members = members xor mixBytes(KeyedHasher.combined(startDigest(), value: mask as HashDigest), bytes: key)
 	end 'eachMask'
 
-	return Hasher.combined(Hasher.combined(Hasher.empty(), value: members), value: masks.count() as HashDigest)
+	return KeyedHasher.combined(KeyedHasher.combined(startDigest(), value: members), value: masks.count() as HashDigest)
 end 'witnessByRefMasksDigest'
 
 function noteDeclarationSiteOfKey(sitesOfKey DeclarationSitesByKeyMap, name ByteArray, site ByteArray)
@@ -7807,11 +7805,6 @@ export enum ArrayBitwiseKind
 	floatHashOnly
 end 'ArrayBitwiseKind'
 
-let EightBitElementBytes = 1
-let SixteenBitElementBytes = 2
-let ThirtyTwoBitElementBytes = 4
-let SixtyFourBitElementBytes = 8
-
 enum ArrayElementClass
 	notBitwise
 	integer
@@ -8333,10 +8326,10 @@ function mixSurface(state HashDigest, surface DeclaredSurface) returns HashDiges
 	var h = state
 
 	for node in surface 'eachNode'
-		h = Hasher.combined(h, value: node as HashDigest)
+		h = KeyedHasher.combined(h, value: node as HashDigest)
 	end 'eachNode'
 
-	return Hasher.combined(h, value: surface.count() as HashDigest)
+	return KeyedHasher.combined(h, value: surface.count() as HashDigest)
 end 'mixSurface'
 
 export type ProgramSignatures
@@ -8650,7 +8643,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{ownSettled: OwnedDeclarations.held(SettledDeclarations.create(os)), sharedSettled: freeze SettledDeclarations.unused(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), uniqueTypeAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(0), byRefNamesPublished: false, deepCloneAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, freshReturnForwardsClosed: false, nameEventsFolded: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), contestedAliasesDigest: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{ownSettled: OwnedDeclarations.held(SettledDeclarations.create(os)), sharedSettled: freeze SettledDeclarations.unused(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), uniqueTypeAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(0), byRefNamesPublished: false, deepCloneAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, freshReturnForwardsClosed: false, nameEventsFolded: false, forwardedStoresClosed: false, hash: startDigest(), hashSource: HashEventSource.whole, authorChainState: startDigest(), libraryChainState: startDigest(), wholeChainState: startDigest(), libraryHash: startDigest(), contestedAliasesDigest: startDigest(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	export static function overlayAllocations(declarations SettledDeclarationsCell, template IndexTemplateCell) returns AllocCount
@@ -8826,7 +8819,7 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, growthMemo: GrowthMemo.create(), descriptorReads: DescriptorReads.create(), mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, replyFreeTypes: BareNameSet.create(), someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, nameEventsFolded: f_nameEventsFolded, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: Hasher.empty(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, growthMemo: GrowthMemo.create(), descriptorReads: DescriptorReads.create(), mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, replyFreeTypes: BareNameSet.create(), someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, nameEventsFolded: f_nameEventsFolded, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: startDigest(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize640
@@ -9104,7 +9097,7 @@ let LivenessAuthorConformerConventions = 0x6A09E667F3BCC908
 let AliasFormSalt = 0x7F4A7C15D1E2B3A9
 
 function aliasFormDigest(name HashDigest, form TypeDeclKind) returns HashDigest
-	return Hasher.combined(Hasher.combined(name, value: AliasFormSalt), value: form.ordinal as HashDigest)
+	return KeyedHasher.combined(KeyedHasher.combined(name, value: AliasFormSalt), value: form.ordinal as HashDigest)
 end 'aliasFormDigest'
 
 function aliasFormsHoldAnotherForm(held HashDigestSet, name HashDigest, form TypeDeclKind) returns bool
@@ -9118,29 +9111,29 @@ function aliasFormsHoldAnotherForm(held HashDigestSet, name HashDigest, form Typ
 end 'aliasFormsHoldAnotherForm'
 
 function nameIsExcluded(name ByteArray, excluded HashDigestSet) returns bool
-	if excluded.contains(mixBytes(Hasher.empty(), bytes: name)) 'itself'
+	if excluded.contains(digestOfBytes(name)) 'itself'
 		return true
 	end 'itself'
 
 	let owner = try nameQualifierOf(name) otherwise return false
 
-	return excluded.contains(mixBytes(Hasher.empty(), bytes: owner))
+	return excluded.contains(digestOfBytes(owner))
 end 'nameIsExcluded'
 
 // A set's digest whatever order it iterates in: each member is digested alone and the digests are combined by
 // `xor`, which commutes.
 function nameSetDigest(names BareNameSet) returns HashDigest
-	var members = Hasher.empty()
+	var members = startDigest()
 
 	for name in names 'eachName'
-		members = members xor mixBytes(Hasher.empty(), bytes: name)
+		members = members xor digestOfBytes(name)
 	end 'eachName'
 
-	return Hasher.combined(members, value: names.count() as HashDigest)
+	return KeyedHasher.combined(members, value: names.count() as HashDigest)
 end 'nameSetDigest'
 
 function nameSetDigestBeyond(names BareNameSet, excluded BareNameSet, among BareNameSet) returns HashDigest
-	var members = Hasher.empty()
+	var members = startDigest()
 	var counted = 0 as Count
 
 	for name in names 'eachName'
@@ -9148,11 +9141,11 @@ function nameSetDigestBeyond(names BareNameSet, excluded BareNameSet, among Bare
 			continue
 		end 'aNameNoCorpusParseReads'
 
-		members = members xor mixBytes(Hasher.empty(), bytes: name)
+		members = members xor digestOfBytes(name)
 		counted = counted + 1
 	end 'eachName'
 
-	return Hasher.combined(members, value: counted as HashDigest)
+	return KeyedHasher.combined(members, value: counted as HashDigest)
 end 'nameSetDigestBeyond'
 
 let DeclarationSiteFieldSeparator = ":"
@@ -9167,7 +9160,7 @@ function declaringFileOfSite(site ByteArray) returns String
 end 'declaringFileOfSite'
 
 function mixNameSet(state HashDigest, names DescriptorNeedNameSet, excluding HashDigestSet) returns HashDigest
-	var members = Hasher.empty()
+	var members = startDigest()
 	var counted = 0 as Count
 
 	for name in names 'eachName'
@@ -9175,11 +9168,11 @@ function mixNameSet(state HashDigest, names DescriptorNeedNameSet, excluding Has
 			continue
 		end 'anExcludedName'
 
-		members = members xor mixBytes(Hasher.empty(), bytes: name)
+		members = members xor digestOfBytes(name)
 		counted = counted + 1
 	end 'eachName'
 
-	return Hasher.combined(Hasher.combined(state, value: members), value: counted as HashDigest)
+	return KeyedHasher.combined(KeyedHasher.combined(state, value: members), value: counted as HashDigest)
 end 'mixNameSet'
 
 // What `ProgramSignatures.settleBaseline` recorded: the scalars and append counts a restore puts
@@ -10261,7 +10254,7 @@ export type RowSetOverrideTable
 	export var digest as HashDigest
 
 	export static function create() returns RowSetOverrideTable
-		return Self{answers: RowSetAnswerMap.create(), digest: Hasher.empty()}
+		return Self{answers: RowSetAnswerMap.create(), digest: startDigest()}
 	end 'create'
 
 	function answerFor(key ByteArray) returns RowSetAnswer throws MapError
@@ -10292,19 +10285,19 @@ let RowSetHoldsMark = 0xD28FC63EB2B902F5 as HashDigest
 let RowSetFailsMark = 0x1F83D9ABFB41BD6B as HashDigest
 
 function rowSetEntryDigest(key ByteArray, answer RowSetAnswer) returns HashDigest
-	let keyed = mixBytes(Hasher.empty(), bytes: key)
+	let keyed = digestOfBytes(key)
 
 	match answer 'answer'
-		noInstance then return Hasher.combined(keyed, value: RowSetNoInstanceMark)
-		instance(site) then return mixInstantiationSite(Hasher.combined(keyed, value: RowSetWrittenMark), site: site)
-		holds(value) then return Hasher.combined(keyed, value: RowSetHoldsMark if value else RowSetFailsMark)
+		noInstance then return KeyedHasher.combined(keyed, value: RowSetNoInstanceMark)
+		instance(site) then return mixInstantiationSite(KeyedHasher.combined(keyed, value: RowSetWrittenMark), site: site)
+		holds(value) then return KeyedHasher.combined(keyed, value: RowSetHoldsMark if value else RowSetFailsMark)
 	end 'answer'
 end 'rowSetEntryDigest'
 
 function mixInstantiationSite(state HashDigest, site InstantiationSiteLookup) returns HashDigest
 	match site 'site'
-		unwritten then return Hasher.combined(state, value: RowSetUnwrittenMark)
-		written(anchor) then return Hasher.combined(Hasher.combined(mixBytes(state, bytes: anchor.filePath.toString().toByteArray()), value: anchor.nameLine as HashDigest), value: anchor.nameColumn as HashDigest)
+		unwritten then return KeyedHasher.combined(state, value: RowSetUnwrittenMark)
+		written(anchor) then return KeyedHasher.combined(KeyedHasher.combined(mixBytes(state, bytes: anchor.filePath.toString().toByteArray()), value: anchor.nameLine as HashDigest), value: anchor.nameColumn as HashDigest)
 	end 'site'
 end 'mixInstantiationSite'
 

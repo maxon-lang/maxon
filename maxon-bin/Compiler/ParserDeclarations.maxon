@@ -9600,7 +9600,7 @@ extension Parser
 		// ⭐⭐ **THE ONE PARAMETER FACT BOTH PASSES CAN MINT — see `FunctionTypeAlias.paramSpelling`.** Folded
 		// UNCONDITIONALLY, outside every `recordSignature` gate below, because the SWEEP's copy is the only one
 		// the whole-program index ever receives and the hash is the only thing this is for.
-		var paramSpelling = Hasher.empty()
+		var paramSpelling = startDigest()
 		let writtenNames = NameRoster.create(0)
 		let writtenEnds = WrittenTypeNameEnds.create(0)
 		var typeSites = DeclaredTypeSites.create() as isolated DeclaredTypeSites
@@ -9614,14 +9614,14 @@ extension Parser
 				// ⛔⛔ **THE BOUNDARY IS FOLDED HERE AND IT IS THE WHOLE ARITY.** Without it the digest is a flat
 				// fold of token texts in which the GROUPING — the only thing the separator means — is absent:
 				// `function(A, B)` (two parameters) and `function(A B)` (ONE parameter NAMED `A` of type `B`)
-				// fold the identical sequence and MEASURED the identical value, `-5381244596860584822` both ways,
+				// fold the identical sequence to the identical value,
 				// with the alias name and the return slot unchanged — so the alias's whole hash contribution
 				// collided across an edit that changes ARITY, which is what `checkIndirectCallArgs` refuses on and
 				// what `paramFloatMask` builds its register classes from. Widening the range over the comma does
 				// NOT fix it: a punctuator's text is empty (see `mixWrittenTokens`). It is folded AFTER each
 				// parameter rather than between them so the count of boundaries IS the count of parameters, which
 				// the tolerant sweep can supply without a counter it does not keep.
-				paramSpelling = Hasher.combined(self.mixWrittenTokens(paramSpelling, from: paramStart, to: self.pos), value: FunctionAliasParamBoundary)
+				paramSpelling = KeyedHasher.combined(self.mixWrittenTokens(paramSpelling, from: paramStart, to: self.pos), value: FunctionAliasParamBoundary)
 
 				if recordSignature 'collectParam'
 					// ⭐ REFUSED HERE, and `recordSignature` is what keeps the tolerant declaration sweep out of it: the

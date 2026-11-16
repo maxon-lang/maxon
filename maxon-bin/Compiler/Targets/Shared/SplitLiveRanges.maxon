@@ -4242,7 +4242,7 @@ type SplitDriver
 
 			match choice 'act'
 				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
-				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
+				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, cfg: self.cfg, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
 				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work)
 			end 'act'
 
@@ -8267,10 +8267,9 @@ end 'spillOneValue'
 // use to its last, per block), never Θ(the block).
 //
 // ⚠ BOTH ENDPOINTS ARE READ OUT OF THE USE RECORDS (`usePositionIn`), NOT SEARCHED FOR. Deriving a
-// use's position by scanning the block for its op index is the SAME FACT `bodyPositionOfUse` reads
-// straight out of the index, derived a second way — and a second derivation of a position is exactly
-// what this pass was rewritten to remove. Two of them cannot disagree loudly: one would pick a run
-// boundary from one notion of where a use is while the reload was spliced in at another.
+// use's position by scanning the block for its op index is the SAME FACT `usePositionIn` reads
+// straight out of the index, derived a second way. Two of them cannot disagree loudly: one would pick a
+// run boundary from one notion of where a use is while the reload was spliced in at another.
 //
 // ⚠ THE STRETCH BEFORE THE FIRST USE IN A BLOCK IS NOT SCANNED, AND MUST NOT BE. That use already
 // starts a run (`useIsInRun` breaks at a block boundary), so a clobber ahead of it decides nothing.
@@ -8545,18 +8544,11 @@ end 'usePositionIn'
 
 // ⭐⭐ **WHERE A RELOAD FOR AN *OP* USE GOES — AND THE TERMINATOR IS AN OP LIKE ANY OTHER.**
 // `usePositionIn`'s own header says so (*"a record there is an edge use, OR A USE THE TERMINATOR ITSELF
-// READS"*), and a `ret v` / `errorReturn v` is exactly that: the value's only reader in its block is the
-// block's last instruction. Such a use is anchored one past the body, where the body has no slot — so the
-// reload goes where an EDGE use's does, at the end of the body and ahead of a conditional branch if the
-// block has one. That position dominates the terminator, which is the whole requirement.
-//
-// ⛔⛔ **A PANIC HERE FIRES ON THE COMPILER'S OWN SOURCE** — *"use record 122 is anchored at position 4
-// of block 'tryok', whose body holds 4 op(s) — that position is the block's TERMINATOR, and a spill op
-// cannot be spliced after one"*. A spill may not go AFTER a terminator, but the position does not imply
-// one: `beforeBranchPosition` is the answer to where it goes instead. `bodyPositionOfUse` keeps its
-// refusal for the caller that genuinely
-// needs a body op (`rematerializeConstant` re-emits a constant BEFORE the op that reads it, and a
-// terminator has no "before" inside the body).
+// READS"*), and a jump table's index (`x64JumpTable` / `arm64JumpTable`) is exactly that: the value's only
+// reader in its block is the block's last instruction. Such a use is anchored one past the body, where the
+// body has no slot — so the reload, or a rematerialized constant, goes where an EDGE use's reload does, at
+// the end of the body and ahead of a conditional branch if the block has one. That position dominates the
+// terminator, which is the whole requirement.
 function opUseReloadPosition(index UseIndex, pressure PressureIndex, block IrBlock, record ElementIndex) returns ElementIndex
 	let blockLocal = index.useBlockAt(record)
 	let pos = usePositionIn(index, pressure: pressure, record: record)
@@ -8567,22 +8559,6 @@ function opUseReloadPosition(index UseIndex, pressure PressureIndex, block IrBlo
 
 	return pos
 end 'opUseReloadPosition'
-
-// The body position of an OP use, which must name a BODY op. The one position a record can carry
-// that the body does not hold is the block's TERMINATOR — run order numbers it one past the
-// body, and every EDGE use is anchored there — so reaching here with one is a caller that should have
-// gone to `beforeBranchPosition`. That is the same bug a search reports when it runs off the end of
-// the body.
-function bodyPositionOfUse(index UseIndex, pressure PressureIndex, record ElementIndex) returns ElementIndex
-	let pos = usePositionIn(index, pressure: pressure, record: record)
-	let blockLocal = index.useBlockAt(record)
-
-	if pos >= pressure.bodyOpCountOf(blockLocal) 'notABodyOp'
-		panic("bodyPositionOfUse: use record {record} is anchored at position {pos} of block {blockLocal}, whose body holds {pressure.bodyOpCountOf(blockLocal)} op(s) — that position is the block's TERMINATOR, and a spill op cannot be spliced after one")
-	end 'notABodyOp'
-
-	return pos
-end 'bodyPositionOfUse'
 
 // The body position at which an op runs after the whole body but on EVERY edge out of the
 // block: past the last real body op, but before the conditional branch when the block has one.
@@ -8645,7 +8621,7 @@ end 'spliceOp'
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
 // exactly when nothing reads it.
-function rematerializeConstant(module TargetModule, index UseIndex, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 
 	// The immediate AND which ISA's const op the original def is, read ONCE: the re-emit at each use
@@ -8684,7 +8660,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, valueId Valu
 
 			let useOpIdx = index.useOpAt(record)
 			let useBlockLocal = index.useBlockAt(record)
-			let usePos = bodyPositionOfUse(index, pressure: scratch.pressure, record: record)
+			let usePos = opUseReloadPosition(index, pressure: scratch.pressure, block: blockAt(module, topo: cfg.topo, local: useBlockLocal), record: record)
 
 			// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
 			// the one it replaces — x64's `constMaterializationOp` (not a second copy of the 32-vs-64-bit
@@ -9217,8 +9193,7 @@ end 'substituteValueInOp'
 //
 // It is O(block), so it is only for the anchors the `UseIndex` cannot answer for: a DEF site, which
 // carries no use record, and a block's conditional branch. Both are asked at most once per split. A
-// reload's anchor is a USE, and a use record already knows its own position — see `bodyPositionOfUse`,
-// which is what a per-insertion search here would cost.
+// reload's anchor is a USE, and a use record already knows its own position (`usePositionIn`).
 function positionInBlock(pressure PressureIndex, blockLocal ElementIndex, opIdx ElementIndex) returns ElementIndex
 	let bodyOps = pressure.bodyOpCountOf(blockLocal)
 

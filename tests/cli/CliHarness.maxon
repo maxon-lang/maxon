@@ -345,7 +345,19 @@ function freshOutsideCheckoutDirWithoutVendor(caseDirName String) returns FilePa
 	return dir
 end 'freshOutsideCheckoutDirWithoutVendor'
 
+type HeldCase
+	export let dir as FilePath
+
+	static function stagedAt(dir FilePath) returns HeldCase
+		return Self{dir: dir}
+	end 'stagedAt'
+end 'HeldCase'
+
+default HeldCase = HeldCase.stagedAt(Directory.currentPath())
+
 function requireHeldThenDiscard(dir FilePath, check OutsideCheckoutCase) throws TestFailure
+	HeldCase.register(HeldCase.stagedAt(dir))
+
 	try check.requireHeldIn(dir) otherwise (failure) 'failed'
 		discardStagedDir(dir)
 		throw failure
@@ -1625,7 +1637,8 @@ end 'entryWithEveryProducerMaskForged'
 
 function entryWithChecksumOfItsPayload(image ByteArray) returns ByteArray
 	let payload = try image.slice(EntryPayloadOffset, endIndex: image.count()) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
-	let checksum = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: payload), value: payload.count() as HashDigest)
+	let seed = storedHashSeedIn(libraryCacheDirIn(HeldCase.current().dir))
+	let checksum = KeyedHasher.combined(KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: payload), value: payload.count() as HashDigest)
 	let sealed = image.clone()
 
 	for position in 0 upto EntryWordByteCount 'eachByte'
@@ -1634,6 +1647,27 @@ function entryWithChecksumOfItsPayload(image ByteArray) returns ByteArray
 
 	return sealed
 end 'entryWithChecksumOfItsPayload'
+
+let HashSeedFileName = "hash-seed"
+
+function seedFilesIn(library FilePath) returns FilePathArray
+	let seeds = FilePathArray.create(0)
+
+	for file in filesUnder(library) 'eachFile'
+		if file.filename() == HashSeedFileName 'aSeed'
+			seeds.push(file)
+		end 'aSeed'
+	end 'eachFile'
+
+	return seeds
+end 'seedFilesIn'
+
+function storedHashSeedIn(library FilePath) returns HashSeed
+	let seeds = seedFilesIn(library)
+	let file = try seeds.get(0) otherwise panic("CliHarness: the gate could not run - the build left no `{HashSeedFileName}` under {library.toString()}.")
+
+	return try HashSeed.fromBytes(fileBytes(file)) otherwise panic("CliHarness: the gate could not run - {file.toString()} does not hold a hash seed.")
+end 'storedHashSeedIn'
 
 function entryWithAnotherSchema(image ByteArray) returns ByteArray
 	let first = try image.get(EntryFingerprintOffset) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
@@ -2479,3 +2513,307 @@ type LintOfATestProjectCase implements OutsideCheckoutCase
 		try Expect.equal(tested.exitCode(), expected: TestedCleanExit, message: "`maxon {TestCommandWord} {app.filename()}` of the `{self.fixture}` test project did not pass: the lint rules stay out of `maxon {TestCommandWord}`. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}")
 	end 'requireHeldIn'
 end 'LintOfATestProjectCase'
+
+let HashSeedVariable = "MAXON_HASH_SEED"
+let HashTierVariable = "MAXON_HASH_TIER"
+let HashTierAes = "aes"
+let HashTierSoftware = "software"
+let HashPinUnset = ""
+let HashSeedDigitCount = 16
+let LowerHexLetterFirst = 0x61
+let LowerHexLetterLast = 0x66
+let HashPinWordSeparator = " "
+
+let HashReportSpecName = "hash-report"
+let HashReportSpecFileName = "hash-report.md"
+let HashReportSpecDirName = "spec"
+let HashReportSpecPreamble = "---\nfeature: hash-report\n---\n\n# Hash report\n\n## Tests\n\n"
+let HashReportCaseResultBlocks = "```exitcode\n0\n```\n```stdout\nnever printed\n```\n\n"
+let HashReportProgramFixtureDirName = "tests/cli/fixtures/hash-report-program"
+let HashReportProgramFixtureFileName = "main.maxon.fixture"
+let HashReportProgramDirName = "app"
+let HashReportProgramOutputStem = "hash-report-program"
+let HashReportTestFixtureDirName = "tests/cli/fixtures/hash-report-test"
+let HashReportTestDirName = "hash-report-test"
+let HashReportPrintedPrefix = "env: "
+let HashReportPrintedHashLabel = " hash="
+let HashReportTestMessageLabel = "this process: "
+let HashReportTestChildLabel = "; a child: "
+
+let FailLinePrefix = "FAIL "
+let PassLinePrefix = "PASS "
+let SpecActualLinePrefix = "    actual:   "
+let SpecPinsLineIndent = "    "
+let TestHeadingPrefix = "FAIL  "
+let TestReceivedLinePrefix = "    received: "
+let TestMessageLinePrefix = "    message: "
+let TestPinsLineIndent = "  "
+
+type HashPins
+	export let seed as String
+	export let tier as String
+
+	static function create(seed String, tier String) returns HashPins
+		return Self{seed: seed, tier: tier}
+	end 'create'
+end 'HashPins'
+
+enum HashReportProgram
+	printsTheHash
+	uncompilable
+	passesAgainstAWrongIrPin
+end 'HashReportProgram'
+
+type HashReportCase
+	export let name as String
+	export let seed as String
+	export let tier as String
+	export let program as HashReportProgram
+
+	static function create(name String, seed String, tier String) returns HashReportCase
+		return Self{name: name, seed: seed, tier: tier, program: HashReportProgram.printsTheHash}
+	end 'create'
+
+	static function uncompilable(name String, seed String, tier String) returns HashReportCase
+		return Self{name: name, seed: seed, tier: tier, program: HashReportProgram.uncompilable}
+	end 'uncompilable'
+
+	static function passingAgainstAWrongIrPin(name String, seed String, tier String) returns HashReportCase
+		return Self{name: name, seed: seed, tier: tier, program: HashReportProgram.passesAgainstAWrongIrPin}
+	end 'passingAgainstAWrongIrPin'
+end 'HashReportCase'
+
+let HashReportUncompilableProgram = "function main() returns ExitCode\n\treturn notAnExitCode\nend 'main'\n"
+let HashReportQuietProgram = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let HashReportWrongIrPinBlocks = "```exitcode\n0\n```\n```TargetIr:x64-windows\nthe IR this lane renders is not this\n```\n```TargetIr:x64-linux\nthe IR this lane renders is not this\n```\n```TargetIr:arm64-macos\nthe IR this lane renders is not this\n```\n```TargetIr:arm64-linux\nthe IR this lane renders is not this\n```\n\n"
+
+typealias HashReportCaseArray = Array with HashReportCase
+
+type HashSpecFailure
+	export let pins as HashPins
+	export let printed as String
+
+	static function create(pins HashPins, printed String) returns HashSpecFailure
+		return Self{pins: pins, printed: printed}
+	end 'create'
+end 'HashSpecFailure'
+
+type HashFailureReport
+	export let block as StringArray
+	export let pins as HashPins
+	export let which as String
+
+	static function create(block StringArray, pins HashPins, which String) returns HashFailureReport
+		return Self{block: block, pins: pins, which: which}
+	end 'create'
+end 'HashFailureReport'
+
+type HashTestFailure
+	export let pins as HashPins
+	export let received as String
+	export let message as String
+
+	static function create(pins HashPins, received String, message String) returns HashTestFailure
+		return Self{pins: pins, received: received, message: message}
+	end 'create'
+end 'HashTestFailure'
+
+function hashPinsSpelling(pins HashPins) returns String
+	return "{HashSeedVariable}={pins.seed} {HashTierVariable}={pins.tier}"
+end 'hashPinsSpelling'
+
+function hashPinsNaming(seed String, tier String) returns EnvMap
+	let naming = EnvMap.create()
+	naming.upsert(HashSeedVariable, value: seed)
+	naming.upsert(HashTierVariable, value: tier)
+
+	return naming
+end 'hashPinsNaming'
+
+function isLowercaseHex(text String) returns bool
+	for byte in text.bytes() 'eachByte'
+		let isDigit = byte >= AsciiZero and byte <= AsciiNine
+		let isLetter = byte >= LowerHexLetterFirst and byte <= LowerHexLetterLast
+
+		if not (isDigit or isLetter) 'notHex'
+			return false
+		end 'notHex'
+	end 'eachByte'
+
+	return true
+end 'isLowercaseHex'
+
+function failureBlockOf(said String, opening String, which String) returns StringArray throws TestFailure
+	let block = StringArray.create(0)
+	var inside = false
+
+	for line in said.split(LineFeed) 'eachLine'
+		if inside 'inBlock'
+			if line.isEmpty() or line.startsWith(FailLinePrefix) or line.startsWith(PassLinePrefix) 'blockEnded'
+				break
+			end 'blockEnded'
+
+			block.push(line)
+		end 'inBlock' else if line.startsWith(opening) 'blockBegins'
+			inside = true
+			block.push(line)
+		end 'blockBegins'
+	end 'eachLine'
+
+	try Expect.isFalse(block.isEmpty(), message: "{which}: the run reports no failure opening `{opening}`. It said:\n{said}")
+
+	return block
+end 'failureBlockOf'
+
+function linePayloadIn(block StringArray, prefix String, which String) returns String throws TestFailure
+	for line in block 'eachLine'
+		if line.startsWith(prefix) 'theLine'
+			return line.replaceFirst(prefix, with: "")
+		end 'theLine'
+	end 'eachLine'
+
+	try Expect.fail("{which} has no line opening `{prefix}`. It said:\n{joined(block, separator: LineFeed)}")
+	panic("CliHarness: Expect.fail returned")
+end 'linePayloadIn'
+
+function hashPinsReportedIn(block StringArray, indent String, which String) returns HashPins throws TestFailure
+	let named = StringArray.create(0)
+
+	for line in block 'eachLine'
+		if line.trim().startsWith("{HashSeedVariable}=") 'namesThePins'
+			named.push(line)
+		end 'namesThePins'
+	end 'eachLine'
+
+	let said = joined(block, separator: LineFeed)
+	let shape = "{indent}{HashSeedVariable}=<{HashSeedDigitCount} lowercase hexadecimal digits> {HashTierVariable}=<{HashTierAes}|{HashTierSoftware}>"
+	try Expect.equal(named.count(), expected: 1, message: "{which} names the hash seed on {named.count()} lines, where it owes exactly one, `{shape}`. It said:\n{said}")
+
+	let line = try named.get(0) otherwise panic("CliHarness: a list holding one line has a first line")
+	let words = line.trim().split(HashPinWordSeparator)
+	try Expect.equal(words.count(), expected: 2, message: "{which} names its hash pins as `{line}`, where `{shape}` is owed.")
+
+	let seedWord = try words.get(0) otherwise panic("CliHarness: a list of two words has a first")
+	let tierWord = try words.get(1) otherwise panic("CliHarness: a list of two words has a second")
+	let pins = HashPins.create(seedWord.replaceFirst("{HashSeedVariable}=", with: ""), tier: tierWord.replaceFirst("{HashTierVariable}=", with: ""))
+
+	try Expect.equal(line, expected: "{indent}{hashPinsSpelling(pins)}", message: "{which} names its hash pins as `{line}`, where `{shape}` is owed.")
+	try Expect.equal(pins.seed.byteLength(), expected: HashSeedDigitCount, message: "{which} names a seed of {pins.seed.byteLength()} bytes, where `{shape}` is owed.")
+	try Expect.isTrue(isLowercaseHex(pins.seed), message: "{which} names the seed `{pins.seed}`, which is not lowercase hexadecimal: `{shape}` is owed.")
+	try Expect.isTrue(pins.tier == HashTierAes or pins.tier == HashTierSoftware, message: "{which} names the tier `{pins.tier}`, where `{shape}` is owed.")
+
+	return pins
+end 'hashPinsReportedIn'
+
+function hashReportProgramSource() returns String
+	return fileText(fixtureDir(HashReportProgramFixtureDirName).join(HashReportProgramFixtureFileName))
+end 'hashReportProgramSource'
+
+function hashReportSpecText(cases HashReportCaseArray) returns String
+	let text = StringBuilder.create()
+	text.append(HashReportSpecPreamble)
+
+	for hashCase in cases 'eachCase'
+		text.append("<!-- test: {hashCase.name} -->\n")
+
+		if hashCase.seed != HashPinUnset 'pinsASeed'
+			text.append("<!-- env: {HashSeedVariable}={hashCase.seed} -->\n")
+		end 'pinsASeed'
+
+		if hashCase.tier != HashPinUnset 'pinsATier'
+			text.append("<!-- env: {HashTierVariable}={hashCase.tier} -->\n")
+		end 'pinsATier'
+
+		text.append(hashReportCaseBody(hashCase.program))
+	end 'eachCase'
+
+	return text.build()
+end 'hashReportSpecText'
+
+function hashReportCaseBody(program HashReportProgram) returns String
+	let source = match program 'source'
+		printsTheHash gives hashReportProgramSource()
+		uncompilable gives HashReportUncompilableProgram
+		passesAgainstAWrongIrPin gives HashReportQuietProgram
+	end 'source'
+
+	let resultBlocks = match program 'resultBlocks'
+		printsTheHash or
+		uncompilable gives HashReportCaseResultBlocks
+		passesAgainstAWrongIrPin gives HashReportWrongIrPinBlocks
+	end 'resultBlocks'
+
+	return "```maxon\n{source}```\n{resultBlocks}"
+end 'hashReportCaseBody'
+
+function stagedHashReportSpec(dir FilePath, cases HashReportCaseArray) returns FilePath
+	let specDir = stagingDir(dir.join(HashReportSpecDirName).toString())
+	writeStagedFile(specDir.join(HashReportSpecFileName), content: hashReportSpecText(cases))
+
+	return specDir
+end 'stagedHashReportSpec'
+
+function runHashReportSpec(dir FilePath, specDir FilePath, seed String, tier String) returns String
+	let run = spawnCompiler([HiddenAnchorCommand, specDir.toString()], staged: specDir, what: "`maxon {HiddenAnchorCommand}` over the hash report spec", environment: confinedCacheEnvironment(dir, naming: hashPinsNaming(seed, tier: tier)))
+
+	return withoutCarriageReturns("{run.stdout}{LineFeed}{run.stderr}")
+end 'runHashReportSpec'
+
+function hashFailureReportOf(said String, caseName String) returns HashFailureReport throws TestFailure
+	let which = "the failure of `{HashReportSpecName}/{caseName}`"
+	let block = try failureBlockOf(said, opening: "{FailLinePrefix}{HashReportSpecName}/{caseName}: ", which: which)
+	let pins = try hashPinsReportedIn(block, indent: SpecPinsLineIndent, which: which)
+
+	return HashFailureReport.create(block, pins: pins, which: which)
+end 'hashFailureReportOf'
+
+function hashSpecFailureOf(said String, caseName String) returns HashSpecFailure throws TestFailure
+	let report = try hashFailureReportOf(said, caseName: caseName)
+	let printed = try linePayloadIn(report.block, prefix: SpecActualLinePrefix, which: report.which)
+
+	try Expect.startsWith(printed, needle: "{HashReportPrintedPrefix}{hashPinsSpelling(report.pins)}{HashReportPrintedHashLabel}", message: "the program of `{HashReportSpecName}/{caseName}` printed `{printed}`, which is not what it prints when it runs under the pins its failure names, `{hashPinsSpelling(report.pins)}`.")
+
+	return HashSpecFailure.create(report.pins, printed: printed)
+end 'hashSpecFailureOf'
+
+function builtHashReportProgram(dir FilePath) returns FilePath throws TestFailure
+	stageProgram(dir, name: HashReportProgramDirName, source: hashReportProgramSource())
+
+	let output = dir.join(HashReportProgramOutputStem)
+	let build = runWithCacheRoots([BuildCommandWord, stagedProgramSource(dir, name: HashReportProgramDirName).toString(), "{OutputOptionPrefix}{output.toString()}"], naming: EnvMap.create(), workingDirectory: dir)
+	try requireBuilt(build, which: "the build of the hash report program")
+
+	return dir.join("{HashReportProgramOutputStem}{executableSuffix()}")
+end 'builtHashReportProgram'
+
+function requireFailureReproduced(dir FilePath, program FilePath, failure HashSpecFailure, which String) throws TestFailure
+	let ran = spawnIn(Executable.path(program), arguments: StringArray.create(0), staged: dir, what: "the hash report program under `{hashPinsSpelling(failure.pins)}`", environment: Environment.inheritUpdating(hashPinsNaming(failure.pins.seed, tier: failure.pins.tier)))
+
+	try Expect.equal(withoutCarriageReturns(ran.stdout).trim(), expected: failure.printed, message: "{which} named `{hashPinsSpelling(failure.pins)}`, and the same program run under those values printed another line than the failing case did, so the report does not reproduce its failure.")
+end 'requireFailureReproduced'
+
+function stagedHashReportTest(dir FilePath) returns FilePath
+	let testDir = stagingDir(dir.join(HashReportTestDirName).toString())
+	stageStoredTree(fixtureDir(HashReportTestFixtureDirName), into: testDir)
+
+	return testDir
+end 'stagedHashReportTest'
+
+function runHashReportTest(dir FilePath, testDir FilePath, seed String, tier String) returns String
+	let run = spawnCompiler([TestCommandWord, "."], staged: testDir, what: "`maxon {TestCommandWord}` over the hash report test", environment: confinedCacheEnvironment(dir, naming: hashPinsNaming(seed, tier: tier)))
+
+	return withoutCarriageReturns("{run.stdout}{LineFeed}{run.stderr}")
+end 'runHashReportTest'
+
+function hashTestFailureOf(said String) returns HashTestFailure throws TestFailure
+	let which = "the failure of the hash report test"
+	let block = try failureBlockOf(said, opening: TestHeadingPrefix, which: which)
+	let pins = try hashPinsReportedIn(block, indent: TestPinsLineIndent, which: which)
+	let received = try linePayloadIn(block, prefix: TestReceivedLinePrefix, which: which)
+	let message = try linePayloadIn(block, prefix: TestMessageLinePrefix, which: which)
+	let spelling = hashPinsSpelling(pins)
+
+	try Expect.equal(message, expected: "{HashReportTestMessageLabel}{spelling}{HashReportTestChildLabel}{spelling}", message: "the test process and the process it spawned ran under other pins than the failure names, `{spelling}`: the test saw `{message}`.")
+
+	return HashTestFailure.create(pins, received: received, message: message)
+end 'hashTestFailureOf'

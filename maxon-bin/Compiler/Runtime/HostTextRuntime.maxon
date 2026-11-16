@@ -333,6 +333,12 @@ end 'emitHostUnit'
 function emitHostEnvReadAscii(module StdModule, block IrBlock, name ValueId, valueBuf ValueId, capacity ValueId, ids ValueMinter) returns ValueId
 	let written = ids.mint()
 
+	if module.environmentReadIsCaptured 'capturedList'
+		module.appendOp(block, op: StdOp.call(written, callee: EnvironmentReadName, args: threeArgs(name, second: valueBuf, third: capacity)))
+
+		return written
+	end 'capturedList'
+
 	if not hostTextIsWide(module) 'narrow'
 		module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: name, bufPtrId: valueBuf, bufLenId: capacity))
 
@@ -347,6 +353,58 @@ function emitHostEnvReadAscii(module StdModule, block IrBlock, name ValueId, val
 
 	return written
 end 'emitHostEnvReadAscii'
+
+type HostEnvRead
+	export let written as ValueId
+	export let buf as ValueId
+	export let capacity as ValueId
+
+	static function create(written ValueId, buf ValueId, capacity ValueId) returns Self
+		return Self{written: written, buf: buf, capacity: capacity}
+	end 'create'
+end 'HostEnvRead'
+
+function emitReadHostEnvValue(module StdModule, block IrBlock, name ByteArray, capacity ValueId, ids ValueMinter) returns HostEnvRead
+	let nameBuf = emitLiteralHostString(module, block: block, ids: ids, text: name)
+	let buf = emitSlabAlloc(module, block: block, bytes: capacity, kind: SlabBufferKind.environmentValue, ids: ids)
+	let written = emitHostEnvReadAscii(module, block: block, name: nameBuf, valueBuf: buf, capacity: capacity, ids: ids)
+	emitSlabFree(module, block: block, ptr: nameBuf, kind: SlabBufferKind.hostText, ids: ids)
+
+	return HostEnvRead.create(written, buf: buf, capacity: capacity)
+end 'emitReadHostEnvValue'
+
+type SettledEnvRead
+	export let block as IrBlock
+	export let buffer as ValueId
+	export let written as ValueId
+	export let capacity as ValueId
+
+	static function create(block IrBlock, buffer ValueId, written ValueId, capacity ValueId) returns Self
+		return Self{block: block, buffer: buffer, written: written, capacity: capacity}
+	end 'create'
+end 'SettledEnvRead'
+
+function emitReadEnvValueWhole(module StdModule, func IrFunction, block IrBlock, name ByteArray, firstBytes FullRangeInt, ids ValueMinter) returns SettledEnvRead
+	let reread = module.addBlock(func, label: b"envreread", heat: BlockHeat.normal)
+	let have = module.addBlock(func, label: b"envhave", heat: BlockHeat.normal)
+
+	let firstCapacity = emitConst(module, block: block, value: firstBytes, ids: ids)
+	let read = emitReadHostEnvValue(module, block: block, name: name, capacity: firstCapacity, ids: ids)
+	let valueBuffer = ids.mint()
+	let valueWritten = ids.mint()
+	let valueCapacity = ids.mint()
+	have.blockArgs.push(IrBlockArg.create(valueBuffer, argType: StdType.i64))
+	have.blockArgs.push(IrBlockArg.create(valueWritten, argType: StdType.i64))
+	have.blockArgs.push(IrBlockArg.create(valueCapacity, argType: StdType.i64))
+	emitBranchOnCompareValues(module, block: block, a: read.written, pred: StdCmpPred.ge, b: read.capacity, whenTrue: reread, whenFalse: have, ids: ids)
+	pushBranchEdge(block, to: have, values: threeArgs(read.buf, second: read.written, third: read.capacity))
+
+	emitSlabFree(module, block: reread, ptr: read.buf, kind: SlabBufferKind.environmentValue, ids: ids)
+	let fullRead = emitReadHostEnvValue(module, block: reread, name: name, capacity: read.written, ids: ids)
+	emitBranchCarrying(module, from: reread, to: have, values: threeArgs(fullRead.buf, second: fullRead.written, third: fullRead.capacity))
+
+	return SettledEnvRead.create(have, buffer: valueBuffer, written: valueWritten, capacity: valueCapacity)
+end 'emitReadEnvValueWhole'
 
 function emitHostTextToUtf8(module StdModule, block IrBlock, host ValueId, units ValueId, buffer ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter)
 	let size = emitNarrowedRoom(module, block: block, host: host, units: units, byteLength: byteLength, ids: ids)

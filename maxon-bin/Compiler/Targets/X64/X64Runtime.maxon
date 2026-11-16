@@ -1689,6 +1689,9 @@ let CpuidEcxSsse3 = 0x200
 let CpuidEcxAesNi = 0x2000000
 let CpuidEcxSse41 = 0x80000
 let CpuidEcxHardwareAes = CpuidEcxAesNi or CpuidEcxPclmulqdq or CpuidEcxSsse3 or CpuidEcxSse41
+let CpuidEcxVectorBaseline = CpuidEcxSsse3 or CpuidEcxSse41
+let CpuidStructuredLeaf = 7
+let CpuidEbxSha = 0x20000000
 
 // `mrt_cpu_feature_probe` — stores 1 in `__mrt_cpu_aes_usable` when leaf 1 reports AES-NI, PCLMULQDQ,
 // SSSE3 and SSE4.1, else 0. SSE4.1 is for `pinsrd`, which the counter-mode chunks build their counters
@@ -1699,25 +1702,49 @@ function buildCpuFeatureProbeChunk() returns FunctionCodeChunk
 	let SlotSavedRbx = 0
 	let asm = X64RuntimeAsm.beginFunction(1)
 	let stored = asm.newLabel()
+	let withoutAes = asm.newLabel()
+	let aesUsable = X64Register.r8
+	let shaUsable = X64Register.r9
+	let highestLeaf = X64Register.r10
+	let baseline = X64Register.r11
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRbx), srcReg: X64Register.rbx, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: aesUsable, src: aesUsable, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: shaUsable, src: shaUsable, wide: true)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
 	encodeCpuid(asm.code)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: CpuidFeatureLeaf)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: highestLeaf, src: X64Register.rax, wide: false)
+	emitCmpRegImm(asm, reg: highestLeaf, imm: CpuidFeatureLeaf)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: stored)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: CpuidFeatureLeaf)
 	encodeCpuid(asm.code)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: baseline, src: X64Register.rcx, wide: false)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rcx, imm: CpuidEcxHardwareAes as Imm32)
 	emitCmpRegImm(asm, reg: X64Register.rcx, imm: CpuidEcxHardwareAes as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: withoutAes)
+	encodeMovRegImm32(asm.code, dest: aesUsable, value: 1)
+
+	asm.placeLabel(withoutAes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: baseline, imm: CpuidEcxVectorBaseline as Imm32)
+	emitCmpRegImm(asm, reg: baseline, imm: CpuidEcxVectorBaseline as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: stored)
-	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: 1)
+	emitCmpRegImm(asm, reg: highestLeaf, imm: CpuidStructuredLeaf)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: stored)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: CpuidStructuredLeaf)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: false)
+	encodeCpuid(asm.code)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rbx, imm: CpuidEbxSha as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stored)
+	encodeMovRegImm32(asm.code, dest: shaUsable, value: 1)
 
 	asm.placeLabel(stored)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rcx, label: CpuAesUsableLabel)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: aesUsable, wide: true)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rcx, label: CpuShaUsableLabel)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: shaUsable, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rbx, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRbx), wide: true)
 
 	return asm.finishFunction(CpuFeatureProbeName)
@@ -2195,7 +2222,7 @@ end 'emitLinuxSigactionCall'
 // (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
 // in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
 // that can answer without repeating itself; the lane appenders receive the answer and pass it on.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, probesCpuFeatures bool, emitsHardwareAes bool, context HostContextLayout)
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, probesCpuFeatures bool, emitsHardwareAes bool, emitsHardwareSha bool, emitsHardwareHash bool, context HostContextLayout)
 	let exitRoute = x64OsCallKind(target.os)
 
 	match target.os 'os'
@@ -2224,6 +2251,14 @@ export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Tar
 		chunks.push(buildAesGcmDecryptChunk())
 		chunks.push(buildAesGcmFinishChunk())
 	end 'hardwareAes'
+
+	if emitsHardwareSha 'hardwareSha'
+		chunks.push(buildSha256BlocksChunk())
+	end 'hardwareSha'
+
+	if emitsHardwareHash 'hardwareHash'
+		chunks.push(buildAesHashChunk())
+	end 'hardwareHash'
 end 'appendX64RuntimeChunks'
 
 // ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE. A per-lane copy of this list is not a compile error when

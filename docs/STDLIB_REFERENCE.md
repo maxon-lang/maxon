@@ -379,7 +379,7 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | `byteLength()` | `BytePos` | Number of UTF-8 bytes. |
 | `isEmpty()` | `bool` | True when the string has no bytes. |
 | `isAscii()` | `bool` | True when every byte is below 128. |
-| `hash()` | `HashValue` | Through `Hashable`. |
+| `hash()` | `HashValue` | The [`Hasher`](#hasher) fold of the string's UTF-8 bytes, so it differs between processes. |
 | `equals(other String)` | `bool` | Byte-wise equality; `==` calls it. |
 
 ### Search
@@ -527,7 +527,7 @@ end 'StringError'
 | `advanceBy(n CodepointDelta)` | `Character` | The character `n` scalar values away, in either direction; the surrogate block U+D800 to U+DFFF is not counted. |
 | `toString()` | `String` | The cluster as a string. |
 | `clone()` | `Character` | An independent copy. |
-| `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. |
+| `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. `hash()` is the `String.hash()` of the cluster's UTF-8 bytes. |
 
 ```maxon
 enum CharacterError implements Error
@@ -632,7 +632,11 @@ Output: `[hi] [abc]` and `true true`.
 `Array` is a growable, contiguous, generic sequence. Declare a concrete type with `typealias`, or write a
 literal: `[1, 2, 3]`. `Array` implements `Iterable` and `Cloneable`; it is also `Hashable` and `Equatable`
 when its element is. `equals` (and `==`) compares two arrays element by element through the element's own
-`equals`, and `hash()` folds every element's own `hash()`, so equal arrays hash equal.
+`equals`, and equal arrays hash equal. `hash()` is a [`Hasher`](#hasher) fold, so it differs between
+processes. An array whose elements are equal exactly when their bits are (every integer type, `Byte`
+included, and a payload-free enum that declares neither `hash` nor `equals`) is folded as one run of its
+storage bytes; any other array (`float`, `String`, an element with its own `hash` or `equals`)
+folds each element's `hash()` in turn.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -798,7 +802,10 @@ Output: `2 3` and `1 2`.
 
 `Map` is a hash table from keys to values. The key type must be `Hashable` and `Equatable`. Maps are built
 with `create()` or a dictionary literal `["a": 1, "b": 2]`, and iterate as `(key, value)` tuples in table
-order, which is unspecified. The table resizes when it is three-quarters full.
+order, which is unspecified and, for keys that hash through the process seed, differs from run to run.
+The seed's resistance to keys chosen to collide covers `String`, `Character` and `Array` keys and keys
+whose `hash()` is built with [`Hasher`](#hasher); integer and float keys hash without it. The table
+resizes when it is three-quarters full.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -860,7 +867,10 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 ## Set
 
 `Set` is a hash set. The element type must be `Hashable` and `Equatable`. Build one with `create()`,
-`Set from [1, 2, 3]`, or `Set from values` over any `Array`. Iteration order is unspecified.
+`Set from [1, 2, 3]`, or `Set from values` over any `Array`. Iteration order is unspecified and, for
+elements that hash through the process seed, differs from run to run. The seed's resistance to elements
+chosen to collide covers `String`, `Character` and `Array` elements and elements whose `hash()` is built
+with [`Hasher`](#hasher); integer and float elements hash without it.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -1239,6 +1249,7 @@ Output: `EUR 250 | USD 250 | true greaterThan 1`.
 | `File.exists(path FilePath)` | `bool` | — | True when a file exists at `path`. |
 | `File.delete(path FilePath)` | — | `FileDeleteError` | Delete a file. |
 | `File.rename(from FilePath, to FilePath)` | — | `FileRenameError` | Move a file, replacing any existing destination in one step, so a reader of `to` never sees a partly written file. |
+| `File.renameNew(from FilePath, to FilePath)` | — | `FileRenameError` | Move a file to a destination that must not exist. An existing `to` is `alreadyExists` and is left as it was; the check and the move are one step, so of several processes renaming onto one path exactly one succeeds. |
 | `File.info(path FilePath)` | `FileInfo` | `FileInfoError` | Size, timestamps and attributes, from one OS call. |
 
 ### Types
@@ -1280,10 +1291,11 @@ file that is not there, and the file named by the bytes before the NUL is left a
 | `FileReadError` | `notFound`, `accessDenied`, `busy`, `failed` |
 | `FileWriteError` | `failed`, `notFound`, `accessDenied`, `alreadyExists`, `busy`, `partialFileLeft` |
 | `FileDeleteError` | `notFound`, `accessDenied`, `busy`, `failed` |
-| `FileRenameError` | `failed`, `notFound`, `accessDenied`, `busy` |
+| `FileRenameError` | `failed`, `notFound`, `accessDenied`, `busy`, `alreadyExists` |
 | `FileInfoError` | `notFound`, `accessDenied`, `busy`, `failed` |
 
-`alreadyExists` and `partialFileLeft` come only from `File.createText`. Every one of these enums has
+`alreadyExists` comes only from `File.createText` and `File.renameNew`, and `partialFileLeft` only from
+`File.createText`. Every one of these enums has
 `failure()`, which returns the cause as a `FileFailure` — `notFound`, `accessDenied`, `alreadyExists`, `busy`
 or `failed` (`partialFileLeft` gives `failed`) — so one `match` handles the causes of any file operation.
 
@@ -3886,7 +3898,9 @@ Output: `05 false` and `negativeInteger`.
 ## Sha2
 
 The SHA-2 hash functions of FIPS 180-4. `sha256`, `sha384` and `sha512` hash a whole `ByteArray`; a
-`Digest` takes the message in chunks.
+`Digest` takes the message in chunks. SHA-256 runs on the CPU's SHA-256 instructions where it has them
+(SHA-NI on x64, the ARMv8 SHA2 extension on arm64) and in portable code elsewhere, with the same digest
+either way.
 
 | Function | Returns | Description |
 |----------|---------|-------------|
@@ -4404,36 +4418,99 @@ Output: `invalidCertificate`.
 
 ## Hasher
 
-`Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.
-Its result is a `HashDigest`, `bits(64)`.
+`Hasher` is the process's seeded hash, in the shape of Go's `hash/maphash`, for hash tables and in-process
+keys, and it is not cryptographic. It folds from a seed the process draws at startup, and its result is a
+`HashValue`, so it differs from run to run. `String.hash()`, `Character.hash()` and `Array.hash()` are this
+fold, and so is a type's own `hash()` that folds its fields with a `Hasher`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Hasher.create()` | `Hasher` | A hasher at the FNV-1a offset basis. |
-| `Hasher.resume(state HashDigest)` | `Hasher` | Continue from a value `finalize()` returned. |
+| `Hasher.create()` | `Hasher` | A hasher at the start of the process fold. |
 | `combine(value HashDigest)` | — | Fold in one value. |
-| `combineBytes(bytes ByteArray)` | — | Fold in each byte. |
-| `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
-| `Hasher.empty()` | `HashDigest` | The state of an empty fold. |
-| `Hasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
-| `Hasher.combinedBytes(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
+| `combineBytes(bytes ByteArray)` | — | Fold in the bytes as one step. |
+| `finalize()` | `HashValue` | The fold's 32-bit hash. |
 
-FNV-1a folds a flat byte sequence and records no lengths, so `"ab"` then `"c"` hashes the same as `"a"`
-then `"bc"`. When hashing a sequence of parts, combine each part's length too.
+Each step's state seeds the next, so the steps are delimited: `"ab"` then `"c"` hashes apart from `"abc"`
+and from `"a"` then `"bc"`. Two folds through the same steps reach one hash within a process.
+
+The seed is what keeps keys chosen to collide from crowding one slot of a [`Map`](#map) or [`Set`](#set).
+That resistance covers `String`, `Character` and `Array` keys and keys whose `hash()` is built with
+`Hasher`. Integer and float keys hash without the seed ([Primitive Extensions](#primitive-extensions)),
+and mixing the seed into the table itself is
+[maxon-lang/maxon#79](https://github.com/maxon-lang/maxon/issues/79).
+
+The tier is chosen once, before `main`: `aes` (`AESENC` on x64, `AESE` and `AESMC` on arm64) when the CPU
+has AES, else `software`, which is one function on every target and the tier `wasm32-wasi` always runs.
+Each tier is a different hash. [`MAXON_HASH_TIER`](CLI_REFERENCE.md#environment-variables) forces one, and
+[`MAXON_HASH_SEED`](CLI_REFERENCE.md#environment-variables) pins the process seed.
 
 ```maxon
 function main() returns ExitCode
-	let hasher = Hasher.create()
+	let first = Hasher.create()
+	first.combineBytes("ab".toByteArray())
+	first.combine(7)
+
+	let second = Hasher.create()
+	second.combineBytes("ab".toByteArray())
+	second.combine(7)
+
+	print("{first.finalize() == second.finalize()}\n")
+	return 0
+end 'main'
+```
+
+Output: `true`.
+
+### KeyedHasher
+
+`KeyedHasher` is the same fold from a [`HashSeed`](#hashseed) the program supplies, with its whole 64-bit
+state: its result is a `HashDigest`, `bits(64)`. It is for a digest the program keeps, resumes, or threads
+through expressions.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `KeyedHasher.create(seed HashSeed)` | `KeyedHasher` | A hasher at the start of a fold from `seed`. |
+| `KeyedHasher.resume(state HashDigest)` | `KeyedHasher` | Continue from a value `finalize()` returned. |
+| `combine(value HashDigest)` | — | Fold in one value. |
+| `combineBytes(bytes ByteArray)` | — | Fold in the bytes as one step. |
+| `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
+| `KeyedHasher.empty(seed HashSeed)` | `HashDigest` | The state of an empty fold from `seed`. |
+| `KeyedHasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
+| `KeyedHasher.combinedBytes(state HashDigest, bytes ByteArray)` | `HashDigest` | The bytes as one step, as an expression. |
+
+A digest depends on its seed, the steps folded and the hash tier, so it differs between seeds, tiers and
+hosts. Two folds from one seed through the same steps reach one digest in any process on the same tier.
+Keep a digest beside the seed it came from, and use [`sha256`](#sha2) for a digest that is the same
+everywhere.
+
+```maxon
+function main() returns ExitCode
+	let seed = HashSeed.random()
+	let hasher = KeyedHasher.create(seed)
 	hasher.combineBytes("ab".toByteArray())
 	hasher.combine(7)
 
-	let direct = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
+	let direct = KeyedHasher.combined(KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: "ab".toByteArray()), value: 7)
 	print("{hasher.finalize() == direct}\n")
 	return 0
 end 'main'
 ```
 
 Output: `true`.
+
+### HashSeed
+
+Every `KeyedHasher` fold starts from a `HashSeed`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `HashSeed.random()` | `HashSeed` | — | 64 bits of fresh entropy from the operating system, whatever `MAXON_HASH_SEED` holds. |
+| `toBytes()` | `ByteArray` | — | The seed as exactly 8 bytes. |
+| `HashSeed.fromBytes(bytes ByteArray)` | `HashSeed` | `HashSeedError` | The seed 8 bytes spell; any other count throws `HashSeedError.wrongByteCount`. |
+
+A seed written with `toBytes` and read back with `fromBytes` is the same seed, so a seed stored beside the
+digests it made keys them in a later process on the same tier. The compiler's
+[library cache](CLI_REFERENCE.md#the-library-cache) keeps its seed this way.
 
 ## Clock
 

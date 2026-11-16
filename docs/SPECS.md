@@ -341,6 +341,7 @@ line:
 | `<!-- network: live -->` | The case opens a socket to a real external host. It is left out of a default run and runs only under `--network`; `live` is the only value |
 | `<!-- procs: N -->` | Run the program with `MAXON_MAX_PROCS=N` in its environment, pinning the scheduler's processor count; `N` is decimal digits with an optional leading `+`, from 1 to 2147483647, the same values the scheduler honours |
 | `<!-- preempt: off -->` | Run the program with `MAXON_PREEMPT=off` in its environment, so the monitor takes no processor from the thread holding it; `off` is the only value |
+| `<!-- env: NAME=VALUE -->` | Run the program with `NAME` set to `VALUE` in its environment, on every lane. Repeatable, one variable per line. `NAME` is letters, digits and `_`, not starting with a digit, and is none of the variables the harness sets itself (`MAXON_MAX_PROCS`, `MAXON_PREEMPT`, `MAXON_TRACK_DESCENDANTS`; use `procs` and `preempt` for the first two); `VALUE` is printable text and may be empty. A line with no `=`, a name set twice, or a value holding a control character is a parse failure. `MAXON_HASH_SEED` or `MAXON_HASH_TIER` set here replaces the run's value for this case's program |
 | `<!-- stdin: hold -->` / `<!-- stdin: after "<line>" -->` | Give the program a stdin that blocks. `hold` is a pipe nobody ever writes to, so a read blocks for the program's whole life; `after "<line>"` writes one line (`hello`) and closes the pipe once the program's stdout shows `<line>`, so the read blocks and then completes. The line is one non-empty double-quoted run, matched against whole stdout lines exactly. The feed waits on the program's output alone, so the order "the program printed `<line>`, then the read returned" holds by construction; a program that never prints `<line>` keeps a stdin that blocks as `hold`'s does. Without the marker stdin is the null device and every read answers at once with EOF |
 | `<!-- runs: alone -->` | Run the case's program with no other case's program running beside it: the harness runs a spec's `alone` cases as a job of their own, after every other job has finished, and starts nothing else while it runs. It is for a program whose peak memory is set by a runtime limit, such as a green thread's stack grown to its 1 GiB maximum; `alone` is the only value |
 | `<!-- tier: stdlib -->`, `<!-- tier: stdlib/<directory> -->` | Compile the case as library-tier source: its files are staged inside a private copy of `stdlib/`, so the case may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`, `__ManagedMemory`, `cstring`; E3185 elsewhere) and sees the unmarked declarations of `stdlib/` that a program outside it cannot (E3008). An unmarked declaration is visible in its declaring directory's subtree, so `stdlib` stages the case at the `stdlib/` root, where it sees the root files' unmarked declarations, and `stdlib/<directory>` (for example `stdlib/helpers/tls`) stages it in that directory, where it sees that directory's as well as the root files'; a directory that does not exist is refused. It is for a case whose subject is that surface; a case that only uses one reaches it through the safe standard-library API. The case runs in a program of its own. |
@@ -535,6 +536,14 @@ descendant is found through the process tree, through the token in its environme
 spawns the program recorded; an Apple platform binary two or more generations below a recorded spawn,
 whose ancestors in between all ended before the check ran, escapes it.
 
+### The hash seed and tier
+
+Every program a run starts is handed the run's drawn `MAXON_HASH_SEED` and its `MAXON_HASH_TIER`, and a
+failing case's report ends with the pair of the phase that failed
+([`maxon spec-test`](CLI_REFERENCE.md#maxon-spec-test)). A case whose output follows a hash, such as a map's
+iteration order, differs from run to run; a case whose subject is one seed or one tier pins it with
+`<!-- env: MAXON_HASH_SEED=<16 hex digits> -->` or `<!-- env: MAXON_HASH_TIER=<tier> -->`.
+
 ### Workers start warm
 
 Every worker compiles its cases inside one process and starts from the
@@ -596,7 +605,7 @@ that needs `<!-- process: own -->`); when it fails alone too, the solo failure i
 counts as run alone either way, and a batched PASS stands.
 
 These cases always compile and run on their own: a compile-error case; a case pinning `stderr`; an `Args`
-marker; a `stdin`, `procs`, `preempt`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
+marker; a `stdin`, `procs`, `preempt`, `env`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
 `AsyncTrace` or `DebugInfo` marker; a stdlib-overlay or runtime-file section; a multi-file case;
 `__file__` or `__line__` in the source; a `TargetIr`, `RequiredFunctions`, `RequiredData` or
 `RequiredRdata` block; a top-level `export` declaration, which the lint rules refuse in a multi-file

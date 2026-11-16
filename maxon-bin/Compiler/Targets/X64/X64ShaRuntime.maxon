@@ -1,0 +1,140 @@
+let Sha256SavedXmmFirst = 6
+let Sha256SavedXmmCount = 5
+let Sha256SaveSlots = 10
+let Sha256ExtendFirstGroup = 3
+let Sha256ExtendLastGroup = 14
+let Sha256PrepareFirstGroup = 1
+let Sha256PrepareLastGroup = 12
+let Sha256MaskOffset = Sha256RoundGroups * Sha256VectorBytes
+let Sha256SwapPairs = 0xB1
+let Sha256ReverseWords = 0x1B
+let Sha256HighPair = 0x0E
+let Sha256BlendHigh = 0xF0
+let Sha256HalfVectorBytes = 8
+
+let Sha256Message = X64Register.xmm0
+let Sha256State0 = X64Register.xmm1
+let Sha256State1 = X64Register.xmm2
+let Sha256Temp = X64Register.xmm3
+let Sha256Mask = X64Register.xmm8
+let Sha256Save0 = X64Register.xmm9
+let Sha256Save1 = X64Register.xmm10
+
+function sha256ByteSwapMask() returns ByteArray
+	return ByteArray from [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12]
+end 'sha256ByteSwapMask'
+
+function sha256X64Constants() returns immutable ByteArray
+	let constants = sha256RoundConstantBytes() as isolated ByteArray
+
+	modify constants 'fill'
+		constants.append(sha256ByteSwapMask())
+	end 'fill'
+
+	return freeze constants
+end 'sha256X64Constants'
+
+function sha256Schedule(group FullRangeInt) returns X64Register
+	return xmmState(Sha256LoadedGroups + sha256ScheduleSlot(group))
+end 'sha256Schedule'
+
+function sha256SaveDisp(asm X64RuntimeAsm, index FullRangeInt) returns Imm32
+	return ((asm.slotDisp(Sha256SaveSlots - 1) as FullRangeInt) + index * Sha256VectorBytes) as Imm32
+end 'sha256SaveDisp'
+
+function emitSha256SaveXmm(asm X64RuntimeAsm, transfer XmmTransfer)
+	for index in 0 upto Sha256SavedXmmCount 'eachSaved'
+		emitXmmTransfer(asm, transfer: transfer, xmm: xmmState(Sha256SavedXmmFirst + index), base: X64Register.rbp, disp: sha256SaveDisp(asm, index: index))
+	end 'eachSaved'
+end 'emitSha256SaveXmm'
+
+function emitSha256LoadState(asm X64RuntimeAsm, state X64Register)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: Sha256Temp, base: state, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: Sha256State1, base: state, disp: Sha256VectorBytes)
+	emitXmmPshufd(asm, dest: Sha256Temp, src: Sha256Temp, selector: Sha256SwapPairs)
+	emitXmmPshufd(asm, dest: Sha256State1, src: Sha256State1, selector: Sha256ReverseWords)
+	emitXmmMovaps(asm, dest: Sha256State0, src: Sha256Temp)
+	encodePalignr(asm.code, dest: Sha256State0, src: Sha256State1, byteShift: Sha256HalfVectorBytes)
+	encodePblendw(asm.code, dest: Sha256State1, src: Sha256Temp, selector: Sha256BlendHigh)
+end 'emitSha256LoadState'
+
+function emitSha256StoreState(asm X64RuntimeAsm, state X64Register)
+	emitXmmPshufd(asm, dest: Sha256Temp, src: Sha256State0, selector: Sha256ReverseWords)
+	emitXmmPshufd(asm, dest: Sha256State1, src: Sha256State1, selector: Sha256SwapPairs)
+	emitXmmMovaps(asm, dest: Sha256State0, src: Sha256Temp)
+	encodePblendw(asm.code, dest: Sha256State0, src: Sha256State1, selector: Sha256BlendHigh)
+	encodePalignr(asm.code, dest: Sha256State1, src: Sha256Temp, byteShift: Sha256HalfVectorBytes)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: Sha256State0, base: state, disp: 0)
+	emitXmmTransfer(asm, transfer: XmmTransfer.store, xmm: Sha256State1, base: state, disp: Sha256VectorBytes)
+end 'emitSha256StoreState'
+
+function emitSha256Group(asm X64RuntimeAsm, group FullRangeInt, data X64Register, constants X64Register)
+	let current = sha256Schedule(group)
+
+	if group < Sha256LoadedGroups 'loadsTheMessage'
+		emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: current, base: data, disp: (group * Sha256VectorBytes) as Imm32)
+		encodePshufb(asm.code, dest: current, src: Sha256Mask)
+	end 'loadsTheMessage'
+
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: Sha256Message, base: constants, disp: (group * Sha256VectorBytes) as Imm32)
+	encodePaddd(asm.code, dest: Sha256Message, src: current)
+	encodeShaNiRegReg(asm.code, instruction: ShaNiInstruction.sha256rnds2, dest: Sha256State1, src: Sha256State0)
+
+	if group >= Sha256ExtendFirstGroup and group <= Sha256ExtendLastGroup 'extendsTheSchedule'
+		let following = sha256Schedule(group + 1)
+
+		emitXmmMovaps(asm, dest: Sha256Temp, src: current)
+		encodePalignr(asm.code, dest: Sha256Temp, src: sha256Schedule(group + Sha256LoadedGroups - 1), byteShift: Sha256WordBytes)
+		encodePaddd(asm.code, dest: following, src: Sha256Temp)
+		encodeShaNiRegReg(asm.code, instruction: ShaNiInstruction.sha256msg2, dest: following, src: current)
+	end 'extendsTheSchedule'
+
+	emitXmmPshufd(asm, dest: Sha256Message, src: Sha256Message, selector: Sha256HighPair)
+	encodeShaNiRegReg(asm.code, instruction: ShaNiInstruction.sha256rnds2, dest: Sha256State0, src: Sha256State1)
+
+	if group >= Sha256PrepareFirstGroup and group <= Sha256PrepareLastGroup 'preparesTheSchedule'
+		encodeShaNiRegReg(asm.code, instruction: ShaNiInstruction.sha256msg1, dest: sha256Schedule(group + Sha256LoadedGroups - 1), src: current)
+	end 'preparesTheSchedule'
+end 'emitSha256Group'
+
+// The state is eight little-endian 32-bit words, a to h, as `sha256HardwareInitialState` lays them out;
+// the fourth argument is unused, and xmm6 to xmm10 are callee-saved in the custom ABI.
+function buildSha256BlocksChunk() returns FunctionCodeChunk
+	let asm = X64RuntimeAsm.beginFunction(Sha256SaveSlots)
+	let state = X64Register.rcx
+	let data = X64Register.rdx
+	let blocks = X64Register.r8
+	let constants = X64Register.r9
+	let loop = asm.newLabel()
+	let done = asm.newLabel()
+
+	emitSha256SaveXmm(asm, transfer: XmmTransfer.store)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: blocks, src: blocks, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	emitLeaString(asm, dest: constants, bytes: sha256X64Constants())
+	emitXmmTransfer(asm, transfer: XmmTransfer.load, xmm: Sha256Mask, base: constants, disp: Sha256MaskOffset)
+	emitSha256LoadState(asm, state: state)
+
+	asm.placeLabel(loop)
+	emitXmmMovaps(asm, dest: Sha256Save0, src: Sha256State0)
+	emitXmmMovaps(asm, dest: Sha256Save1, src: Sha256State1)
+
+	for group in 0 upto Sha256RoundGroups 'eachGroup'
+		emitSha256Group(asm, group: group, data: data, constants: constants)
+	end 'eachGroup'
+
+	encodePaddd(asm.code, dest: Sha256State0, src: Sha256Save0)
+	encodePaddd(asm.code, dest: Sha256State1, src: Sha256Save1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: data, imm: Sha256BlockBytes)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: blocks, imm: 1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: loop)
+
+	emitSha256StoreState(asm, state: state)
+
+	asm.placeLabel(done)
+	emitSha256SaveXmm(asm, transfer: XmmTransfer.load)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+
+	return asm.finishFunction(cryptoChunkName(CryptoRoutine.sha256Blocks))
+end 'buildSha256BlocksChunk'

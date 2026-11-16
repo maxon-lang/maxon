@@ -1477,24 +1477,66 @@ end 'buildArm64DarwinDirRemoveChunk'
 // already happened and is already visible; a caller told "the rename failed" because the parent directory
 // could not be opened would delete or retry something that is in fact in place. So every exit below the
 // rename answers TRUE, and the only thing that can answer FALSE is the rename itself.
-function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
+function buildArm64DarwinFileRenameChunk(disposition RenameDisposition) returns FunctionCodeChunk
 	let SlotNewPath = 0
 	let SlotDirBuf = 1
 	let SlotDirFd = 2
-	let asm = Arm64RuntimeAsm.beginFunction(3)
+	let SlotOldPath = 3
+	let asm = Arm64RuntimeAsm.beginFunction(4)
 
+	let linkFallback = asm.newLabel()
+	let linked = asm.newLabel()
+	let refused = asm.newLabel()
+	let refusedStashed = asm.newLabel()
 	let renamed = asm.newLabel()
 	let syncIssued = asm.newLabel()
 	let released = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
-	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.rename)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOldPath)
+
+	match disposition 'attempt'
+		replaceExisting then arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.rename)
+		keepExisting then arm64DarwinCallRenameExclusive(asm)
+	end 'attempt'
+
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: renamed)
+
+	if disposition == RenameDisposition.keepExisting 'fallsBack'
+		arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
+
+		for errno in renameNoReplaceFallbackErrnos(Os.macos) 'eachFallbackErrno'
+			arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: errno as Imm32)
+			arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: linkFallback)
+		end 'eachFallbackErrno'
+	end 'fallsBack'
+
+	asm.placeLabel(refused)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 
+	asm.placeLabel(refusedStashed)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
+
+	if disposition == RenameDisposition.keepExisting 'linkThenUnlink'
+		asm.placeLabel(linkFallback)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotOldPath)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
+		arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.link)
+		arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: linked)
+		arm64EmitBranchTo(asm, label: refused)
+
+		asm.placeLabel(linked)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotOldPath)
+		arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.unlink)
+		arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: renamed)
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
+
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotNewPath)
+		arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.unlink)
+		arm64EmitBranchTo(asm, label: refusedStashed)
+	end 'linkThenUnlink'
 
 	asm.placeLabel(renamed)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotNewPath)
@@ -1524,8 +1566,13 @@ function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)
-	return asm.finishFunction(HostFileRenameName)
+	return asm.finishFunction(hostFileRenameChunkName(disposition))
 end 'buildArm64DarwinFileRenameChunk'
+
+function arm64DarwinCallRenameExclusive(asm Arm64RuntimeAsm)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinRenameExclusive)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.renamexNp)
+end 'arm64DarwinCallRenameExclusive'
 
 // ==========================================================================
 // mrt_darwin_base_name(x0 = path) -> x0 = the byte after the last '/'
@@ -2311,6 +2358,8 @@ let DarwinOpenCreateTruncateFlags = PosixOpenWriteOnly or DarwinOpenCreate or Da
 
 let DarwinOpenCreateExclusiveFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenExclusive
 
+let DarwinRenameExclusive = 4
+
 let DarwinOpenEventOnly = 0x8000
 
 let DarwinOpenResolveFlags = DarwinOpenEventOnly or DarwinOpenCloseOnExec
@@ -2478,7 +2527,7 @@ function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage Run
 		chunks.push(buildArm64DarwinStopConfirmChunk(kill))
 	end 'processEndWait'
 
-	if posixReadsEnvironment(usage) 'envRead'
+	if environmentIsReadByName(usage) 'envRead'
 		chunks.push(buildArm64DarwinEnvReadChunk())
 	end 'envRead'
 
@@ -2603,7 +2652,8 @@ function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage Run
 	if usage.usesManagedFile 'managedFile'
 		chunks.push(buildArm64DarwinFileSizeChunk())
 		chunks.push(buildArm64DarwinFileDeleteChunk())
-		chunks.push(buildArm64DarwinFileRenameChunk())
+		chunks.push(buildArm64DarwinFileRenameChunk(RenameDisposition.replaceExisting))
+		chunks.push(buildArm64DarwinFileRenameChunk(RenameDisposition.keepExisting))
 	end 'managedFile'
 
 	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS TWO PRODUCERS.** `__mf_read` and

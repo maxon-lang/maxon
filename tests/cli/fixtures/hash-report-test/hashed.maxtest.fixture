@@ -1,0 +1,19 @@
+function seenByAChild() returns String
+	#if os(Windows)
+		let run = try Subprocess.run(Executable.name("powershell"), arguments: ["-NoProfile", "-Command", "Write-Output (\"MAXON_HASH_SEED=\" + $env:MAXON_HASH_SEED + \" MAXON_HASH_TIER=\" + $env:MAXON_HASH_TIER)"]) otherwise panic("powershell could not be spawned")
+	#else
+		let run = try Subprocess.run(Executable.name("sh"), arguments: ["-c", "printf 'MAXON_HASH_SEED=%s MAXON_HASH_TIER=%s' \"$MAXON_HASH_SEED\" \"$MAXON_HASH_TIER\""]) otherwise panic("sh could not be spawned")
+	#endif
+
+	return run.stdout.trim()
+end 'seenByAChild'
+
+function seenByThisProcess() returns String
+	let seed = try Process.environmentVariable("MAXON_HASH_SEED") otherwise "unset"
+	let tier = try Process.environmentVariable("MAXON_HASH_TIER") otherwise "unset"
+	return "MAXON_HASH_SEED={seed} MAXON_HASH_TIER={tier}"
+end 'seenByThisProcess'
+
+test 'the hash of abc is not zero'
+	Expect.equal("abc".hash(), expected: 0, message: "this process: {seenByThisProcess()}; a child: {seenByAChild()}")
+end 'the hash of abc is not zero'

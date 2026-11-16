@@ -1,0 +1,471 @@
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+typealias WordArrays = Array with WordArray
+typealias CountArray = Array with Count
+public typealias CountSet = Set with Count
+public typealias KeyedCounts = Map with String, Count
+
+public let benchmarkName = "hash"
+let tableSize = 1000000
+let poolSize = 8
+let poolMask = poolSize - 1
+let flipSites = poolSize - 1
+let flipGaps = flipSites - 1
+let accountIdSite = 0
+let accountScoreSite = 1
+let accountNameFirstSite = 2
+let nameFlipGaps = flipSites - accountNameFirstSite - 1
+let letterCount = 26
+let firstLetter = 97
+let byteFlipMask = 1
+let wordFlipMask = 0x0101010101010101
+let keyPrefix = "key"
+let scatter = 2654435761
+let accountNameBytes = 24
+let accountBaseId = 1000
+let accountBaseScore = 77
+let arrayElementStride = 7919
+let shaBufferBytes = 1048576
+let shaCarryBytes = 32
+let shaBufferSeed = 7
+let shaCarrySeed = 200
+let benchSeedBytes = b"benchsed"
+
+function flipPosition(site Count, length Count, gaps Count) returns Count
+	return try (site * (length - 1) / gaps) otherwise panic("hash: a flip spread has gaps")
+end 'flipPosition'
+
+function letters(count Count) returns ByteArray
+	let bytes = ByteArray.create(0)
+
+	for i in 0 upto count 'eachByte'
+		bytes.push((firstLetter + i mod letterCount) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'letters'
+
+function flipByte(bytes ByteArray, position Count)
+	let byte = try bytes.get(position) otherwise panic("hash: a flip site lies inside its bytes")
+	try bytes.set(position, value: (byte xor byteFlipMask) as Byte) otherwise panic("hash: a flip site lies inside its bytes")
+end 'flipByte'
+
+function flipWord(words WordArray, position Count)
+	let word = try words.get(position) otherwise panic("hash: a flip site lies inside its words")
+	try words.set(position, value: word xor wordFlipMask) otherwise panic("hash: a flip site lies inside its words")
+end 'flipWord'
+
+function stringPool(bytes Count) returns StringArray
+	let base = letters(bytes)
+	let pool = StringArray.create(0)
+
+	for member in 0 upto poolSize 'eachMember'
+		let flipped = base.clone()
+
+		for site in 0 upto member 'eachSite'
+			flipByte(flipped, position: flipPosition(site, length: bytes, gaps: flipGaps))
+		end 'eachSite'
+
+		pool.push(String.from(flipped))
+	end 'eachMember'
+
+	return pool
+end 'stringPool'
+
+function wordPool(elements Count) returns WordArrays
+	let base = WordArray.create(0)
+
+	for j in 0 upto elements 'eachElement'
+		base.push((j * arrayElementStride) as Word)
+	end 'eachElement'
+
+	let pool = WordArrays.create(0)
+
+	for member in 0 upto poolSize 'eachMember'
+		let flipped = base.clone()
+
+		for site in 0 upto member 'eachSite'
+			flipWord(flipped, position: flipPosition(site, length: elements, gaps: flipGaps))
+		end 'eachSite'
+
+		pool.push(flipped)
+	end 'eachMember'
+
+	return pool
+end 'wordPool'
+
+type Account
+	let id as Count
+	let name as ByteArray
+	let score as Count
+
+	static function create(member Count) returns Account
+		var id = accountBaseId as Count
+		var score = accountBaseScore as Count
+		let name = letters(accountNameBytes)
+
+		for site in 0 upto member 'eachSite'
+			if site == accountIdSite 'identifier'
+				id = id xor wordFlipMask
+			end 'identifier' else if site == accountScoreSite 'tally'
+				score = score xor wordFlipMask
+			end 'tally' else 'letter'
+				flipByte(name, position: flipPosition(site - accountNameFirstSite, length: accountNameBytes, gaps: nameFlipGaps))
+			end 'letter'
+		end 'eachSite'
+
+		return Self{id: id, name: name, score: score}
+	end 'create'
+end 'Account'
+
+typealias Accounts = Array with Account
+
+function accountPool() returns Accounts
+	let pool = Accounts.create(0)
+
+	for member in 0 upto poolSize 'eachMember'
+		pool.push(Account.create(member))
+	end 'eachMember'
+
+	return pool
+end 'accountPool'
+
+function keyStrings(count Count) returns StringArray
+	let keys = StringArray.create(0)
+
+	for i in 0 upto count 'eachKey'
+		keys.push("{keyPrefix}{i}")
+	end 'eachKey'
+
+	return keys
+end 'keyStrings'
+
+function scrambledInts(count Count) returns CountArray
+	let values = CountArray.create(0)
+
+	for i in 0 upto count 'eachValue'
+		values.push(i * scatter)
+	end 'eachValue'
+
+	return values
+end 'scrambledInts'
+
+function insertedKeys(keys StringArray) returns KeyedCounts
+	let map = KeyedCounts.create()
+
+	for (iter, key) in keys.withIterator() 'eachKey'
+		map.upsert(key, value: iter.index() as Count)
+	end 'eachKey'
+
+	return map
+end 'insertedKeys'
+
+function insertedInts(values CountArray) returns CountSet
+	let set = CountSet.create()
+
+	for value in values 'eachValue'
+		set.insert(value)
+	end 'eachValue'
+
+	return set
+end 'insertedInts'
+
+public enum Workload
+	string8
+	string16
+	string64
+	string1k
+	string64k
+	mapStringInsert
+	mapStringLookup
+	setIntInsert
+	setIntContains
+	array16
+	array1024
+	hasherFields
+	hasherObject
+	sha256Mib
+end 'Workload'
+
+public function nameOf(workload Workload) returns String
+	return match workload 'name'
+		string8 gives "string-8"
+		string16 gives "string-16"
+		string64 gives "string-64"
+		string1k gives "string-1k"
+		string64k gives "string-64k"
+		mapStringInsert gives "map-string-insert"
+		mapStringLookup gives "map-string-lookup"
+		setIntInsert gives "set-int-insert"
+		setIntContains gives "set-int-contains"
+		array16 gives "array-hash-16"
+		array1024 gives "array-hash-1024"
+		hasherFields gives "hasher-fields"
+		hasherObject gives "hasher-object"
+		sha256Mib gives "sha256-1m"
+	end 'name'
+end 'nameOf'
+
+public function baseIterationsOf(workload Workload) returns Count
+	return match workload 'iterations'
+		string8 or
+		string16 or
+		string64 or
+		hasherFields or
+		hasherObject gives 2000000
+		string1k gives 200000
+		string64k gives 2000
+		mapStringInsert or
+		mapStringLookup or
+		setIntInsert or
+		setIntContains gives tableSize
+		array16 gives 1000000
+		array1024 gives 50000
+		sha256Mib gives 100
+	end 'iterations'
+end 'baseIterationsOf'
+
+public function bytesOf(workload Workload) returns Count
+	return match workload 'bytes'
+		string8 gives 8
+		string16 gives 16
+		string64 gives 64
+		string1k gives 1024
+		string64k gives 65536
+		array16 gives 128
+		array1024 gives 8192
+		sha256Mib gives shaBufferBytes
+		mapStringInsert or
+		mapStringLookup or
+		setIntInsert or
+		setIntContains or
+		hasherFields or
+		hasherObject gives 0
+	end 'bytes'
+end 'bytesOf'
+
+interface HashSource
+	function hashAt(op Count) returns HashDigest
+end 'HashSource'
+
+type StringSource implements HashSource
+	let pool as StringArray
+
+	static function create(pool StringArray) returns StringSource
+		return Self{pool: pool}
+	end 'create'
+
+	function hashAt(op Count) returns HashDigest
+		let member = try pool.get(op and poolMask) otherwise panic("hash: the pool holds {poolSize} members")
+
+		return member.hash() as HashDigest
+	end 'hashAt'
+end 'StringSource'
+
+type WordSource implements HashSource
+	let pool as WordArrays
+
+	static function create(pool WordArrays) returns WordSource
+		return Self{pool: pool}
+	end 'create'
+
+	function hashAt(op Count) returns HashDigest
+		let member = try pool.get(op and poolMask) otherwise panic("hash: the pool holds {poolSize} members")
+
+		return member.hash() as HashDigest
+	end 'hashAt'
+end 'WordSource'
+
+type StaticAccountSource implements HashSource
+	let pool as Accounts
+	let seed as HashSeed
+
+	static function create(pool Accounts, seed HashSeed) returns StaticAccountSource
+		return Self{pool: pool, seed: seed}
+	end 'create'
+
+	function hashAt(op Count) returns HashDigest
+		let account = try pool.get(op and poolMask) otherwise panic("hash: the pool holds {poolSize} members")
+		var state = KeyedHasher.empty(seed)
+		state = KeyedHasher.combined(state, value: account.id as HashDigest)
+		state = KeyedHasher.combinedBytes(state, bytes: account.name)
+
+		return KeyedHasher.combined(state, value: account.score as HashDigest)
+	end 'hashAt'
+end 'StaticAccountSource'
+
+type ObjectAccountSource implements HashSource
+	let pool as Accounts
+	let seed as HashSeed
+
+	static function create(pool Accounts, seed HashSeed) returns ObjectAccountSource
+		return Self{pool: pool, seed: seed}
+	end 'create'
+
+	function hashAt(op Count) returns HashDigest
+		let account = try pool.get(op and poolMask) otherwise panic("hash: the pool holds {poolSize} members")
+		let hasher = KeyedHasher.create(seed)
+		hasher.combine(account.id as HashDigest)
+		hasher.combineBytes(account.name)
+		hasher.combine(account.score as HashDigest)
+
+		return hasher.finalize()
+	end 'hashAt'
+end 'ObjectAccountSource'
+
+public type Fixtures
+	let string8 as StringSource
+	let string16 as StringSource
+	let string64 as StringSource
+	let string1k as StringSource
+	let string64k as StringSource
+	let keys as StringArray
+	let keyed as KeyedCounts
+	let ints as CountArray
+	let intSet as CountSet
+	let array16 as WordSource
+	let array1024 as WordSource
+	let staticAccounts as StaticAccountSource
+	let objectAccounts as ObjectAccountSource
+	let shaBuffer as ByteArray
+	let shaCarry as ByteArray
+
+	public static function create(settings Settings) returns Fixtures
+		let keys = keyStrings(iterationsOf(Workload.mapStringInsert, divisor: settings.divisor))
+		let ints = scrambledInts(iterationsOf(Workload.setIntInsert, divisor: settings.divisor))
+		let seed = try HashSeed.fromBytes(benchSeedBytes) otherwise panic("hash: benchSeedBytes is not a hash seed")
+		let accounts = accountPool()
+
+		return Self{
+			string8: StringSource.create(stringPool(8)),
+			string16: StringSource.create(stringPool(16)),
+			string64: StringSource.create(stringPool(64)),
+			string1k: StringSource.create(stringPool(1024)),
+			string64k: StringSource.create(stringPool(65536)),
+			keys: keys,
+			keyed: insertedKeys(keys),
+			ints: ints,
+			intSet: insertedInts(ints),
+			array16: WordSource.create(wordPool(16)),
+			array1024: WordSource.create(wordPool(1024)),
+			staticAccounts: StaticAccountSource.create(accounts, seed: seed),
+			objectAccounts: ObjectAccountSource.create(accounts, seed: seed),
+			shaBuffer: filled(shaBufferBytes, seed: shaBufferSeed),
+			shaCarry: filled(shaCarryBytes, seed: shaCarrySeed)
+		}
+	end 'create'
+end 'Fixtures'
+
+public union Outcome
+	plain(value Count)
+	keyed(value Count, table KeyedCounts)
+	set(value Count, table CountSet)
+
+	public function answer() returns Count
+		return match self 'which'
+			plain(value) gives value
+			keyed(value, _) gives value
+			set(value, _) gives value
+		end 'which'
+	end 'answer'
+end 'Outcome'
+
+function requireRows(rows Count, iterations Count)
+	if rows != iterations 'mismatch'
+		panic("hash: a table row's fixture holds {rows} entries, not the {iterations} iterations it reports")
+	end 'mismatch'
+end 'requireRows'
+
+function countChanges(source S, iterations Count) uses S returns Outcome where S is HashSource
+	var previous = 0 as HashDigest
+	var changed = 0 as Count
+
+	for i in 0 upto iterations 'eachOp'
+		let hash = source.hashAt(i)
+
+		if hash != previous 'differs'
+			changed = changed + 1
+		end 'differs'
+
+		previous = hash
+	end 'eachOp'
+
+	return Outcome.plain(changed)
+end 'countChanges'
+
+function insertKeys(keys StringArray, iterations Count) returns Outcome
+	requireRows(keys.count(), iterations: iterations)
+
+	let map = insertedKeys(keys)
+	let last = try keys.get(keys.count() - 1) otherwise panic("hash: the keys are never empty")
+	let value = map.count() + (try map.get(last) otherwise panic("hash: the last key was inserted"))
+
+	return Outcome.keyed(value, table: map)
+end 'insertKeys'
+
+function lookUpKeys(map KeyedCounts, keys StringArray, iterations Count) returns Outcome
+	requireRows(keys.count(), iterations: iterations)
+
+	var sum = 0 as Count
+
+	for key in keys 'eachKey'
+		sum = sum + (try map.get(key) otherwise panic("hash: every key was inserted"))
+	end 'eachKey'
+
+	return Outcome.plain(sum)
+end 'lookUpKeys'
+
+function insertInts(values CountArray, iterations Count) returns Outcome
+	requireRows(values.count(), iterations: iterations)
+
+	let set = insertedInts(values)
+
+	return Outcome.set(set.count(), table: set)
+end 'insertInts'
+
+function probeInts(set CountSet, values CountArray, iterations Count) returns Outcome
+	requireRows(values.count(), iterations: iterations)
+
+	var hits = 0 as Count
+
+	for value in values 'eachValue'
+		if set.contains(value) 'present'
+			hits = hits + 1
+		end 'present'
+	end 'eachValue'
+
+	return Outcome.plain(hits)
+end 'probeInts'
+
+function chainSha256(buffer ByteArray, carry ByteArray, iterations Count) returns Outcome
+	var carried = carry
+
+	for _ in 0 upto iterations 'eachOp'
+		for (iter, byte) in carried.withIterator() 'eachByte'
+			try buffer.set(iter.index(), value: byte) otherwise panic("hash: the buffer is longer than the carried digest")
+		end 'eachByte'
+
+		carried = sha256(buffer)
+	end 'eachOp'
+
+	return Outcome.plain(digest(carried))
+end 'chainSha256'
+
+public function runOnce(workload Workload, f Fixtures, iterations Count) returns Outcome
+	return match workload 'byWorkload'
+		string8 gives countChanges(f.string8, iterations: iterations)
+		string16 gives countChanges(f.string16, iterations: iterations)
+		string64 gives countChanges(f.string64, iterations: iterations)
+		string1k gives countChanges(f.string1k, iterations: iterations)
+		string64k gives countChanges(f.string64k, iterations: iterations)
+		mapStringInsert gives insertKeys(f.keys, iterations: iterations)
+		mapStringLookup gives lookUpKeys(f.keyed, keys: f.keys, iterations: iterations)
+		setIntInsert gives insertInts(f.ints, iterations: iterations)
+		setIntContains gives probeInts(f.intSet, values: f.ints, iterations: iterations)
+		array16 gives countChanges(f.array16, iterations: iterations)
+		array1024 gives countChanges(f.array1024, iterations: iterations)
+		hasherFields gives countChanges(f.staticAccounts, iterations: iterations)
+		hasherObject gives countChanges(f.objectAccounts, iterations: iterations)
+		sha256Mib gives chainSha256(f.shaBuffer, carry: f.shaCarry, iterations: iterations)
+	end 'byWorkload'
+end 'runOnce'

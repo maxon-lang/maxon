@@ -56,8 +56,8 @@ export typealias WitnessMethodIndex = int(0 to u16.max) implements ElementIndex
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT**: a header of
 // `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `shareWalkFunc@24`,
-// `cloneFunc@32`, then `methods[N]@40` — one 8-byte function pointer per requirement of the
-// interface's TRANSITIVE list, each
+// `cloneFunc@32`, `storageHashed@40`, then `methods[N]@48` — one 8-byte function pointer per
+// requirement of the interface's TRANSITIVE list, each
 // stamped by a `funcAbs64InRdata` relocation. The fused `witnessCall` reads method `i` from
 // `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so the emitter (the blob) and every reader
 // (the x64, arm64 and wasm lowerings) must share these two constants — which is why they are stated once,
@@ -65,7 +65,7 @@ export typealias WitnessMethodIndex = int(0 to u16.max) implements ElementIndex
 //
 // ⚠ **THERE IS NO PARENT-TABLE POINTER.** Parent-interface requirements are PROJECTED INTO the
 // child table by `interfaceWitnessSlots`, so there is no runtime chain to follow.
-let WitnessTableHeaderBytes = 40 as ByteOffset
+let WitnessTableHeaderBytes = 48 as ByteOffset
 let WitnessSlotBytes = 8 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF** — the conformer's
@@ -113,6 +113,10 @@ export let WitnessShareWalkFuncOffset = 24 as ByteOffset
 // `__mm_clone_existential` reads it exactly as the word above is read, and a conformer nothing can
 // copy takes the abort entry rather than 0 — see `MmRuntime.MmCloneUncloneableName`.
 export let WitnessCloneFuncOffset = 32 as ByteOffset
+
+// A fact of the CONFORMER, so every interface's table carries it: `elementsHashAsStorage` reads it from
+// the table of whatever constraint satisfies `Hashable`, which may name an interface extending it.
+export let WitnessStorageHashedOffset = 40 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS.**
 // The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
@@ -397,7 +401,7 @@ export union IterableFactory
 end 'IterableFactory'
 
 // All three are exported for ONE reason: `BuiltinConformanceRuntime` names each SYNTHESIZED impl it installs
-// (`int.hash`, `<scalar>.equals`, `<scalar>.compare`, `String.hash`/`String.equals`) by joining a conformer
+// (`int.hash`, `<scalar>.equals`, `<scalar>.compare`, `String.equals`) by joining a conformer
 // name to the method name, and that symbol must be the one the witness-table reloc points at. The operator
 // lowerings do NOT name them — they read the method off the synthesized protocol
 // (`IrInterfaceMap.protocolDeclaration`), so the method searched for and its result type stay one fact.
@@ -2840,7 +2844,7 @@ export let IntConformerName = b"int"
 
 // The canonical conformer name of the managed concrete `String` — the twin of `IntConformerName` for the
 // String intrinsic conformance. It keys `String`'s witness tables (`__witness_String.*`) and its
-// synthesized `String.hash`/`String.equals` impls, and it MUST equal
+// synthesized `String.equals` impl, and it MUST equal
 // `primitiveTypeTagName(ValueTypeTag.string)` — the one place a resolved `string` argument is rendered to a
 // name (`conformerTypeArgName` -> `mangleTypeArg` -> `primitiveTypeTagName`), so the conformance answer, the
 // witness-table label, and the impl symbol cannot drift on how they spell it.
@@ -2888,12 +2892,12 @@ export let FloatConformerName = b"float"
 // `__witness_Character.*` tables and its synthesized `Character.hash`/`Character.equals` impls, and, like
 // every sibling above, it MUST equal `primitiveTypeTagName(ValueTypeTag.character)`.
 //
-// ⚠ **IT IS A SEPARATE CONFORMER FROM `String` EVEN THOUGH THE TWO IMPLS ARE THE SAME GRAPH.** A
+// ⚠ **IT IS A SEPARATE CONFORMER FROM `String` EVEN THOUGH ITS IMPLS ARE `String`'s GRAPHS.** A
 // `Character` and a `String` share the fused byte record (`TypeRules.tagIsByteRecord`), so hashing and
 // comparing them is byte-for-byte the same work — and `installBuiltinConformanceRuntime` builds both
-// pairs from the SAME two builders for exactly that reason. What may not be shared is the SYMBOL: a
+// types' impls from the SAME builders for exactly that reason. What may not be shared is the SYMBOL: a
 // witness slot is stamped `qualifiedMethodName(<conformer>, <method>)` from the conformer the TYPE
-// ARGUMENT reduces to, and a `Set with Character` reduces to `Character`. Pointing it at `String.hash`
+// ARGUMENT reduces to, and a `Set with Character` reduces to `Character`. Pointing it at `String.equals`
 // would mean a program using only Character keys links a symbol whose name says String, and the day the
 // two representations diverge the mistake would be silent.
 //
@@ -3012,15 +3016,13 @@ end 'primitiveTagOfTypeName'
 // parallel bool would let a caller answer one question and forget the other, where a single value forces
 // every door to route through the one discovery.
 //
-// ⛔⛔ **APPEND ONLY — TWO MATCHES RANGE OVER THIS DECLARATION ORDER, AND AN INSERTED CASE WOULD JOIN THEM IN
-// SILENCE.** `isIntrinsicBuiltinConformance` reads `arrayRecord to payloadFreeEnum` (the granted rows) and
-// `LowerMaxonToStd.witnessSlotImpl` reads `none to arrayRecord` (the rows whose impl is their own join). A
-// case APPENDED after `payloadFreeEnum` falls outside both ranges and fails to compile at every exhaustive
-// reader — which is the guard. A case INSERTED between two existing members is swallowed by whichever range
-// spans it, and would silently inherit an answer nobody chose for it: a conformance granted, or an impl
-// symbol named by a join that does not exist. Both ranges consolidate arms that genuinely share a body, so
-// they are not splittable without duplicating one; the discipline is here instead, at the site an author
-// editing this enum reads first.
+// ⛔⛔ **APPEND ONLY — A MATCH RANGES OVER THIS DECLARATION ORDER, AND AN INSERTED CASE WOULD JOIN IT IN
+// SILENCE.** `isIntrinsicBuiltinConformance` reads `arrayRecord to payloadFreeEnum` (the granted rows). A
+// case APPENDED after `payloadFreeEnum` falls outside the range and fails to compile at every exhaustive
+// reader — which is the guard. A case INSERTED between `arrayRecord` and `payloadFreeEnum` is swallowed by
+// the range, and would silently inherit a conformance nobody granted it. The range consolidates arms that
+// genuinely share a body, so it is not splittable without duplicating one; the discipline is here instead,
+// at the site an author editing this enum reads first.
 export enum DiscoveredConformer
 	// The name is a keyword primitive, `String`, or a type whose conformances are all DECLARED — a struct's
 	// `implements`, which `typeDeclaresInterface` answers for and this table never speaks to.
@@ -3033,7 +3035,7 @@ end 'DiscoveredConformer'
 // the SINGLE source of "does a builtin type conform to this protocol?"** The primitives `int`/`float`/`bool`
 // AND the managed concrete `String` conform with NO user `implements`: the compiler synthesizes their
 // `int.hash`/`int.equals`/`int.compare`, `float.hash`/`float.equals`/`float.compare`, `bool.compare` and
-// `String.hash`/`String.equals` impls natively (the type-side twin of the synthesized
+// `String.equals` impls natively, beside the corpus's `String.hash` (the type-side twin of the synthesized
 // `Hashable`/`Equatable`/`Comparable` interfaces), so
 // `Box with Integer where T is Hashable`, `Pair with Integer where T is Comparable` and `Box with String
 // where T is Hashable and Equatable` are legal and their witness slots resolve to real `.text` symbols.

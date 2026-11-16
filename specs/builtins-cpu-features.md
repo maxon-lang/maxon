@@ -1,11 +1,11 @@
 ---
 feature: builtins-cpu-features
 status: stable
-keywords: [builtins, __Builtins, cpuHasAes, intrinsics, cpu features, AES-NI, PCLMULQDQ, SSSE3, SSE4.1, HWCAP_AES, HWCAP_PMULL, cpuid]
+keywords: [builtins, __Builtins, cpuHasAes, cpuHasSha, SHA-NI, HWCAP_SHA2, intrinsics, cpu features, AES-NI, PCLMULQDQ, SSSE3, SSE4.1, HWCAP_AES, HWCAP_PMULL, cpuid]
 category: system
 ---
 
-# `__Builtins.cpuHasAes()`
+# `__Builtins.cpuHasAes()` and `__Builtins.cpuHasSha()`
 
 ## Documentation
 
@@ -19,8 +19,18 @@ carry-less multiply AES-GCM's GHASH is built on. It takes no arguments and answe
 | arm64-macos | always `true`: every Apple Silicon CPU has both |
 | wasm32-wasi | none: the call is refused with E3104 |
 
-The probe is part of the program only when it calls `cpuHasAes()`; a program that never asks carries no `cpuid`
-code and no word for the answer. The answer is read from a word written once at startup, before `main`, so
+`__Builtins.cpuHasSha()` answers, the same way, whether this CPU can run the hardware SHA-256 compression:
+
+| Target | Where the answer comes from |
+|---|---|
+| x64-windows, x64-linux | `cpuid` leaf 7: SHA-NI (EBX bit 29), with SSSE3 and SSE4.1 from leaf 1 |
+| arm64-linux | `AT_HWCAP`: `HWCAP_SHA2` (bit 6) |
+| arm64-macos | always `true` |
+| wasm32-wasi | none: the call is refused with E3104 |
+
+The probe is part of the program only when something asks it: a `cpuHasAes()` or `cpuHasSha()` call, or a
+hash that chooses its tier at startup (`Hasher`, `KeyedHasher`, `String.hash` and every `hash()` built on them). A program
+that never asks carries no `cpuid` code and no word for the answer. The answer is read from a word written once at startup, before `main`, so
 every call in a run agrees.
 
 Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one, and
@@ -176,4 +186,59 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__cpufeat_aes_usable', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-cpu-features.sha-answer-is-a-bool-and-stable -->
+<!-- tier: stdlib -->
+`cpuHasSha` is a `bool` — it is negated, combined with `and` and compared with `==`, none of which an
+integer answer permits — and three calls in one run agree, because the answer is read from a word written
+once before `main`.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.cpuHasSha()
+	let second = not not __Builtins.cpuHasSha()
+	let third = __Builtins.cpuHasSha()
+
+	if first == second and not (first and not second) 'consistent'
+		print("a bool\n")
+	end 'consistent'
+
+	print("{first == second and second == third}\n")
+	return 0
+end 'main'
+```
+```stdout
+a bool
+true
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-cpu-features.error.sha-arity-checked -->
+<!-- tier: stdlib -->
+`cpuHasSha` takes no arguments, and is refused by the same `builtinArity` check as `cpuHasAes`.
+```maxon
+function main() returns ExitCode
+	return __Builtins.cpuHasSha(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.cpuHasSha' takes exactly 0 arguments, but 1 was given
+```
+
+<!-- test: builtins-cpu-features.error.sha-rejected-on-wasm -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+WASI cannot ask the CPU for its SHA instructions either, so this lane refuses the call with `E3104`, naming
+the runtime entry that has no lowering there.
+```maxon
+function main() returns ExitCode
+	let usable = __Builtins.cpuHasSha()
+	print("{usable}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:26: this construct lowers to the runtime entry '__cpufeat_sha_usable', which has no wasm32-wasi implementation
 ```

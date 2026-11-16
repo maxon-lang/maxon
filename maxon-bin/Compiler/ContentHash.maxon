@@ -1,20 +1,58 @@
-// The one place the compiler query spine's hashing carries policy; the fold itself is `stdlib/Hasher`.
+// The one place the compiler query spine's hashing carries policy; the fold itself is `KeyedHasher`.
 //
 // Every per-file query (queryTokens, queryParseOps) is keyed on the content hash of its input, and
 // the whole-program merged module (`allModuleCache`) is keyed on a composite hash folded over every file's content
 // hash in source-path order. Content-hash keying is **parallel-safe**: a hash is computed
 // independently per file with no shared mutable state, so per-file parse tasks never contend on a
-// global counter, and two builds of byte-identical input produce byte-identical cache keys.
+// global counter, and two builds of byte-identical input under one digest seed produce byte-identical
+// cache keys.
 
-// Fold a byte sequence into a running hash, tagged with its length.
-//
-// The tag is the policy: FNV-1a folds a flat byte sequence, so without a length "ab" then "c" and
-// "a" then "bc" reach one digest — and the signature index folds a name, then a return type, then
-// the next name. It lives here rather than in stdlib because anything that must interoperate with
-// another FNV-1a implementation needs the bare fold.
-//
-// Takes a `ByteArray`, so a caller that already holds one — every interned name is a zero-copy
-// slice of the source — hashes it without building a String.
 function mixBytes(state HashDigest, bytes ByteArray) returns HashDigest
-	return Hasher.combined(Hasher.combinedBytes(state, bytes: bytes), value: bytes.count() as HashDigest)
+	return KeyedHasher.combined(KeyedHasher.combinedBytes(state, bytes: bytes), value: bytes.count() as HashDigest)
 end 'mixBytes'
+
+let OutputDigestBytes = 8
+
+// Names minted into the output, the build-id and the spec shard need one value in every process on
+// every host, which a seeded `KeyedHasher` digest is not.
+export function outputDigest(bytes ByteArray) returns HashDigest
+	let digest = sha256(bytes)
+
+	return readOrderedWord(digest, off: 0, width: OutputDigestBytes, limit: digest.count(), order: ByteOrder.bigEndian) as HashDigest
+end 'outputDigest'
+
+let OutputDigestOrigin = 0 as HashDigest
+
+function appendOutputWord(joined ByteArray, word HashDigest)
+	appendOrderedWord(joined, word: word as OrderedWord, width: OutputDigestBytes, order: ByteOrder.littleEndian)
+end 'appendOutputWord'
+
+function outputMessageLedBy(word HashDigest, room ElementIndex) returns ByteArray
+	let joined = ByteArray.create(OutputDigestBytes + room, zeroed: false)
+	appendOutputWord(joined, word: word)
+
+	return joined
+end 'outputMessageLedBy'
+
+function outputCombined(state HashDigest, value HashDigest) returns HashDigest
+	let joined = outputMessageLedBy(state, room: OutputDigestBytes)
+	appendOutputWord(joined, word: value)
+
+	return outputDigest(joined)
+end 'outputCombined'
+
+function outputMixed(state HashDigest, bytes ByteArray) returns HashDigest
+	let joined = outputMessageLedBy(state, room: OutputDigestBytes + bytes.count())
+	appendOutputWord(joined, word: bytes.count() as HashDigest)
+	joined.append(bytes)
+
+	return outputDigest(joined)
+end 'outputMixed'
+
+function outputDigestOfPair(first ByteArray, second ByteArray) returns HashDigest
+	let joined = outputMessageLedBy(first.count() as HashDigest, room: first.count() + second.count())
+	joined.append(first)
+	joined.append(second)
+
+	return outputDigest(joined)
+end 'outputDigestOfPair'

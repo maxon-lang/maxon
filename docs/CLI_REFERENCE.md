@@ -144,7 +144,8 @@ makes — so a compile lexes, sweeps and parses the library once per compiler an
 compile, in any process, starts from what that one wrote:
 
 ```text
-<cache>/library/v<cache format>/<compiler path and target>/<compiler build>/
+<cache>/library/<hash tier>/hash-seed
+<cache>/library/<hash tier>/v<cache format>/<compiler path and target>/<compiler build>/
 ├── views-<key>.mxlc            # every library file's tokens with `#if` resolved
 ├── baseline-<key>.mxlc         # the library's declarations
 ├── core-<key>.mxlc             # the same, less the files that declare generic functions
@@ -154,6 +155,13 @@ compile, in any process, starts from what that one wrote:
 
 - **It is always on**, under the same `<cache>` as the run cache: the first usable row of the table
   above, so `MAXON_RUN_CACHE_ROOT` moves it too. On a host with no usable row, compiles run without it.
+- **Its keys come from one stored seed.** The cache's keys and checksums are
+  [`KeyedHasher`](STDLIB_REFERENCE.md#keyedhasher) digests, and those differ between hash tiers, so each tier the
+  host's compiles run on has a directory of its own, named by a digest that tier alone computes. That
+  directory holds `hash-seed`, the 8 bytes of a [`HashSeed`](STDLIB_REFERENCE.md#hashseed) every compile
+  using it folds its keys from. The first compile to find no seed writes one, removing whatever entries the
+  directory held; of compiles racing to write it, one seed wins and the others adopt it. A compile that can
+  neither read nor write the seed runs without the cache.
 - **It holds the installed `stdlib/` and `runtime/`.** [Scriptlib](#the-scriptlib-directory) packages
   are your own files and change between compiles, so each compile reads and parses them fresh.
 - **A program folds its own declarations on top of the library's.** A program that shadows a library
@@ -168,7 +176,8 @@ compile, in any process, starts from what that one wrote:
   as a cold one. Entries are written under a temporary name and renamed into place, so concurrent compiles
   share the cache safely.
 - **Old entries are removed as new ones are written.** A new build of the compiler replaces the previous
-  build's directory, a directory an older entry format left is removed, each kind keeps its 4 newest
+  build's directory, a directory an older entry format left is removed (directly under `library/` as well
+  as under a tier's directory), each kind keeps its 4 newest
   entries (16 for parses), and the 16 most recently written compiler directories are kept.
 
 [`maxon cache`](#maxon-cache) counts its entries and `clear` removes it. Under `--log=compiler:debug` each
@@ -995,6 +1004,18 @@ with, passed to the binary as `--descendant-token=<token>`, and its `ended` line
 count; `maxon test` takes out the frames bearing its token, and a count that differs from them fails the
 test. A frame a test prints with any other token, or none, is test output.
 
+**The hash seed and tier.** A run draws one hash seed and hands it to every test process as
+`MAXON_HASH_SEED`, with a `MAXON_HASH_TIER`: `aes` when the target has an `aes` tier, the test binary runs
+natively on this CPU and the CPU has AES, else `software`. A non-empty value of either variable already in
+`maxon test`'s own environment is kept. Every failure block ends with the pair, at the block's indent:
+
+```text
+  MAXON_HASH_SEED=<16 hex digits> MAXON_HASH_TIER=<tier>
+```
+
+Under `--json`, the record of every test that did not pass carries the same pair as `hashSeed` and
+`hashTier`. Running with both variables set to the pair named reproduces the run's hashing.
+
 **Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
 harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
 leak found at exit, an entry left in the process's scratch directories, or a process left running after
@@ -1227,8 +1248,9 @@ library cache — baseline <loaded|built|unused>, <n> loaded, <n> written, <n> r
 `baseline` says where the library's declarations came from: `loaded` from the cache, `built` by this
 compile (which then wrote them), or `unused` when the program sweeps the library itself. The counts are the
 cache entries this compile loaded, wrote and rejected, then the library files whose declarations it swept
-and the library files it parsed. The lines prefixed `library cache:` say why an entry was rejected or a
-baseline went unused.
+and the library files it parsed. `rejected` includes the entries removed, and a damaged `hash-seed`
+replaced, when this compile wrote the tier's seed. The lines prefixed `library cache:` say why an entry was
+rejected or a baseline went unused, or, as `no library cache: <reason>`, why the compile ran without it.
 
 **The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature
@@ -1332,6 +1354,8 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | Variable | Effect |
 |----------|--------|
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A decimal number from 1 to 2147483647, optionally led by `+`, sets it exactly, above the machine's count as well as below it; any other value is ignored. `Scheduler.processorCount()` answers the resulting count. |
+| `MAXON_HASH_TIER` | Forces the tier the seeded hash ([`Hasher`](STDLIB_REFERENCE.md#hasher), [`KeyedHasher`](STDLIB_REFERENCE.md#keyedhasher), and every `String`, `Character` and `Array` `hash()`) runs on: `aes` or `software`. Unset or empty, the program takes the best tier the host has, `aes` before `software`; `software` is one function on every target, and the only tier `wasm32-wasi` has. A value that names no tier ends the program before `main` with exit code 1 and `MAXON_HASH_TIER=<value> is not a hash tier: expected aes or software` on stderr, and a tier the host lacks with `MAXON_HASH_TIER=<value> is not available on this host: its best hash tier is <best>`. A program reads this variable and `MAXON_HASH_SEED` only when it contains the hash runtime, and then checks both before `main`, whether or not it reaches a hash; a program with no hash runs whatever they hold. The compiler reads it too, and its library cache keeps one directory per tier. |
+| `MAXON_HASH_SEED` | Pins the process's hash seed, the one `Hasher` and every `hash()` fold from, which is otherwise drawn from the operating system at startup. The value is 16 hexadecimal digits, upper or lower case, read in order as the seed's 8 bytes. Unset or empty draws a seed. Any other value ends the program before `main` with exit code 1 and `MAXON_HASH_SEED=<value> is not a hash seed: expected 16 hexadecimal digits` on stderr. A pin is readable by the program and inherited by the processes it starts, and a pinned process has no collision resistance against anyone who knows the pin, so a deployed program runs unpinned. [`scale-test`](#maxon-scale-test) sets it for every compile it measures, and [`spec-test`](#maxon-spec-test) and [`maxon test`](#maxon-test) for every program they run. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 | `MAXON_TRACK_DESCENDANTS` | Set by `maxon test` and `spec-test` for every program they run on a native target. A value starting `A` arms descendant tracking when the program starts, so [`Process.endDescendants()`](STDLIB_REFERENCE.md#process) finds every process it started; the text after the `A` is the token the program ends each stderr frame with, naming a process left running (`@@maxon-spec@@!<pid> <name>`, a tab, the token); the program then rewrites the `A` to `D`, so the processes it starts inherit the variable without arming. A host that refuses the tracking ends the program at start with a fatal naming it. With any other value, or unset, a program that calls `Process.endDescendants()` tracks its descendants from startup, for that call alone; every other program runs untracked. |
 
@@ -3494,7 +3518,7 @@ case is compiled inside this process, so the compiler under test is the executab
 |--------|-------------|
 | `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`, a case-sensitive substring: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. Repeatable: the run takes every test any pattern selects, in one pool of workers. A comma is part of the pattern. |
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
-| `--shard=<k>/<n>` | Run only the specs in shard `<k>` of `<n>`, where 1 ≤ `<k>` ≤ `<n>` ≤ 256. A spec file is in shard (H mod `<n>`) + 1, where H is the 64-bit FNV-1a hash of its name, so every host splits the suite the same way and shards 1 to `<n>` together are the whole run. Any other value is refused as an invalid option value. |
+| `--shard=<k>/<n>` | Run only the specs in shard `<k>` of `<n>`, where 1 ≤ `<k>` ≤ `<n>` ≤ 256. A spec file is in shard (H mod `<n>`) + 1, where H is the first 64 bits of the SHA-256 of its name, so every host splits the suite the same way and shards 1 to `<n>` together are the whole run. Any other value is refused as an invalid option value. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it: `wasm32-wasi` under the vendored wasmtime; a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine `maxon-linux`. There, a target for the Mac's own CPU is compiled and run by a copy of the compiler that `spec-test` builds for the machine, and on Apple silicon `x64-linux` cases are compiled on the Mac and run under Rosetta, which must be enabled in OrbStack (`orb config set rosetta true`, then restart OrbStack). Each entry into the machine is preceded by a `root` entry (`orb run -u root`) that refreshes the machine's cached view of the host's files, so a binary compiled a moment earlier runs at its current size. The suite a copy of the compiler runs in the machine writes its output to files the host prints, because `orb run` can drop the tail of a large piped output. On a host that cannot execute the target, each case is compiled and reported as not run. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
 | `--batch=on\|off` | `on` (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly. `off` compiles and runs every case on its own. Any other value is refused. |
@@ -3521,6 +3545,23 @@ A spec's shared batch program that the harness cannot build for a reason of the 
 isolate the breaking case of within its budget of trial builds, prints a `harness error:` line on stderr
 after the report, naming the cases that ran alone. Their own results decide them, and the run
 exits **1** even when every case passed.
+
+**The hash seed and tier.** A run draws one hash seed and hands it to every program it starts as
+`MAXON_HASH_SEED`, with a `MAXON_HASH_TIER`, so each run hashes, and orders its maps, differently. The tier
+is `aes` where the target has an `aes` tier, its programs run natively on this CPU and the CPU has AES, and
+`software` on an emulated lane and on `wasm32-wasi`; a lane where no program runs takes the host's best.
+A case's `<!-- env: -->` pin of either variable (`docs/SPECS.md`, "Test Section") wins for its program, and
+so does a non-empty value already in `spec-test`'s own environment for the whole run. Every failure report ends
+with the pair of the phase that failed, on a line of its own:
+
+```text
+    MAXON_HASH_SEED=<16 hex digits> MAXON_HASH_TIER=<tier>
+```
+
+A case that fails to compile, or whose `TargetIr` pin differs, names the run's pair, the one the compiler
+ran under; a case whose program's check fails names the pair that program ran with. A case whose worker
+died names the compiler's pair, then, when its program's pair differs, the same line led by `program: `.
+Running with both variables set to the pair named reproduces the failing phase.
 
 Every case's program runs with its working directory in `.spec-run-<pid>/`, a directory of the run's own
 directly under the checkout root, and on a native target a case that leaves a process running fails,
@@ -3571,7 +3612,9 @@ itself broke.
 
 Before the first measured rung it compiles the smallest rung once, unmeasured, to warm the library cache,
 so every measured rung reads the cache the same way. A phase's memory counts the compile's own work: what
-the tree lock's upkeep allocates while the phase runs is subtracted from it.
+the tree lock's upkeep allocates while the phase runs is subtracted from it. Every compile it measures runs
+with one fixed `MAXON_HASH_SEED`, so the compiler's own hash tables lay out alike in each compile and
+repeated compiles of a rung allocate the same.
 
 Each rung is compiled by `maxon build`, run, and then checked by [`maxon lint`](#maxon-lint), whose
 measurements add three rows to each per-phase table and to the result document's `phases`:

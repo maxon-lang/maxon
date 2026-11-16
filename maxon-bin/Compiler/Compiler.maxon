@@ -2010,7 +2010,7 @@ function prepareLowering(project Project, module MaxonModule) returns LoweredPro
 	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
 	// fields carry what a disagreement produces.
 	let parksOnIo = targetParksOnIo(project.target)
-	let usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
+	let usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, arrayHashMethod: signatures.arrayHashMethodName(), parksOnIo: parksOnIo)
 
 	// The managed-memory runtime's empty-slot panic renders the cursor's position through `__int_to_string`
 	// from a synthesized body, which the scan cannot see.
@@ -2509,7 +2509,7 @@ function afterPipeline(project Project, lowered LoweredProgram) returns BackendB
 	pipeline.stdModule.usesProcessNamespace = usage.usesProcessNamespace
 	pipeline.stdModule.usesEntropy = usage.usesEntropy
 	pipeline.stdModule.usesTrustStore = usage.usesTrustStore
-	pipeline.stdModule.usesEnvironment = usage.usesEnvironment
+	pipeline.stdModule.usesEnvironment = usage.usesEnvironment or usage.usesHash
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableW`, already in
@@ -2563,6 +2563,7 @@ function afterPipeline(project Project, lowered LoweredProgram) returns BackendB
 	// reserves address space the OS neither charges nor faults in.
 	pipeline.stdModule.hasPageReservation = targetHasPageReservation(project.target)
 	pipeline.stdModule.hostText = hostTextEncodingOf(project.target)
+	pipeline.stdModule.environmentReadIsCaptured = environmentReadsThroughCapture(usage, target: project.target)
 
 	// Where the APPENDED band begins. Every install below and every synthesizer under
 	// `synthesizeBodies` pushes onto `functions`, so this index is the boundary between what the
@@ -2742,6 +2743,7 @@ function afterPipeline(project Project, lowered LoweredProgram) returns BackendB
 	installProcessRuntime(pipeline.stdModule, usage: usage, gatesDescendants: project.entryStubCalls.gatesDescendants)
 	installRandomRuntime(pipeline.stdModule, usage: usage)
 	installCryptoRuntime(pipeline.stdModule, usage: usage)
+	installHashRuntime(pipeline.stdModule, usage: usage, target: project.target)
 	installTrustStoreRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The terminal question (`__tty_stdout_wants_color`), on its own bit beside them. It is the one install

@@ -1,0 +1,33 @@
+let SeedScratchSweepCaseDirName = "library-cache-seed-scratch-sweep"
+let SeedScratchSweepOutputName = "seed-scratch-program"
+let SeedScratchSweepProbeLabel = "cli-library-cache-seed-scratch"
+let SeedScratchSweepPlantedBytes = "half"
+
+test 'a build sweeps the seed scratch file of a writer that has ended and keeps a running writer and the seed'
+	let dir = freshCaseDir(SeedScratchSweepCaseDirName)
+	stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+	let cold = runLibraryCacheBuild(dir, program: ProgramDirName, output: SeedScratchSweepOutputName, options: StringArray.create(0))
+	Expect.equal(cold.exitCode(), expected: 0, message: "the first build under an empty cache root did not succeed. It wrote to stdout: {cold.stdout} and to stderr: {cold.stderr}")
+
+	let seeds = seedFilesIn(libraryCacheDirIn(dir))
+	Expect.equal(seeds.count(), expected: 1, message: "the first build left {seeds.count()} '{HashSeedFileName}' files under {libraryCacheDirIn(dir).toString()}, where the case needs the one seed it publishes.")
+
+	let seed = try seeds.get(0) otherwise panic("the count was checked to be one")
+	let seedBytes = fileBytes(seed)
+	let home = try seed.parent() otherwise panic("a seed file under the library cache has a directory")
+	let ended = home.join(mintedScratchName(SeedScratchSweepProbeLabel, base: HashSeedFileName, namespace: OwnHostNamespace, pid: endedVersionRunProcessId(), serial: 1))
+	let running = home.join(mintedScratchName(SeedScratchSweepProbeLabel, base: HashSeedFileName, namespace: OwnHostNamespace, pid: Process.id(), serial: 2))
+	writeStagedFile(ended, content: SeedScratchSweepPlantedBytes)
+	writeStagedFile(running, content: SeedScratchSweepPlantedBytes)
+
+	let warm = runLibraryCacheBuild(dir, program: ProgramDirName, output: SeedScratchSweepOutputName, options: StringArray.create(0))
+	let said = "It wrote to stdout: {warm.stdout} and to stderr: {warm.stderr}"
+	Expect.equal(warm.exitCode(), expected: 0, message: "the second build did not succeed. {said}")
+
+	Expect.isFalse(File.exists(ended), message: "the second build left {ended.toString()}, the seed scratch file of a compiler that has ended, so an interrupted seed publish leaves a file in the library cache that nothing ever removes. {said}")
+	Expect.isTrue(File.exists(running), message: "the second build removed {running.toString()}, the seed scratch file of a compiler that is still running, whose publish then fails. {said}")
+	Expect.isTrue(fileBytes(seed).equals(seedBytes), message: "the second build changed the published seed {seed.toString()}, so every digest the first build stored is keyed by a seed nobody holds any longer. {said}")
+
+	discardStagedDir(dir)
+end 'a build sweeps the seed scratch file of a writer that has ended and keeps a running writer and the seed'

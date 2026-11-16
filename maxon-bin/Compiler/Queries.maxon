@@ -2215,7 +2215,7 @@ function parseQueryOf(project Project, path FilePath) returns ParseQuery throws 
 	let overrides = project.db.rowSetOverrides.of(path)
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
 	let liveness = signatures.livenessDigestParsedBy(path)
-	let keyHash = currentParseMemoKey(project, path: path, contentHash: contentHash, signatureHash: Hasher.combined(signatures.hash, value: liveness), buildsBodies: buildsBodies, overrides: overrides)
+	let keyHash = currentParseMemoKey(project, path: path, contentHash: contentHash, signatureHash: KeyedHasher.combined(signatures.hash, value: liveness), buildsBodies: buildsBodies, overrides: overrides)
 
 	if let memo = try project.db.parseCache.get(path) 'memoized'
 		if memo.keyHash == keyHash 'hit'
@@ -2846,6 +2846,7 @@ function finishLibraryCache(project Project)
 	persistStashedParses(project)
 
 	let tally = project.db.libraryTally
+	tally.rejected = tally.rejected + claimedSeedDiscards()
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.compiler).debug("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")

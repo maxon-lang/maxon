@@ -4740,6 +4740,32 @@ extension Parser
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCpuHasAesName, runtimeName: CpuAesUsableName, arity: CpuHasAesArity, resultTag: ValueTypeTag.boolean, resultAlias: NoAnswerAlias, calleeTok: anchor)
 			end 'cpuHasAes'
 
+			if callee.equals(BuiltinsCpuHasShaName) 'cpuHasSha'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCpuHasShaName, runtimeName: CpuShaUsableName, arity: CpuHasShaArity, resultTag: ValueTypeTag.boolean, resultAlias: NoAnswerAlias, calleeTok: anchor)
+			end 'cpuHasSha'
+
+			if callee.equals(BuiltinsHashSeedName) 'hashSeed'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsHashSeedName, runtimeName: HashSeedName, arity: HashSeedArity, resultTag: ValueTypeTag.integer, resultAlias: HashDigestAliasName, calleeTok: anchor)
+			end 'hashSeed'
+
+			if callee.equals(BuiltinsElementsHashAsStorageName) 'elementsHashAsStorage'
+				try requireBuiltinArity(args, builtinName: BuiltinsElementsHashAsStorageName, arity: ElementsHashAsStorageArity, calleeTok: anchor)
+				let hashable = try self.hashableWitnessConstraint(anchor)
+				return self.emitIntrinsicAnswer(HashElementsStoredName, args: argsOf(self.witnessValueForConstraint(hashable, anchor: anchor)), resultTag: ValueTypeTag.boolean, resultAlias: NoAnswerAlias, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			end 'elementsHashAsStorage'
+
+			if callee.equals(BuiltinsHashArrayStorageName) 'hashArrayStorage'
+				try requireBuiltinArity(args, builtinName: BuiltinsHashArrayStorageName, arity: HashArrayStorageArity, calleeTok: anchor)
+
+				let stored = try args.get(0) otherwise panic("hashArrayStorage: arity just checked but get(0) failed")
+
+				if not self.valueIsAnArray(stored) 'notAnArray'
+					throw SourceParseError.builtinOperandPhrase(String.from(BuiltinsHashArrayStorageName), required: ArrayOperandRequirement, got: self.valueKindWord(stored), line: anchor.line, column: anchor.column)
+				end 'notAnArray'
+
+				return self.emitIntrinsicAnswer(ManagedHashName, args: args, resultTag: ValueTypeTag.integer, resultAlias: HashValueAliasName, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			end 'hashArrayStorage'
+
 			// ⭐ **THE PRIORITY DOOR**, through the same argumentless-integer emit as the queries above even
 			// though it is not a query: its answer is an `int` and it takes nothing, and what differs — that
 			// it CHANGES this process before reporting on it — is not visible at this tier and is not this
@@ -5017,10 +5043,10 @@ extension Parser
 				return try self.emitBitsToFloat(args, calleeTok: anchor)
 			end 'bitsToFloat'
 
-			if isAesCipherIntrinsic(callee) 'aesCipher'
-				let intrinsic = try aesCipherIntrinsicNamed(callee) otherwise panic("parseCallNamed: '{String.from(callee)}' passed `isAesCipherIntrinsic` and names no AES cipher intrinsic")
-				return try self.emitAesCipherIntrinsic(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, callee: callee, intrinsic: intrinsic, calleeTok: anchor, resultUsed: resultUsed)
-			end 'aesCipher'
+			if isHardwareCryptoIntrinsic(callee) 'hardwareCrypto'
+				let intrinsic = try hardwareCryptoIntrinsicNamed(callee) otherwise panic("parseCallNamed: '{String.from(callee)}' passed `isHardwareCryptoIntrinsic` and names no hardware crypto intrinsic")
+				return try self.emitHardwareCryptoIntrinsic(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, callee: callee, intrinsic: intrinsic, calleeTok: anchor, resultUsed: resultUsed)
+			end 'hardwareCrypto'
 
 			if isOrderedWordIntrinsic(callee) 'orderedWord'
 				let intrinsic = try orderedWordIntrinsicNamed(callee) otherwise panic("parseCallNamed: '{String.from(callee)}' passed `isOrderedWordIntrinsic` and names no ordered-word intrinsic")
@@ -5580,6 +5606,7 @@ extension Parser
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
 			cpuAesUsableAddr or
+			cpuShaUsableAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
 			slabStateAddr or
@@ -5812,35 +5839,44 @@ extension Parser
 		return self.emitFullRangeFloatBits(operand, range: SourceRange.ofToken(calleeTok))
 	end 'emitBitsToFloat'
 
-	function emitAesCipherIntrinsic(func IrFunction, args ValueIdArray, argImmutableNames NameRoster, argAnchors TokenIndexArray, callee ByteArray, intrinsic AesCipherIntrinsic, calleeTok Token, resultUsed bool) returns ValueId throws SourceParseError
-		try requireBuiltinArity(args, builtinName: callee, arity: aesCipherArity(intrinsic), calleeTok: calleeTok)
+	function emitHardwareCryptoIntrinsic(func IrFunction, args ValueIdArray, argImmutableNames NameRoster, argAnchors TokenIndexArray, callee ByteArray, intrinsic HardwareCryptoIntrinsic, calleeTok Token, resultUsed bool) returns ValueId throws SourceParseError
+		try requireBuiltinArity(args, builtinName: callee, arity: hardwareCryptoArity(intrinsic), calleeTok: calleeTok)
 
-		let answersVerdict = aesCipherAnswersVerdict(intrinsic)
+		let answer = hardwareCryptoAnswer(intrinsic)
 
-		if resultUsed and not answersVerdict 'noValueToUse'
+		if resultUsed and answer == HardwareCryptoAnswer.nothing 'noValueToUse'
 			throw SourceParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
 		for index in 0 upto args.count() 'eachOperand'
-			let operand = try args.get(index) otherwise panic("emitAesCipherIntrinsic: args.count() == aesCipherArity just checked but get({index}) failed")
+			let operand = try args.get(index) otherwise panic("emitHardwareCryptoIntrinsic: args.count() == hardwareCryptoArity just checked but get({index}) failed")
 
-			if aesCipherOperandIsOffset(intrinsic, index: index as ParamCount) 'anOffset'
+			if hardwareCryptoOperandIsOffset(intrinsic, index: index as ParamCount) 'anOffset'
 				let operandTag = self.rangedAliasResolvedTag(self.tagOf(operand), nameId: self.valueNameId(operand))
 
 				if not tagIsInteger(operandTag) 'notAnInteger'
 					throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueKindWordAt(operand, tag: operandTag), line: calleeTok.line, column: calleeTok.column)
 				end 'notAnInteger'
 			end 'anOffset' else 'aBuffer'
-				if not self.valueIsByteBuffer(operand) 'notAByteBuffer'
-					throw SourceParseError.builtinOperandType(String.from(callee), required: AesCipherBufferRequirement, got: self.valueDisplayTypeName(operand), line: calleeTok.line, column: calleeTok.column)
+				if not self.valueIsByteBuffer(operand) and not (hardwareCryptoBufferAcceptsText(intrinsic) and self.valueIsText(operand)) 'notAByteBuffer'
+					throw SourceParseError.builtinOperandType(String.from(callee), required: hardwareCryptoBufferRequirement(intrinsic), got: self.valueDisplayTypeName(operand), line: calleeTok.line, column: calleeTok.column)
 				end 'notAByteBuffer'
 			end 'aBuffer'
 		end 'eachOperand'
 
-		self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, position: AesWrittenOperandPosition)
+		let runtimeName = hardwareCryptoRuntimeName(intrinsic)
+		let range = SourceRange.ofToken(calleeTok)
 
-		return self.emitRuntimeCall(aesCipherRuntimeName(intrinsic), args: args, resultTag: ValueTypeTag.boolean if answersVerdict else ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitAesCipherIntrinsic'
+		if isHardwareCryptoWriterCallee(runtimeName) 'writesAnOperand'
+			self.noteWrittenArgument(func, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, calleeTok: calleeTok, position: HardwareCryptoWrittenOperandPosition)
+		end 'writesAnOperand'
+
+		return match answer 'answer'
+			nothing gives self.emitRuntimeCall(runtimeName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			verdict gives self.emitRuntimeCall(runtimeName, args: args, resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			digest gives self.emitLibraryAliasedRuntimeCall(runtimeName, args: args, alias: HashDigestAliasName, range: range)
+		end 'answer'
+	end 'emitHardwareCryptoIntrinsic'
 
 	function emitOrderedWordAccess(func IrFunction, args ValueIdArray, argImmutableNames NameRoster, argAnchors TokenIndexArray, callee ByteArray, intrinsic OrderedWordIntrinsic, calleeTok Token, resultUsed bool) returns ValueId throws SourceParseError
 		try requireBuiltinArity(args, builtinName: callee, arity: OrderedWordArity, calleeTok: calleeTok)
@@ -6323,6 +6359,35 @@ extension Parser
 		callArgs.push(commandLine)
 		return self.emitLibraryAliasedRuntimeCall(runtimeName, args: callArgs, alias: FullRangeIntAliasName, range: SourceRange.ofToken(calleeTok))
 	end 'emitCommandLineRuntimeCall'
+
+	function hashableWitnessConstraint(anchor Token) returns WitnessSlotIndex throws SourceParseError
+		let interfaces = self.signatures.interfaceMap()
+		let hashableName = interfaces.spellingOf(BuiltinInterfaceKind.hashable)
+
+		var carriedCount = 0 as ElementIndex
+		var carried = 0 as WitnessSlotIndex
+		var carriedParam = 0 as ElementIndex
+
+		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'
+			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("hashableWitnessConstraint: constraints.get OOB at {i} below count {self.enclosingWhereConstraints.count()}")
+
+			if (i as ParamCount) < self.declaringWitnessParamCount and (carriedCount == 0 or constraint.typeParamIndex != carriedParam) and conformanceSatisfiesInterface(interfaces, declaredName: constraint.interfaceName, wanted: hashableName) 'carriedHashable'
+				carried = i as WitnessSlotIndex
+				carriedParam = constraint.typeParamIndex
+				carriedCount = carriedCount + 1
+			end 'carriedHashable'
+		end 'eachConstraint'
+
+		if carriedCount == 0 'noneCarried'
+			throw SourceParseError.unsupported(ElementsHashAsStorageNeedsHashableConstraint, line: anchor.line, column: anchor.column)
+		end 'noneCarried'
+
+		if carriedCount > 1 'severalCarried'
+			throw SourceParseError.unsupported(ElementsHashAsStorageNamesNoParameter, line: anchor.line, column: anchor.column)
+		end 'severalCarried'
+
+		return carried
+	end 'hashableWitnessConstraint'
 
 	// Validate a streaming builtin's single INTEGER handle argument (arity 1, integer, not float) and return it —
 	// the shared front of `subpReadLine`/`subpReadErrLine`/`subpCloseStdin`/`subpWait`/`subpRelease`, so the arity +

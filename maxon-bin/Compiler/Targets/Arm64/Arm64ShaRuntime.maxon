@@ -1,0 +1,80 @@
+let Arm64Sha256StateAbcd = 0
+let Arm64Sha256StateEfgh = 1
+let Arm64Sha256StateCopy = 2
+let Arm64Sha256WordsPlusConstants = 3
+let Arm64Sha256ConstantVector = 4
+let Arm64Sha256SavedAbcd = 5
+let Arm64Sha256SavedEfgh = 6
+let Arm64Sha256MessageFirst = 16
+
+function arm64Sha256Message(group FullRangeInt) returns MachineWord
+	return (Arm64Sha256MessageFirst + sha256ScheduleSlot(group)) as MachineWord
+end 'arm64Sha256Message'
+
+function emitArm64Sha256Copy(asm Arm64RuntimeAsm, dest MachineWord, src MachineWord)
+	emitArm64Rrr(asm.code, opcode: Arm64OpOrrVec16b, rd: dest, rn: src, rm: src)
+end 'emitArm64Sha256Copy'
+
+function emitArm64Sha256Group(asm Arm64RuntimeAsm, group FullRangeInt, constants Arm64Register)
+	let current = arm64Sha256Message(group)
+
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64Sha256ConstantVector, base: constants, byteOffset: (group * Sha256VectorBytes) as MachineWord)
+	emitArm64Rrr(asm.code, opcode: Arm64OpAddVec4s, rd: Arm64Sha256WordsPlusConstants, rn: current, rm: Arm64Sha256ConstantVector)
+	emitArm64Sha256Copy(asm, dest: Arm64Sha256StateCopy, src: Arm64Sha256StateAbcd)
+
+	if group < Sha256ExtendedGroups 'extendsTheSchedule'
+		emitArm64Rr(asm.code, opcode: Arm64OpSha256su0, rd: current, rn: arm64Sha256Message(group + 1))
+		emitArm64Rrr(asm.code, opcode: Arm64OpSha256su1, rd: current, rn: arm64Sha256Message(group + 2), rm: arm64Sha256Message(group + 3))
+	end 'extendsTheSchedule'
+
+	emitArm64Rrr(asm.code, opcode: Arm64OpSha256h, rd: Arm64Sha256StateAbcd, rn: Arm64Sha256StateEfgh, rm: Arm64Sha256WordsPlusConstants)
+	emitArm64Rrr(asm.code, opcode: Arm64OpSha256h2, rd: Arm64Sha256StateEfgh, rn: Arm64Sha256StateCopy, rm: Arm64Sha256WordsPlusConstants)
+end 'emitArm64Sha256Group'
+
+// The state is eight little-endian 32-bit words, a to h, as `sha256HardwareInitialState` lays them out;
+// the fourth argument is unused, and only caller-saved registers are touched, with no stack.
+function buildArm64Sha256BlocksChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let asm = Arm64RuntimeAsm.beginRawFunction()
+	let state = Arm64Register.x0
+	let data = Arm64Register.x1
+	let blocks = Arm64Register.x2
+	let constants = Arm64Register.x3
+	let loop = asm.newLabel()
+	let done = asm.newLabel()
+	let constantsLabel = registerStringBlob(globalData, bytes: sha256RoundConstantBytes())
+
+	arm64EmitCbzTo(asm, reg: blocks, label: done)
+	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(constants), label: constantsLabel.toByteArray(), adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64Sha256StateAbcd, base: state, byteOffset: 0)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64Sha256StateEfgh, base: state, byteOffset: Sha256VectorBytes as MachineWord)
+
+	asm.placeLabel(loop)
+	emitArm64Sha256Copy(asm, dest: Arm64Sha256SavedAbcd, src: Arm64Sha256StateAbcd)
+	emitArm64Sha256Copy(asm, dest: Arm64Sha256SavedEfgh, src: Arm64Sha256StateEfgh)
+
+	for group in 0 upto Sha256LoadedGroups 'eachLoaded'
+		let message = arm64Sha256Message(group)
+
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: message, base: data, byteOffset: (group * Sha256VectorBytes) as MachineWord)
+		emitArm64Rr(asm.code, opcode: Arm64OpRev32Vec16b, rd: message, rn: message)
+	end 'eachLoaded'
+
+	for group in 0 upto Sha256RoundGroups 'eachGroup'
+		emitArm64Sha256Group(asm, group: group, constants: constants)
+	end 'eachGroup'
+
+	emitArm64Rrr(asm.code, opcode: Arm64OpAddVec4s, rd: Arm64Sha256StateAbcd, rn: Arm64Sha256StateAbcd, rm: Arm64Sha256SavedAbcd)
+	emitArm64Rrr(asm.code, opcode: Arm64OpAddVec4s, rd: Arm64Sha256StateEfgh, rn: Arm64Sha256StateEfgh, rm: Arm64Sha256SavedEfgh)
+	arm64EmitAddRuntimeImm(asm, dest: data, base: data, imm: Sha256BlockBytes as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: blocks, base: blocks, imm: -1)
+	arm64EmitCbnzTo(asm, reg: blocks, label: loop)
+
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: Arm64Sha256StateAbcd, base: state, byteOffset: 0)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.store, vector: Arm64Sha256StateEfgh, base: state, byteOffset: Sha256VectorBytes as MachineWord)
+
+	asm.placeLabel(done)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitRet(asm.code)
+
+	return asm.finishChunk(cryptoChunkName(CryptoRoutine.sha256Blocks))
+end 'buildArm64Sha256BlocksChunk'

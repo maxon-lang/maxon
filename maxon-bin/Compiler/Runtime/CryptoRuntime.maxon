@@ -10,8 +10,9 @@ let AesGcmHashChunkName = b"mrt_aes_gcm_hash"
 let AesGcmEncryptChunkName = b"mrt_aes_gcm_encrypt"
 let AesGcmDecryptChunkName = b"mrt_aes_gcm_decrypt"
 let AesGcmFinishChunkName = b"mrt_aes_gcm_finish"
+let Sha256BlocksChunkName = b"mrt_sha256_blocks"
+let AesHashChunkName = b"mrt_aes_hash"
 
-let AesCipherRuntimeCallPrefix = b"__cpufeat_aes_cipher_"
 let AesCipherExpandKeyName = b"__cpufeat_aes_cipher_expand_key"
 let AesCipherEncryptBlockName = b"__cpufeat_aes_cipher_encrypt_block"
 let AesCipherDecryptBlockName = b"__cpufeat_aes_cipher_decrypt_block"
@@ -19,6 +20,10 @@ let AesCipherCtrXorName = b"__cpufeat_aes_cipher_ctr_xor"
 let AesCipherGcmInitName = b"__cpufeat_aes_cipher_gcm_init"
 let AesCipherGcmSealName = b"__cpufeat_aes_cipher_gcm_seal"
 let AesCipherGcmOpenName = b"__cpufeat_aes_cipher_gcm_open"
+let ShaBlocksRuntimeName = b"__cpufeat_sha_blocks"
+let HashRuntimeCallPrefix = b"__hash_"
+let HashBytesRuntimeName = b"__hash_bytes"
+let HashWordRuntimeName = b"__hash_word"
 
 export typealias AesCtrGroupBlocks = int(1 to 8)
 
@@ -54,6 +59,9 @@ let AesBlockParams = 5
 let AesCtrParams = 6
 let AesGcmInitParams = 2
 let AesGcmPassParams = 6
+let Sha256BlocksParams = 4
+let HashBytesParams = 4
+let HashWordParams = 2
 
 // A `cryptoRoutine` passes four arguments, so the counter offset of a counter-mode call and the length of
 // a Galois-mode encrypt or decrypt call ride in the first one, above the round count in the low byte.
@@ -95,7 +103,7 @@ export function nextAesRoundConstant(current MachineWord) returns MachineWord
 	return (doubled xor AesFieldReduction) if doubled > AesByteLimit else doubled
 end 'nextAesRoundConstant'
 
-export enum AesCipherIntrinsic
+export enum HardwareCryptoIntrinsic
 	expandKey
 	encryptBlock
 	decryptBlock
@@ -103,20 +111,39 @@ export enum AesCipherIntrinsic
 	gcmInit
 	gcmSeal
 	gcmOpen
-end 'AesCipherIntrinsic'
+	sha256Blocks
+	hashBytes
+	hashWord
+end 'HardwareCryptoIntrinsic'
 
-// Every AES intrinsic writes its first operand and no other, so write-blame is noted for that one.
-export let AesWrittenOperandPosition = 0
+enum HardwareCryptoFamily
+	aes
+	sha
+	hash
+end 'HardwareCryptoFamily'
+
+export enum HardwareCryptoAnswer
+	nothing
+	verdict
+	digest
+end 'HardwareCryptoAnswer'
+
+// Every writing intrinsic writes its first operand and no other, so write-blame is noted for that one.
+export let HardwareCryptoWrittenOperandPosition = 0
+let HashBytesBufferPosition = 0
 let AesBlockOutputAtPosition = 1
 let AesBlockInputAtPosition = 4
 let AesCtrBufferAtPosition = 1
 let AesCtrCounterOffsetPosition = 4
 let AesCtrBlocksPosition = 5
 let AesGcmPassOutputAtPosition = 1
+let Sha256BlocksOffsetPosition = 2
+let Sha256BlocksCountPosition = 3
 
-export let AesCipherBufferRequirement = "ByteArray or FixedArray with Byte"
+let HardwareCryptoBufferRequirement = "ByteArray or FixedArray with Byte"
+let HashedBytesRequirement = "ByteArray, FixedArray with Byte, String or Character"
 
-function aesCipherIntrinsicName(intrinsic AesCipherIntrinsic) returns immutable ByteArray
+function hardwareCryptoIntrinsicName(intrinsic HardwareCryptoIntrinsic) returns immutable ByteArray
 	return match intrinsic 'intrinsic'
 		expandKey gives b"__Builtins.aesExpandKey"
 		encryptBlock gives b"__Builtins.aesEncryptBlock"
@@ -125,25 +152,28 @@ function aesCipherIntrinsicName(intrinsic AesCipherIntrinsic) returns immutable 
 		gcmInit gives b"__Builtins.aesGcmInit"
 		gcmSeal gives b"__Builtins.aesGcmSeal"
 		gcmOpen gives b"__Builtins.aesGcmOpen"
+		sha256Blocks gives b"__Builtins.sha256Blocks"
+		hashBytes gives b"__Builtins.hashBytes"
+		hashWord gives b"__Builtins.hashWord"
 	end 'intrinsic'
-end 'aesCipherIntrinsicName'
+end 'hardwareCryptoIntrinsicName'
 
-export function aesCipherIntrinsicNamed(callee ByteArray) returns AesCipherIntrinsic throws AbsentError
-	for intrinsic in AesCipherIntrinsic.allCases 'eachIntrinsic'
-		if callee.equals(aesCipherIntrinsicName(intrinsic)) 'named'
+export function hardwareCryptoIntrinsicNamed(callee ByteArray) returns HardwareCryptoIntrinsic throws AbsentError
+	for intrinsic in HardwareCryptoIntrinsic.allCases 'eachIntrinsic'
+		if callee.equals(hardwareCryptoIntrinsicName(intrinsic)) 'named'
 			return intrinsic
 		end 'named'
 	end 'eachIntrinsic'
 
 	throw AbsentError.absent
-end 'aesCipherIntrinsicNamed'
+end 'hardwareCryptoIntrinsicNamed'
 
-export function isAesCipherIntrinsic(callee ByteArray) returns bool
-	let intrinsic = try aesCipherIntrinsicNamed(callee) otherwise return false
-	return callee.equals(aesCipherIntrinsicName(intrinsic))
-end 'isAesCipherIntrinsic'
+export function isHardwareCryptoIntrinsic(callee ByteArray) returns bool
+	let intrinsic = try hardwareCryptoIntrinsicNamed(callee) otherwise return false
+	return callee.equals(hardwareCryptoIntrinsicName(intrinsic))
+end 'isHardwareCryptoIntrinsic'
 
-export function aesCipherRuntimeName(intrinsic AesCipherIntrinsic) returns immutable ByteArray
+export function hardwareCryptoRuntimeName(intrinsic HardwareCryptoIntrinsic) returns immutable ByteArray
 	return match intrinsic 'intrinsic'
 		expandKey gives AesCipherExpandKeyName
 		encryptBlock gives AesCipherEncryptBlockName
@@ -152,10 +182,13 @@ export function aesCipherRuntimeName(intrinsic AesCipherIntrinsic) returns immut
 		gcmInit gives AesCipherGcmInitName
 		gcmSeal gives AesCipherGcmSealName
 		gcmOpen gives AesCipherGcmOpenName
+		sha256Blocks gives ShaBlocksRuntimeName
+		hashBytes gives HashBytesRuntimeName
+		hashWord gives HashWordRuntimeName
 	end 'intrinsic'
-end 'aesCipherRuntimeName'
+end 'hardwareCryptoRuntimeName'
 
-export function aesCipherArity(intrinsic AesCipherIntrinsic) returns ParamCount
+export function hardwareCryptoArity(intrinsic HardwareCryptoIntrinsic) returns ParamCount
 	return match intrinsic 'intrinsic'
 		expandKey gives AesExpandKeyParams
 		encryptBlock or
@@ -164,22 +197,28 @@ export function aesCipherArity(intrinsic AesCipherIntrinsic) returns ParamCount
 		gcmInit gives AesGcmInitParams
 		gcmSeal or
 		gcmOpen gives AesGcmPassParams
+		sha256Blocks gives Sha256BlocksParams
+		hashBytes gives HashBytesParams
+		hashWord gives HashWordParams
 	end 'intrinsic'
-end 'aesCipherArity'
+end 'hardwareCryptoArity'
 
-export function aesCipherAnswersVerdict(intrinsic AesCipherIntrinsic) returns bool
+export function hardwareCryptoAnswer(intrinsic HardwareCryptoIntrinsic) returns HardwareCryptoAnswer
 	return match intrinsic 'intrinsic'
-		gcmOpen gives true
+		gcmOpen gives HardwareCryptoAnswer.verdict
+		hashBytes or
+		hashWord gives HardwareCryptoAnswer.digest
 		expandKey or
 		encryptBlock or
 		decryptBlock or
 		ctrXor or
 		gcmInit or
-		gcmSeal gives false
+		gcmSeal or
+		sha256Blocks gives HardwareCryptoAnswer.nothing
 	end 'intrinsic'
-end 'aesCipherAnswersVerdict'
+end 'hardwareCryptoAnswer'
 
-export function aesCipherOperandIsOffset(intrinsic AesCipherIntrinsic, index ParamCount) returns bool
+export function hardwareCryptoOperandIsOffset(intrinsic HardwareCryptoIntrinsic, index ParamCount) returns bool
 	return match intrinsic 'intrinsic'
 		expandKey or
 		gcmInit gives false
@@ -188,22 +227,75 @@ export function aesCipherOperandIsOffset(intrinsic AesCipherIntrinsic, index Par
 		ctrXor gives index == AesCtrBufferAtPosition or index == AesCtrCounterOffsetPosition or index == AesCtrBlocksPosition
 		gcmSeal or
 		gcmOpen gives index == AesGcmPassOutputAtPosition
+		sha256Blocks gives index == Sha256BlocksOffsetPosition or index == Sha256BlocksCountPosition
+		hashBytes gives index != HashBytesBufferPosition
+		hashWord gives true
 	end 'intrinsic'
-end 'aesCipherOperandIsOffset'
+end 'hardwareCryptoOperandIsOffset'
 
-export function isHardwareAesRuntimeCallee(callee ByteArray) returns bool
-	if not bytesStartWith(callee, prefix: AesCipherRuntimeCallPrefix) 'notInTheFamily'
-		return false
-	end 'notInTheFamily'
+export function hardwareCryptoBufferAcceptsText(intrinsic HardwareCryptoIntrinsic) returns bool
+	return intrinsic == HardwareCryptoIntrinsic.hashBytes
+end 'hardwareCryptoBufferAcceptsText'
 
-	for intrinsic in AesCipherIntrinsic.allCases 'eachIntrinsic'
-		if callee.equals(aesCipherRuntimeName(intrinsic)) 'named'
-			return true
+export function hardwareCryptoBufferRequirement(intrinsic HardwareCryptoIntrinsic) returns String
+	return HashedBytesRequirement if hardwareCryptoBufferAcceptsText(intrinsic) else HardwareCryptoBufferRequirement
+end 'hardwareCryptoBufferRequirement'
+
+function hardwareCryptoFamily(intrinsic HardwareCryptoIntrinsic) returns HardwareCryptoFamily
+	return match intrinsic 'intrinsic'
+		expandKey or
+		encryptBlock or
+		decryptBlock or
+		ctrXor or
+		gcmInit or
+		gcmSeal or
+		gcmOpen gives HardwareCryptoFamily.aes
+		sha256Blocks gives HardwareCryptoFamily.sha
+		hashBytes or
+		hashWord gives HardwareCryptoFamily.hash
+	end 'intrinsic'
+end 'hardwareCryptoFamily'
+
+function hardwareCryptoIntrinsicOfRuntimeCallee(callee ByteArray) returns HardwareCryptoIntrinsic throws AbsentError
+	if not isCpuFeatureRuntimeCallee(callee) and not bytesStartWith(callee, prefix: HashRuntimeCallPrefix) 'outsideTheBands'
+		throw AbsentError.absent
+	end 'outsideTheBands'
+
+	for intrinsic in HardwareCryptoIntrinsic.allCases 'eachIntrinsic'
+		if callee.equals(hardwareCryptoRuntimeName(intrinsic)) 'named'
+			return intrinsic
 		end 'named'
 	end 'eachIntrinsic'
 
-	return false
+	throw AbsentError.absent
+end 'hardwareCryptoIntrinsicOfRuntimeCallee'
+
+function isHardwareCryptoRuntimeCalleeOf(callee ByteArray, family HardwareCryptoFamily) returns bool
+	let intrinsic = try hardwareCryptoIntrinsicOfRuntimeCallee(callee) otherwise return false
+	return hardwareCryptoFamily(intrinsic) == family
+end 'isHardwareCryptoRuntimeCalleeOf'
+
+function isHardwareAesRuntimeCallee(callee ByteArray) returns bool
+	return isHardwareCryptoRuntimeCalleeOf(callee, family: HardwareCryptoFamily.aes)
 end 'isHardwareAesRuntimeCallee'
+
+function isHardwareShaRuntimeCallee(callee ByteArray) returns bool
+	return isHardwareCryptoRuntimeCalleeOf(callee, family: HardwareCryptoFamily.sha)
+end 'isHardwareShaRuntimeCallee'
+
+function isHardwareHashRuntimeCallee(callee ByteArray) returns bool
+	return isHardwareCryptoRuntimeCalleeOf(callee, family: HardwareCryptoFamily.hash)
+end 'isHardwareHashRuntimeCallee'
+
+export function isHardwareCryptoRuntimeCallee(callee ByteArray) returns bool
+	let _ = try hardwareCryptoIntrinsicOfRuntimeCallee(callee) otherwise return false
+	return true
+end 'isHardwareCryptoRuntimeCallee'
+
+export function isHardwareCryptoWriterCallee(callee ByteArray) returns bool
+	let intrinsic = try hardwareCryptoIntrinsicOfRuntimeCallee(callee) otherwise return false
+	return hardwareCryptoFamily(intrinsic) != HardwareCryptoFamily.hash
+end 'isHardwareCryptoWriterCallee'
 
 export function cryptoChunkName(routine CryptoRoutine) returns immutable ByteArray
 	return match routine 'routine'
@@ -219,6 +311,8 @@ export function cryptoChunkName(routine CryptoRoutine) returns immutable ByteArr
 		aesGcmEncrypt gives AesGcmEncryptChunkName
 		aesGcmDecrypt gives AesGcmDecryptChunkName
 		aesGcmFinish gives AesGcmFinishChunkName
+		sha256Blocks gives Sha256BlocksChunkName
+		aesHash gives AesHashChunkName
 	end 'routine'
 end 'cryptoChunkName'
 
@@ -240,21 +334,31 @@ export function hardwareAesChunksAreEmitted(usage RuntimeUsage, target Target) r
 	return usage.usesHardwareAes and (target.cpu == CpuArch.x64 or target.cpu == CpuArch.arm64)
 end 'hardwareAesChunksAreEmitted'
 
+export function hardwareShaChunksAreEmitted(usage RuntimeUsage, target Target) returns bool
+	return usage.usesHardwareSha and (target.cpu == CpuArch.x64 or target.cpu == CpuArch.arm64)
+end 'hardwareShaChunksAreEmitted'
+
+export function hardwareHashChunksAreEmitted(usage RuntimeUsage, target Target) returns bool
+	return usage.usesHash and (target.cpu == CpuArch.x64 or target.cpu == CpuArch.arm64)
+end 'hardwareHashChunksAreEmitted'
+
 // The `mrt_aes_*` chunks check nothing: they read and write blocks, the bytes of a partial last block
 // and round keys through the pointers they are given. These entries are the only bounds check, so every
 // `cryptoRoutine` must be reached through one.
 export function installCryptoRuntime(module StdModule, usage RuntimeUsage)
-	if not usage.usesHardwareAes 'notAsked'
-		return
-	end 'notAsked'
+	if usage.usesHardwareAes 'aesAsked'
+		buildAesExpandKey(module)
+		buildAesBlockRoutine(module, name: AesCipherEncryptBlockName, routine: CryptoRoutine.aesEncryptBlock)
+		buildAesBlockRoutine(module, name: AesCipherDecryptBlockName, routine: CryptoRoutine.aesDecryptBlock)
+		buildAesCtrXor(module)
+		buildAesGcmInit(module)
+		buildAesGcmPass(module, opening: false)
+		buildAesGcmPass(module, opening: true)
+	end 'aesAsked'
 
-	buildAesExpandKey(module)
-	buildAesBlockRoutine(module, name: AesCipherEncryptBlockName, routine: CryptoRoutine.aesEncryptBlock)
-	buildAesBlockRoutine(module, name: AesCipherDecryptBlockName, routine: CryptoRoutine.aesDecryptBlock)
-	buildAesCtrXor(module)
-	buildAesGcmInit(module)
-	buildAesGcmPass(module, opening: false)
-	buildAesGcmPass(module, opening: true)
+	if usage.usesHardwareSha 'shaAsked'
+		buildSha256Blocks(module)
+	end 'shaAsked'
 end 'installCryptoRuntime'
 
 enum AesSizedBuffer
@@ -676,3 +780,128 @@ function buildAesGcmPass(module StdModule, opening bool)
 
 	module.functions.push(func)
 end 'buildAesGcmPass'
+
+let Sha256StateBytes = 32
+let Sha256BlockShift = 6
+let Sha256ByteMask = 0xFF
+let Sha256ByteBits = 8
+export let Sha256BlockBytes = 1 shl Sha256BlockShift
+export let Sha256WordBytes = 4
+export let Sha256VectorBytes = 16
+export let Sha256RoundGroups = 16
+export let Sha256LoadedGroups = 4
+
+typealias Sha256ConstantWords = Array with MachineWord
+
+let Sha256RoundConstants = Sha256ConstantWords from [
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+	0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+	0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+	0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+	0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+	0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+	0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+	0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+	0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+export function sha256RoundConstantBytes() returns ByteArray
+	let bytes = ByteArray.create(0)
+
+	for word in Sha256RoundConstants 'eachConstant'
+		for lane in 0 upto Sha256WordBytes 'eachByte'
+			bytes.push(((word shr (lane * Sha256ByteBits)) and Sha256ByteMask) as Byte)
+		end 'eachByte'
+	end 'eachConstant'
+
+	return bytes
+end 'sha256RoundConstantBytes'
+
+typealias AesHashKeyWordArray = Array with MachineWord
+
+let AesHashKeyWordList = AesHashKeyWordArray from [
+	0x6a09e667f3bcc908, 0xbb67ae8584caa73b,
+	0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+	0x510e527fade682d1, 0x9b05688c2b3e6c1f,
+	0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
+]
+
+let AesHashWordBytes = 8
+let AesHashByteMask = 0xFF
+
+export let AesHashByteBits = 8
+export let AesHashSeedKey = 0
+export let AesHashFirstKey = 1
+export let AesHashSecondKey = 2
+let AesHashThirdKey = 3
+export let AesHashTailBytes = 16
+export let AesHashPairBytes = 32
+export let AesHashQuadBytes = 64
+export let AesHashOctetBytes = 128
+export let AesHashOctetShift = 7
+export let AesHashPairLanes = 2
+export let AesHashQuadLanes = 4
+export let AesHashOctetLanes = 8
+export let AesHashQuarterTailBytes = 4
+export let AesHashHalfTailBytes = 8
+export let AesHashQuarterBits = 32
+
+export function aesHashKeyBytes() returns immutable ByteArray
+	let bytes = ByteArray.create(0) as isolated ByteArray
+
+	modify bytes 'fill'
+		for word in AesHashKeyWordList 'eachWord'
+			for lane in 0 upto AesHashWordBytes 'eachByte'
+				bytes.push(((word shr (lane * AesHashByteBits)) and AesHashByteMask) as Byte)
+			end 'eachByte'
+		end 'eachWord'
+	end 'fill'
+
+	return freeze bytes
+end 'aesHashKeyBytes'
+
+function buildSha256Blocks(module StdModule)
+	let func = IrFunction.createFromStd(ShaBlocksRuntimeName, returnType: StdReturnType.void, paramCount: Sha256BlocksParams, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(Sha256BlocksParams)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let atCheck = module.addBlock(func, label: b"sbat", heat: BlockHeat.normal)
+	let countCheck = module.addBlock(func, label: b"sbcount", heat: BlockHeat.normal)
+	var crypt = module.addBlock(func, label: b"sbcrypt", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"sbbad", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: Sha256BlocksParams)
+	let state = 0
+	let data = 1
+	let dataAt = 2
+	let blocks = 3
+
+	let stateBytes = emitLoadField(module, block: entry, record: state, offset: ManagedRecordLengthOffset, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: stateBytes, pred: StdCmpPred.ne, against: Sha256StateBytes, whenTrue: bad, whenFalse: atCheck, ids: ids)
+
+	let dataBytes = emitLoadField(module, block: atCheck, record: data, offset: ManagedRecordLengthOffset, ids: ids)
+	emitBranchOnCompareValues(module, block: atCheck, a: dataAt, pred: StdCmpPred.gt, b: dataBytes, whenTrue: bad, whenFalse: countCheck, ids: ids, operandType: StdType.u64)
+
+	let remaining = emitBin(module, block: countCheck, a: dataBytes, b: dataAt, opcode: StdBinOpcode.sub, ids: ids)
+	let wholeBlocks = emitBin(module, block: countCheck, a: remaining, b: emitConst(module, block: countCheck, value: Sha256BlockShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitBranchOnCompareValues(module, block: countCheck, a: blocks, pred: StdCmpPred.gt, b: wholeBlocks, whenTrue: bad, whenFalse: crypt, ids: ids, operandType: StdType.u64)
+
+	crypt = emitCowDetachWhenNeeded(module, func: func, block: crypt, arr: state, prefix: "sb", ids: ids)
+	let stateData = emitLoadField(module, block: crypt, record: state, offset: ManagedRecordBufferOffset, ids: ids)
+	let dataBase = emitLoadField(module, block: crypt, record: data, offset: ManagedRecordBufferOffset, ids: ids)
+	let source = emitBin(module, block: crypt, a: dataBase, b: dataAt, opcode: StdBinOpcode.add, ids: ids)
+	let unused = emitConst(module, block: crypt, value: 0, ids: ids)
+	module.appendOp(crypt, op: StdOp.cryptoRoutine(ids.mint(), routine: CryptoRoutine.sha256Blocks, a0Id: stateData, a1Id: source, a2Id: blocks, a3Id: unused))
+	module.setTerminator(crypt, op: StdOp.retVoid)
+
+	emitRuntimeFatal(module, func: func, block: bad, fatal: RuntimeFatal.cryptoBufferOutOfRange, ids: ids)
+
+	module.functions.push(func)
+end 'buildSha256Blocks'

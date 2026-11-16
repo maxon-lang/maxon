@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package benchcommon
 
 import (
 	"math"
@@ -9,7 +9,7 @@ import (
 
 const resolutionSamples = 16
 
-func newClock() clock {
+func newClock() Clock {
 	epoch := time.Now()
 	nanos := func() int64 { return time.Since(epoch).Nanoseconds() }
 	resolution := int64(math.MaxInt64)
@@ -25,5 +25,5 @@ func newClock() clock {
 		resolution = min(resolution, next-first)
 	}
 
-	return clock{nanos: nanos, resolution: resolution}
+	return Clock{Nanos: nanos, Resolution: resolution}
 }

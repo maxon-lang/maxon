@@ -6207,14 +6207,13 @@ extension Parser
 		// ⭐⭐ **`hash()` AND `equals(other)` ARE NOT STRING METHODS — THEY ARE THE BUILTIN CONFORMANCES, AND
 		// THIS IS THE DIRECT-CALL DOOR ONTO THE IMPLS THAT ALREADY EXIST.** A
 		// `__witness_String.*` slot is stamped with a `funcAbs64` reloc naming `String.hash`/`String.equals`,
-		// and this emits those SAME symbols — one body, three doors, and emphatically not a second djb2
+		// and this emits those SAME symbols — one body, three doors, and emphatically not a second hash
 		// written at a call site.
 		// ⛔⛔ **AND THE BODY BEHIND THOSE SYMBOLS IS THE CORPUS'S, NOT A SYNTHESIZED ONE.**
-		// `BuiltinConformanceRuntime` builds an impl only for a candidate the module NAMES and does not
-		// DEFINE, and `stdlib/String.maxon:365,373` declare both — so no synthesized pair is installed. On the
-		// emitted IR `s.hash()` is `call String.hash`, whose body is `call hashString`
-		// (`stdlib/helpers/string/hash.maxon:22`).
-		// (`stdlib/helpers/string/hash.maxon:22`).
+		// `BuiltinConformanceRuntime` synthesizes no `String.hash`, and builds `String.equals` only when the
+		// module NAMES it and does not DEFINE it, and the corpus `String` declares both — so no synthesized
+		// pair is installed. On the emitted IR `s.hash()` is `call String.hash`, whose body is
+		// `call hashString`.
 		//
 		// ⇒ **SO THERE IS NOTHING HERE FOR A RETIREMENT TO MOVE.** A retirement exists to make the corpus body
 		// serve
@@ -6222,9 +6221,7 @@ extension Parser
 		// names off the roster would change is which door routes the call — `memberBelongsToTheCorpus`
 		// instead of the lookup below — to the identical symbol. That is churn with a return-type risk
 		// (`HashValue` is `int(0 to u32.max)`; this door types the result off the `InterfaceMethodSig`) and no
-		// benefit. The two hashes AGREE — same djb2, same seed, same multiplier, same low-32 mask — which is
-		// what a `Set with String`'s bucket layout rides on; `BuiltinConformanceRuntime`'s header records the
-		// full measurement.
+		// benefit.
 		//
 		// ⭐ **ASKED LAST, AND BY LOOKUP RATHER THAN BY TWO MORE `if`s.** Last, because the String method
 		// table above must win — the arm-order rule `dispatchMethodOnReceiver` states, one level down. By
@@ -6471,7 +6468,8 @@ extension Parser
 			fileOpenCreateNew then return try self.parseManagedFileOpen(func, callee: ManagedFileOpenCreateNewName, methodTok: methodTok, range: range)
 			fileExists then return try self.parseManagedFileExists(func, methodTok: methodTok, range: range)
 			fileDelete then return try self.parseManagedFileDelete(func, methodTok: methodTok, range: range)
-			fileRename then return try self.parseManagedFileRename(func, methodTok: methodTok, range: range)
+			fileRename then return try self.parseManagedFileRename(func, callee: ManagedFileRenameName, methodTok: methodTok, range: range)
+			fileRenameNew then return try self.parseManagedFileRename(func, callee: ManagedFileRenameNewName, methodTok: methodTok, range: range)
 			fileStat then return try self.parseManagedFileStat(func, methodTok: methodTok, range: range)
 			fileStatField then return try self.parseManagedFileStatField(func, methodTok: methodTok, range: range)
 			fileStatFree then return try self.parseManagedFileStatFree(func, methodTok: methodTok, range: range)
@@ -6502,13 +6500,13 @@ extension Parser
 		return self.emitRuntimeCall(ManagedFileDeleteName, args: argsOf(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedFileDelete'
 
-	function parseManagedFileRename(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
+	function parseManagedFileRename(func IrFunction, callee ByteArray, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.leftParen)
 		let oldPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileOldPathParamName, methodTok: methodTok)
 		try self.consume(TokenKind.comma)
 		let newPath = try self.parseManagedMemoryArg(func, paramName: ManagedFileNewPathParamName, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
-		return self.emitRuntimeCall(ManagedFileRenameName, args: twoArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(callee, args: twoArgs(oldPath, second: newPath), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseManagedFileRename'
 
 	// ⚠ `stat` returns a RAW pointer the caller must hand back to `statFree`, so it is deliberately NOT
@@ -7325,6 +7323,12 @@ extension Parser
 		return self.signatures.isBytePackedBufferRecordInstance(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'valueIsByteBuffer'
 
+	function valueIsText(value ValueId) returns bool
+		let tag = self.tagOf(value)
+
+		return tag == ValueTypeTag.string or tag == ValueTypeTag.character
+	end 'valueIsText'
+
 	function pairedDisplays(value ValueId, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredBrand ByteArray, declaredIdentity ByteArray, declaredShown String) returns PairedDisplays
 		let gotShown = self.valueDisplayTypeName(value)
 		let gotIdentity = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: self.tagOf(value), nameId: self.valueNameId(value), readerFilePath: self.job.path)
@@ -7892,8 +7896,8 @@ extension Parser
 	// Parse the argument list and emit the call. The receiver is argument 0 and is BORROWED, so no incref is
 	// emitted here and no drop is owed there, exactly as an instance method's receiver rides. That is a
 	// property of the IMPLS rather than of the operand kind, which is why it survived `String` joining them:
-	// the scalar impls read by-value operands and free nothing, and `buildStrHash`/`buildStrEq` take a String
-	// POINTER but only read `buffer@0`/`length@8` and walk the bytes (see their headers). A managed argument
+	// the scalar impls read by-value operands and free nothing, and `buildStrEq` takes a String
+	// POINTER but only reads `buffer@0`/`length@8` and walks the bytes (see its header). A managed argument
 	// therefore stays an ordinary pending temp and drops at statement end, AFTER the compare.
 	//
 	// It goes through `emitRuntimeCall` rather than `emitCall` for that door's stated reason: a synthesized

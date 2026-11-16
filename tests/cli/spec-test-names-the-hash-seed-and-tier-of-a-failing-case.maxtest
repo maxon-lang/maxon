@@ -1,0 +1,33 @@
+let SpecTestNamesTheHashSeedCaseDirName = "spec-test-names-the-hash-seed"
+let FirstUnpinnedCaseName = "unpinned-first"
+let SecondUnpinnedCaseName = "unpinned-second"
+
+test 'a failing case reports the hash seed and tier its program ran with, and they reproduce its hash'
+	requireHeldOutsideCheckout(SpecTestNamesTheHashSeedCaseDirName, check: SpecTestNamesTheHashSeedAndTier.create())
+end 'a failing case reports the hash seed and tier its program ran with, and they reproduce its hash'
+
+type SpecTestNamesTheHashSeedAndTier implements OutsideCheckoutCase
+	static function create() returns SpecTestNamesTheHashSeedAndTier
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cases = HashReportCaseArray.create(0)
+		cases.push(HashReportCase.create(FirstUnpinnedCaseName, seed: HashPinUnset, tier: HashPinUnset))
+		cases.push(HashReportCase.create(SecondUnpinnedCaseName, seed: HashPinUnset, tier: HashPinUnset))
+
+		let specDir = stagedHashReportSpec(dir, cases: cases)
+		let said = runHashReportSpec(dir, specDir: specDir, seed: HashPinUnset, tier: HashPinUnset)
+
+		let first = try hashSpecFailureOf(said, caseName: FirstUnpinnedCaseName)
+		let second = try hashSpecFailureOf(said, caseName: SecondUnpinnedCaseName)
+
+		try Expect.equal(second.pins.seed, expected: first.pins.seed, message: "two cases of one run, neither pinning a seed, name two seeds: {first.pins.seed} and {second.pins.seed}. A run draws one seed and hands it to every program that pins none.")
+		try Expect.equal(second.pins.tier, expected: first.pins.tier, message: "two cases of one run, neither pinning a tier, name two tiers: {first.pins.tier} and {second.pins.tier}.")
+		try Expect.equal(second.printed, expected: first.printed, message: "two programs of one run that were handed one seed and one tier printed two lines: `{first.printed}` and `{second.printed}`.")
+
+		let program = try builtHashReportProgram(dir)
+		try requireFailureReproduced(dir, program: program, failure: first, which: "the failure of `{HashReportSpecName}/{FirstUnpinnedCaseName}`")
+		try requireFailureReproduced(dir, program: program, failure: second, which: "the failure of `{HashReportSpecName}/{SecondUnpinnedCaseName}`")
+	end 'requireHeldIn'
+end 'SpecTestNamesTheHashSeedAndTier'

@@ -547,13 +547,13 @@ typealias HallMemo = Map with (HashDigest, HallMemoEntry)
 let HallMemoLimit = 8192
 
 function hallMemoKey(allowed RegMaskColumn, valueCount ElementIndex) returns HashDigest
-	var state = Hasher.empty()
+	var state = startDigest()
 
 	for i in 0 upto valueCount 'eachValue'
-		state = Hasher.combined(state, value: (try allowed.get(i) otherwise panic("hallMemoKey: allowed.get OOB at {i}")) as HashDigest)
+		state = KeyedHasher.combined(state, value: (try allowed.get(i) otherwise panic("hallMemoKey: allowed.get OOB at {i}")) as HashDigest)
 	end 'eachValue'
 
-	return Hasher.combined(state, value: valueCount as HashDigest)
+	return KeyedHasher.combined(state, value: valueCount as HashDigest)
 end 'hallMemoKey'
 
 function sameAllowedMasks(remembered RegMaskColumn, allowed RegMaskColumn, valueCount ElementIndex) returns bool

@@ -325,6 +325,8 @@ let X64LinuxSyscallMkdirat = 258
 let X64LinuxSyscallNewfstatat = 262
 let X64LinuxSyscallUnlinkat = 263
 let X64LinuxSyscallRenameat = 264
+let X64LinuxSyscallLinkat = 265
+let X64LinuxSyscallRenameat2 = 316
 
 // --- The SOCKET band's syscalls ---
 //
@@ -1416,29 +1418,66 @@ end 'buildX64LinuxPathOpChunk'
 // ⚠ **AND NOTHING BELOW THE RENAME MAY STASH AN errno**, for the same reason: the word is read by an
 // `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed
 // for a rename that succeeded.
-function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome, disposition RenameDisposition) returns FunctionCodeChunk
 	let SlotNewPath = 0
 	let SlotDirFd = 1
 	let SlotPrefixPage = 2
-	let asm = X64RuntimeAsm.beginFunction(3)
+	let SlotOldPath = 3
+	let asm = X64RuntimeAsm.beginFunction(4)
 
+	let linkFallback = asm.newLabel()
+	let refused = asm.newLabel()
 	let renamed = asm.newLabel()
 	let mapped = asm.newLabel()
 	let unmap = asm.newLabel()
 	let answered = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOldPath), srcReg: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.rdx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdx, value: LinuxAtFdCwd)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallRenameat)
+
+	match disposition 'attempt'
+		replaceExisting then encodeX64Syscall(asm.code, number: X64LinuxSyscallRenameat)
+		keepExisting then x64LinuxEmitRenameNoReplace(asm, linkFallback: linkFallback)
+	end 'attempt'
+
 	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: renamed)
 
+	asm.placeLabel(refused)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	if disposition == RenameDisposition.keepExisting 'linkThenUnlink'
+		asm.placeLabel(linkFallback)
+		encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotOldPath), wide: true)
+		encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), wide: true)
+		encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+		encodeMovRegImm64(asm.code, dest: X64Register.rdx, value: LinuxAtFdCwd)
+		encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxLinkFlags)
+		encodeX64Syscall(asm.code, number: X64LinuxSyscallLinkat)
+		x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+		emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: refused)
+
+		encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotOldPath), wide: true)
+		encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+		encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxUnlinkFileFlags)
+		encodeX64Syscall(asm.code, number: X64LinuxSyscallUnlinkat)
+		x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+		emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: renamed)
+
+		encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), wide: true)
+		encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+		encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxUnlinkFileFlags)
+		encodeX64Syscall(asm.code, number: X64LinuxSyscallUnlinkat)
+		encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: refused)
+	end 'linkThenUnlink'
 
 	asm.placeLabel(renamed)
 	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxPathBytes as MachineWord))
@@ -1476,8 +1515,18 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)
-	return asm.finishFunction(HostFileRenameName)
+	return asm.finishFunction(hostFileRenameChunkName(disposition))
 end 'buildX64LinuxFileRenameChunk'
+
+function x64LinuxEmitRenameNoReplace(asm X64RuntimeAsm, linkFallback BlockId)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxRenameNoReplace)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRenameat2)
+
+	for errno in renameNoReplaceFallbackErrnos(Os.linux) 'eachFallbackErrno'
+		emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - errno) as Imm32)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: linkFallback)
+	end 'eachFallbackErrno'
+end 'x64LinuxEmitRenameNoReplace'
 
 // ==========================================================================
 // mrt_host_file_attributes, mrt_host_entry_attributes(rcx = pathPtr) -> rax = dwFileAttributes
@@ -5525,7 +5574,8 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	if usage.usesManagedFile 'managedFile'
 		chunks.push(buildX64LinuxFileSizeChunk(errnoHome))
 		chunks.push(buildX64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: X64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags, errnoHome: errnoHome))
-		chunks.push(buildX64LinuxFileRenameChunk(errnoHome))
+		chunks.push(buildX64LinuxFileRenameChunk(errnoHome, disposition: RenameDisposition.replaceExisting))
+		chunks.push(buildX64LinuxFileRenameChunk(errnoHome, disposition: RenameDisposition.keepExisting))
 	end 'managedFile'
 
 	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's stdin

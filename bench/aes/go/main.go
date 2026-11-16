@@ -5,34 +5,11 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
-	"fmt"
-	"math"
-	"os"
-	"strconv"
+
+	benchcommon "maxon.dev/bench/common"
 )
 
-const (
-	defaultRepeats = 5
-	usageExit      = 2
-	ctrCounter     = 2
-	clockLine      = "clock"
-)
-
-func filled(count int, seed byte) []byte {
-	b := make([]byte, count)
-	for i := range b {
-		b[i] = byte(i + int(seed))
-	}
-	return b
-}
-
-func digest(b []byte) int {
-	sum := 0
-	for i, v := range b {
-		sum = (sum + int(v)*(i+1)) & 0xFFFFFF
-	}
-	return sum
-}
+const ctrCounter = 2
 
 const blockBytesOut = 16
 
@@ -110,67 +87,23 @@ func stdImpl(key128, key256 []byte) impl {
 	}
 }
 
-type clock struct {
-	nanos      func() int64
-	resolution int64
-}
-
-type settings struct {
-	repeats int
-	divisor int
-	clock   clock
-}
-
-func positiveArgument(position int, fallback int) int {
-	if len(os.Args) <= position {
-		return fallback
-	}
-	value, err := strconv.Atoi(os.Args[position])
-	if err != nil || value < 1 {
-		fmt.Fprintf(os.Stderr, "aes: argument %d is %q, which is not a positive integer\n", position, os.Args[position])
-		os.Exit(usageExit)
-	}
-	return value
-}
-
-func (s settings) iterations(base int) int {
-	return max(base/s.divisor, 1)
-}
-
-func (s settings) measure(name string, bytesPerOp, baseIterations int, op func(prev []byte) []byte, seed []byte) {
-	iterations := s.iterations(baseIterations)
-	best := int64(math.MaxInt64)
-	var last []byte
-	for r := 0; r < s.repeats; r++ {
-		start := s.clock.nanos()
-		last = bytes.Clone(seed)
-		for i := 0; i < iterations; i++ {
-			last = op(last)
-		}
-		if took := s.clock.nanos() - start; took < best {
-			best = took
-		}
-	}
-	fmt.Printf("%s %d %d %d %d %d\n", name, bytesPerOp, iterations, s.repeats, best, digest(last))
-}
-
 func main() {
-	run := settings{repeats: positiveArgument(1, defaultRepeats), divisor: positiveArgument(2, 1), clock: newClock()}
+	run := runner{benchcommon.ParseSettings("aes")}
 
-	key128 := filled(16, 0)
-	key256 := filled(32, 0)
-	nonce := filled(12, 100)
-	blk := filled(16, 200)
-	aad := filled(13, 50)
-	small := filled(64, 7)
-	kib1 := filled(1024, 7)
-	kib16 := filled(16384, 7)
+	key128 := benchcommon.Filled(16, 0)
+	key256 := benchcommon.Filled(32, 0)
+	nonce := benchcommon.Filled(12, 100)
+	blk := benchcommon.Filled(16, 200)
+	aad := benchcommon.Filled(13, 50)
+	small := benchcommon.Filled(64, 7)
+	kib1 := benchcommon.Filled(1024, 7)
+	kib16 := benchcommon.Filled(16384, 7)
 
 	m := stdImpl(key128, key256)
 
 	sealed16k := m.seal128(nonce, kib16, aad)
 
-	fmt.Printf("%s %d\n", clockLine, run.clock.resolution)
+	run.PrintClock()
 
 	run.measure("keysetup-128", 0, 20000, func([]byte) []byte { return m.keySetup(key128) }, nil)
 	run.measure("keysetup-128-into", 0, 20000, func(prev []byte) []byte { return m.keySetupInto(prev, key128) }, nil)
@@ -187,4 +120,24 @@ func main() {
 	run.measure("gcm-128-open-16k", 16384, 1000, func([]byte) []byte { return m.open128(nonce, sealed16k, aad) }, nil)
 	run.measure("gcm-256-seal-16k", 16384, 1000, func([]byte) []byte { return m.seal256(nonce, kib16, aad) }, nil)
 	run.measure("gcm-256-seal-16k-into", 16384, 1000, func(prev []byte) []byte { return m.seal256Into(prev, nonce, kib16, aad) }, nil)
+}
+
+type bytesResult []byte
+
+func (b bytesResult) Answer() int64 {
+	return int64(benchcommon.Digest(b))
+}
+
+type runner struct {
+	benchcommon.Settings
+}
+
+func (r runner) measure(name string, bytesPerOp, baseIterations int, op func(prev []byte) []byte, seed []byte) {
+	r.Measure(name, bytesPerOp, baseIterations, func(iterations int) benchcommon.Result {
+		last := bytes.Clone(seed)
+		for i := 0; i < iterations; i++ {
+			last = op(last)
+		}
+		return bytesResult(last)
+	})
 }

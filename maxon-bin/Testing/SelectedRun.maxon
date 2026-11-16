@@ -86,7 +86,7 @@ union SelectedLaunch
 	couldNotStart(reason String)
 end 'SelectedLaunch'
 
-function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs WaitDeadlineMs, workingDirectory WorkingDirectory, projectScratchRoot FilePath, tracksDescendants bool) returns SelectedLaunch
+function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs WaitDeadlineMs, workingDirectory WorkingDirectory, projectScratchRoot FilePath, tracksDescendants bool, pins HashPins) returns SelectedLaunch
 	let argv = leadingArguments.clone()
 	let serial = Clock.nowMs() as ElementIndex
 
@@ -100,7 +100,7 @@ function launchSelected(exe Executable, leadingArguments StringArray, indices Te
 		return SelectedLaunch.couldNotStart(stagingRefusalReason(refusal))
 	end 'noScratch'
 
-	let run = try runProcess(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs, environment: scratch.environment(tracksDescendants, serial: serial)) otherwise (e) 'didNotRun'
+	let run = try runProcess(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs, environment: scratch.environment(tracksDescendants, serial: serial, pins: pins)) otherwise (e) 'didNotRun'
 		_ = scratch.discard()
 		return launchFailureOf(e)
 	end 'didNotRun'

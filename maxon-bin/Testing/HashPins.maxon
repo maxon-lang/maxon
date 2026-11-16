@@ -1,0 +1,173 @@
+let SpecHashPinsIndent = "    "
+let SpecHashPinsProgramLabel = "program: "
+
+function hashSeedVariable() returns String
+	return String.from(HashSeedEnvName)
+end 'hashSeedVariable'
+
+function hashTierVariable() returns String
+	return String.from(HashTierEnvName)
+end 'hashTierVariable'
+
+enum HashTierLauncher
+	spawnsDirectly
+	specLane
+end 'HashTierLauncher'
+
+function hashTierFor(target Target, launcher HashTierLauncher) returns String
+	return String.from(HashTierAesName) if aesHardwareAvailable() and programsCanUseAes(target, launcher: launcher) else String.from(HashTierSoftwareName)
+end 'hashTierFor'
+
+function programsCanUseAes(target Target, launcher HashTierLauncher) returns bool
+	return match launcher 'launcher'
+		spawnsDirectly gives not needsExternalRunner(target) and hashHasAesTier(target)
+		specLane gives specLaneProgramsCanUseAes(target)
+	end 'launcher'
+end 'programsCanUseAes'
+
+function specLaneProgramsCanUseAes(target Target) returns bool
+	return match runStrategyFor(target) 'lane'
+		individually or
+		wslBatch or
+		inGuest gives aesTierRunsOnTheHostCpu(target)
+		orbBatch gives false
+		noneHere gives true
+	end 'lane'
+end 'specLaneProgramsCanUseAes'
+
+function aesTierRunsOnTheHostCpu(target Target) returns bool
+	return hashHasAesTier(target) and target.cpu == detectHostTarget().cpu
+end 'aesTierRunsOnTheHostCpu'
+
+function drawnHashSeed() returns String
+	let digits = StringBuilder.create()
+
+	for byte in HashSeed.random().toBytes() 'eachByte'
+		digits.append("{byte:02x}")
+	end 'eachByte'
+
+	return digits.build()
+end 'drawnHashSeed'
+
+function hashPinSetByEnvironment(variable String) returns StatedText
+	let value = try Process.environmentVariable(variable) otherwise return StatedText.unstated
+
+	if value.isEmpty() 'meansUnset'
+		return StatedText.unstated
+	end 'meansUnset'
+
+	return StatedText.stated(value)
+end 'hashPinSetByEnvironment'
+
+function hashPinsSetByEnvironment() returns StringArray
+	let words = StringArray.create(0)
+
+	for variable in StringArray from [hashSeedVariable(), hashTierVariable()] 'eachVariable'
+		match hashPinSetByEnvironment(variable) 'pin'
+			unstated then continue
+			stated(text) then words.push("{variable}={text}")
+		end 'pin'
+	end 'eachVariable'
+
+	return words
+end 'hashPinsSetByEnvironment'
+
+function hashPinRequiredFromEnvironment(variable String) returns String
+	return try hashPinSetByEnvironment(variable).text() otherwise panic("{variable} is not set in this process, which a run's parent sets for every process it starts")
+end 'hashPinRequiredFromEnvironment'
+
+union HashPinsAtFailure
+	compilerOnly
+	programRan(assignments SpecEnvAssignmentArray)
+	eitherPhase(assignments SpecEnvAssignmentArray)
+end 'HashPinsAtFailure'
+
+typealias HashPinsAtFailureArray = Array with HashPinsAtFailure
+
+function hashPinsAtFailureOf(run TestRun, test SpecTest) returns HashPinsAtFailure
+	return HashPinsAtFailure.programRan(test.environment) if run.programVerdict else HashPinsAtFailure.compilerOnly
+end 'hashPinsAtFailureOf'
+
+function hashPinsIfWorkerDies(test SpecTest) returns HashPinsAtFailure
+	return HashPinsAtFailure.compilerOnly if test.expectation.expectsCompileError() else HashPinsAtFailure.eitherPhase(test.environment)
+end 'hashPinsIfWorkerDies'
+
+function pinLine(pins HashPins, label String) returns String
+	return "{SpecHashPinsIndent}{label}{pins.reportLine()}"
+end 'pinLine'
+
+function hashPinLinesAt(runPins HashPins, phase HashPinsAtFailure) returns String
+	return match phase 'phase'
+		compilerOnly gives pinLine(runPins, label: "")
+		programRan(assignments) gives pinLine(runPins.overriddenBy(assignments), label: "")
+		eitherPhase(assignments) gives compilerAndProgramPinLines(runPins, program: runPins.overriddenBy(assignments))
+	end 'phase'
+end 'hashPinLinesAt'
+
+function compilerAndProgramPinLines(runPins HashPins, program HashPins) returns String
+	if program.reportLine() == runPins.reportLine() 'samePair'
+		return pinLine(runPins, label: "")
+	end 'samePair'
+
+	return "{pinLine(runPins, label: "")}\n{pinLine(program, label: SpecHashPinsProgramLabel)}"
+end 'compilerAndProgramPinLines'
+
+function outcomeNamingHashPins(outcome TestOutcome, runPins HashPins, phase HashPinsAtFailure) returns TestOutcome
+	return match outcome 'outcome'
+		fail(reason) gives TestOutcome.fail("{reason.trimEnd()}\n{hashPinLinesAt(runPins, phase: phase)}")
+		pass or
+		skipped or
+		notRunHere gives outcome
+	end 'outcome'
+end 'outcomeNamingHashPins'
+
+type HashPins
+	let seed as String
+	let tier as String
+
+	static function create(seed String, tier String) returns HashPins
+		return Self{seed: seed, tier: tier}
+	end 'create'
+
+	static function forRun(bestTier String) returns HashPins
+		let seed = match hashPinSetByEnvironment(hashSeedVariable()) 'seed'
+			stated(text) gives text
+			unstated gives drawnHashSeed()
+		end 'seed'
+
+		let tier = match hashPinSetByEnvironment(hashTierVariable()) 'tier'
+			stated(text) gives text
+			unstated gives bestTier
+		end 'tier'
+
+		return Self{seed: seed, tier: tier}
+	end 'forRun'
+
+	static function ofThisProcess() returns HashPins
+		return Self{seed: hashPinRequiredFromEnvironment(hashSeedVariable()), tier: hashPinRequiredFromEnvironment(hashTierVariable())}
+	end 'ofThisProcess'
+
+	function addTo(overrides EnvMap)
+		overrides.upsert(hashSeedVariable(), value: self.seed)
+		overrides.upsert(hashTierVariable(), value: self.tier)
+	end 'addTo'
+
+	function overriddenBy(assignments SpecEnvAssignmentArray) returns HashPins
+		var pinnedSeed = self.seed
+		var pinnedTier = self.tier
+
+		for assignment in assignments 'eachAssignment'
+			if assignment.name == hashSeedVariable() 'pinsTheSeed'
+				pinnedSeed = assignment.value
+			end 'pinsTheSeed' else if assignment.name == hashTierVariable() 'pinsTheTier'
+				pinnedTier = assignment.value
+			end 'pinsTheTier'
+		end 'eachAssignment'
+
+		return Self{seed: pinnedSeed, tier: pinnedTier}
+	end 'overriddenBy'
+
+	function reportLine() returns String
+		return "{hashSeedVariable()}={self.seed} {hashTierVariable()}={self.tier}"
+	end 'reportLine'
+end 'HashPins'

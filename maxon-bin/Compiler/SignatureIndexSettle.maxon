@@ -39,7 +39,7 @@ extension ProgramSignatures
 	export function recordFileModuleDirectory(path FilePath, moduleDirectory String, isLibrary bool, isRuntime bool, isScriptlib bool)
 		self.mainThreadSettled().fileModuleDirectories.upsert(path.toString(), value: moduleDirectory)
 		self.noteNamespaceQualifiers(freeze qualifierForNamespace(namespaceForModuleDirectory(moduleDirectory)).toByteArray())
-		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeModuleDirectory), bytes: path.toString().toByteArray()), bytes: moduleDirectory.toByteArray())
+		self.hash = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeModuleDirectory), bytes: path.toString().toByteArray()), bytes: moduleDirectory.toByteArray())
 
 		if isLibrary 'aFileTheCompilerLoadedFromItsLibrary'
 			self.mainThreadSettled().libraryFilePaths.insert(path.toString())
@@ -100,14 +100,14 @@ extension ProgramSignatures
 
 	export function noteDeclaredName(name ByteArray)
 		match self.hashSource 'source'
-			author then self.insertAuthorName(AuthorNames.declared, digest: mixBytes(Hasher.empty(), bytes: name))
+			author then self.insertAuthorName(AuthorNames.declared, digest: digestOfBytes(name))
 			library then self.noteMentionedName(name)
 			whole then break
 		end 'source'
 	end 'noteDeclaredName'
 
 	export function noteDeclaredAliasName(name ByteArray, form TypeDeclKind)
-		let digest = mixBytes(Hasher.empty(), bytes: name)
+		let digest = digestOfBytes(name)
 
 		match self.hashSource 'source'
 			author then self.insertAuthorAliasName(digest, form: form)
@@ -195,7 +195,7 @@ extension ProgramSignatures
 
 	function noteForwardCalleeName(name ByteArray)
 		match self.hashSource 'source'
-			library then self.insertLibraryName(LibraryNames.forwardCallee, digest: mixBytes(Hasher.empty(), bytes: name))
+			library then self.insertLibraryName(LibraryNames.forwardCallee, digest: digestOfBytes(name))
 			author or
 			whole then break
 		end 'source'
@@ -205,17 +205,17 @@ extension ProgramSignatures
 		self.noteDeclaredName(name)
 
 		match self.hashSource 'source'
-			author then self.insertAuthorName(AuthorNames.binding, digest: mixBytes(Hasher.empty(), bytes: name))
+			author then self.insertAuthorName(AuthorNames.binding, digest: digestOfBytes(name))
 			library or
 			whole then break
 		end 'source'
 	end 'noteDeclaredBindingName'
 
 	function insertMeantName(name ByteArray)
-		self.insertLibraryName(LibraryNames.meant, digest: mixBytes(Hasher.empty(), bytes: name))
+		self.insertLibraryName(LibraryNames.meant, digest: digestOfBytes(name))
 
 		let owner = try nameQualifierOf(name) otherwise return
-		self.insertLibraryName(LibraryNames.meant, digest: mixBytes(Hasher.empty(), bytes: owner))
+		self.insertLibraryName(LibraryNames.meant, digest: digestOfBytes(owner))
 	end 'insertMeantName'
 
 	function mixTypeNameTable(state HashDigest, upTo TypeNameId) returns HashDigest
@@ -239,7 +239,7 @@ extension ProgramSignatures
 	end 'mixInstanceRows'
 
 	function mixInstanceRow(state HashDigest, id GenericInstanceId) returns HashDigest
-		return Hasher.combined(Hasher.combined(self.mixGenericInstance(Hasher.combined(state, value: DeclShapeInstanceRow), id: id), value: self.rowShape(id).hashWord()), value: SpeculativeRowMark if self.rowIsSpeculative(id) else NamedRowMark)
+		return KeyedHasher.combined(KeyedHasher.combined(self.mixGenericInstance(KeyedHasher.combined(state, value: DeclShapeInstanceRow), id: id), value: self.rowShape(id).hashWord()), value: SpeculativeRowMark if self.rowIsSpeculative(id) else NamedRowMark)
 	end 'mixInstanceRow'
 
 	export function footprintOf(instances GenericInstanceIdSet, names ObservedNameSet, dispatchedInterfaces ObservedInterfaceSet) returns ParseFootprint
@@ -378,11 +378,11 @@ extension ProgramSignatures
 	end 'toldAnswersHold'
 
 	function instantiatedDigestExcluding(excluded HashDigestSet) returns HashDigest
-		var members = Hasher.empty()
+		var members = startDigest()
 
 		for name in self.settledDeclarations().instantiatedByAParse 'eachName'
 			if not nameIsExcluded(name, excluded: excluded) 'aLibraryName'
-				members = members xor mixBytes(Hasher.empty(), bytes: name)
+				members = members xor digestOfBytes(name)
 			end 'aLibraryName'
 		end 'eachName'
 
@@ -391,8 +391,8 @@ extension ProgramSignatures
 
 	function finishHashChains()
 		self.saveActiveChain()
-		self.libraryHash = Hasher.combined(Hasher.combined(self.libraryChainState, value: SignatureDiscriminator.libraryChainSalt), value: self.wholeChainState)
-		self.hash = Hasher.combined(Hasher.combined(self.authorChainState, value: SignatureDiscriminator.authorChainSalt), value: self.libraryHash)
+		self.libraryHash = KeyedHasher.combined(KeyedHasher.combined(self.libraryChainState, value: SignatureDiscriminator.libraryChainSalt), value: self.wholeChainState)
+		self.hash = KeyedHasher.combined(KeyedHasher.combined(self.authorChainState, value: SignatureDiscriminator.authorChainSalt), value: self.libraryHash)
 		self.hashSource = HashEventSource.whole
 		self.libraryParseSharing = self.decidedLibraryParseSharing()
 		self.contestedAliasesDigest = self.digestOfTheContestedAliases()
@@ -609,6 +609,7 @@ extension ProgramSignatures
 			return false
 		end 'nothingIsContested'
 
+		contested.sortBy(function(left immutable ByteArray, right immutable ByteArray) gives compareBytesOrdinally(left, right: right))
 		self.attributeHashEventsTo(HashEventSource.library)
 
 		for name in contested 'eachContestedName'
@@ -620,7 +621,7 @@ extension ProgramSignatures
 				end 'keepsTheBareName'
 
 				self.mintAuthorName(name, declFilePath: site.declFilePath, rootKeepsTheBareName: false)
-				self.hash = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeLibraryBindingMint), bytes: self.authorMintOf(site.declFilePath, name: name))
+				self.hash = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeLibraryBindingMint), bytes: self.authorMintOf(site.declFilePath, name: name))
 			end 'eachSite'
 		end 'eachContestedName'
 
@@ -1483,9 +1484,9 @@ extension ProgramSignatures
 
 	function mixIntoWholeChain(shape HashDigest, bytes ByteArray)
 		match self.hashSource 'source'
-			whole then self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: bytes)
+			whole then self.hash = mixBytes(KeyedHasher.combined(self.hash, value: shape), bytes: bytes)
 			author or
-			library then self.wholeChainState = mixBytes(Hasher.combined(self.wholeChainState, value: shape), bytes: bytes)
+			library then self.wholeChainState = mixBytes(KeyedHasher.combined(self.wholeChainState, value: shape), bytes: bytes)
 		end 'source'
 	end 'mixIntoWholeChain'
 
@@ -1597,15 +1598,15 @@ extension ProgramSignatures
 	// those. A new liveness read in the parse must
 	// join this digest, or a memoized parse outlives the answer it was built on.
 	export function livenessDigestParsedBy(declFilePath FilePath) returns HashDigest
-		var digest = Hasher.combined(Hasher.empty(), value: self.byRefConventionDigestParsedBy(declFilePath))
+		var digest = KeyedHasher.combined(startDigest(), value: self.byRefConventionDigestParsedBy(declFilePath))
 
 		if self.spawnsAnyService() 'aServiceIsSpawned'
-			digest = Hasher.combined(digest, value: LivenessSpawnsAService)
+			digest = KeyedHasher.combined(digest, value: LivenessSpawnsAService)
 		end 'aServiceIsSpawned'
 
 		for declaration in self.settledDeclarations().defaultDeclarationList 'eachDeclaration'
 			if declaration.declFilePath.equals(declFilePath) and self.defaultKeyIsLive(declaration.key) and self.defaultDeclarationWins(declaration) 'builtByThisFile'
-				digest = Hasher.combinedBytes(Hasher.combined(digest, value: LivenessBuildsADefault), bytes: declaration.key)
+				digest = KeyedHasher.combinedBytes(KeyedHasher.combined(digest, value: LivenessBuildsADefault), bytes: declaration.key)
 			end 'builtByThisFile'
 		end 'eachDeclaration'
 
@@ -1635,32 +1636,32 @@ extension ProgramSignatures
 
 		self.settleMarkerReferences()
 		self.publishByRefNames()
-		var digest = Hasher.empty()
-		var corpusDigest = Hasher.empty()
+		var digest = startDigest()
+		var corpusDigest = startDigest()
 
 		if self.programTakesAParamByRef() 'someFunctionTakesOne'
-			digest = Hasher.combined(digest, value: LivenessTakesAParamByRef)
-			digest = Hasher.combined(digest, value: nameSetDigest(self.settledDeclarations().byRefBareNames))
-			corpusDigest = Hasher.combined(corpusDigest, value: LivenessTakesAParamByRef)
+			digest = KeyedHasher.combined(digest, value: LivenessTakesAParamByRef)
+			digest = KeyedHasher.combined(digest, value: nameSetDigest(self.settledDeclarations().byRefBareNames))
+			corpusDigest = KeyedHasher.combined(corpusDigest, value: LivenessTakesAParamByRef)
 			let handedOffCallees = self.corpusHandOffCallees()
-			corpusDigest = Hasher.combined(corpusDigest, value: nameSetDigestBeyond(self.settledDeclarations().byRefBareNames, excluded: self.corpusByRefBareNames(), among: handedOffCallees))
+			corpusDigest = KeyedHasher.combined(corpusDigest, value: nameSetDigestBeyond(self.settledDeclarations().byRefBareNames, excluded: self.corpusByRefBareNames(), among: handedOffCallees))
 
 			if self.programHasMutableFunctionValues() 'aFunctionValueIsMutable'
-				digest = Hasher.combined(digest, value: LivenessMutableFunctionValues)
-				corpusDigest = Hasher.combined(corpusDigest, value: LivenessMutableFunctionValues)
+				digest = KeyedHasher.combined(digest, value: LivenessMutableFunctionValues)
+				corpusDigest = KeyedHasher.combined(corpusDigest, value: LivenessMutableFunctionValues)
 			end 'aFunctionValueIsMutable'
 
 			let witnessMasks = self.computedWitnessByRefMasks(false)
-			digest = Hasher.combined(digest, value: witnessByRefMasksDigest(witnessMasks))
-			corpusDigest = Hasher.combined(corpusDigest, value: witnessByRefMasksDigest(self.computedWitnessByRefMasks(true)))
+			digest = KeyedHasher.combined(digest, value: witnessByRefMasksDigest(witnessMasks))
+			corpusDigest = KeyedHasher.combined(corpusDigest, value: witnessByRefMasksDigest(self.computedWitnessByRefMasks(true)))
 			self.witnessByRefMasks = witnessMasks
 			let fieldNames = self.computedFunctionValuedFieldNames(false)
 			self.functionValuedFieldNames = fieldNames
 
-			digest = Hasher.combined(Hasher.combined(digest, value: LivenessFunctionValuedField), value: nameSetDigest(fieldNames))
-			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessFunctionValuedField), value: nameSetDigestBeyond(fieldNames, excluded: self.computedFunctionValuedFieldNames(true), among: handedOffCallees))
-			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessHandedOffSlots), value: self.corpusHandOffSlotsDigest(fieldNames))
-			corpusDigest = Hasher.combined(Hasher.combined(corpusDigest, value: LivenessAuthorConformerConventions), value: self.authorConformerConventionsDigest(self.corpusInterfaceCalleeNames()))
+			digest = KeyedHasher.combined(KeyedHasher.combined(digest, value: LivenessFunctionValuedField), value: nameSetDigest(fieldNames))
+			corpusDigest = KeyedHasher.combined(KeyedHasher.combined(corpusDigest, value: LivenessFunctionValuedField), value: nameSetDigestBeyond(fieldNames, excluded: self.computedFunctionValuedFieldNames(true), among: handedOffCallees))
+			corpusDigest = KeyedHasher.combined(KeyedHasher.combined(corpusDigest, value: LivenessHandedOffSlots), value: self.corpusHandOffSlotsDigest(fieldNames))
+			corpusDigest = KeyedHasher.combined(KeyedHasher.combined(corpusDigest, value: LivenessAuthorConformerConventions), value: self.authorConformerConventionsDigest(self.corpusInterfaceCalleeNames()))
 		end 'someFunctionTakesOne'
 
 		self.byRefConventionDigestAnswer = digest
@@ -1712,7 +1713,7 @@ extension ProgramSignatures
 	end 'corpusHandOffCallees'
 
 	function corpusHandOffSlotsDigest(fieldNames BareNameSet) returns HashDigest
-		var members = Hasher.empty()
+		var members = startDigest()
 		var counted = 0 as Count
 
 		for (arity, positions) in self.corpusHandOffSlotsRead(fieldNames) 'eachArity'
@@ -1722,11 +1723,11 @@ extension ProgramSignatures
 				continue
 			end 'noReadSlotIsByReference'
 
-			members = members xor Hasher.combined(Hasher.combined(Hasher.empty(), value: arity as HashDigest), value: taken as HashDigest)
+			members = members xor KeyedHasher.combined(KeyedHasher.combined(startDigest(), value: arity as HashDigest), value: taken as HashDigest)
 			counted = counted + 1
 		end 'eachArity'
 
-		return Hasher.combined(members, value: counted as HashDigest)
+		return KeyedHasher.combined(members, value: counted as HashDigest)
 	end 'corpusHandOffSlotsDigest'
 
 	function corpusHandOffSlotsRead(fieldNames BareNameSet) returns HandOffPositionsByArity
@@ -1780,7 +1781,7 @@ extension ProgramSignatures
 	end 'noteCorpusInterface'
 
 	function authorConformerConventionsDigest(requirementNames BareNameSet) returns HashDigest
-		var members = Hasher.empty()
+		var members = startDigest()
 		var counted = 0 as Count
 
 		for (site, info) in self.settledDeclarations().funcParamReassigns 'eachRecorded'
@@ -1788,17 +1789,17 @@ extension ProgramSignatures
 				continue
 			end 'notAnAuthorsConformerMethod'
 
-			var state = foldCallability(mixBytes(Hasher.empty(), bytes: info.bareName), callability: info.callability)
+			var state = foldCallability(digestOfBytes(info.bareName), callability: info.callability)
 
 			for paramName in info.paramNames 'eachParam'
 				state = mixBytes(state, bytes: paramName)
 			end 'eachParam'
 
-			members = members xor Hasher.combined(state, value: info.mutableParams as HashDigest)
+			members = members xor KeyedHasher.combined(state, value: info.mutableParams as HashDigest)
 			counted = counted + 1
 		end 'eachRecorded'
 
-		return Hasher.combined(members, value: counted as HashDigest)
+		return KeyedHasher.combined(members, value: counted as HashDigest)
 	end 'authorConformerConventionsDigest'
 
 	function computedFunctionValuedFieldNames(corpusOnly bool) returns BareNameSet
@@ -2447,7 +2448,7 @@ extension ProgramSignatures
 	end 'discoveredConformerOf'
 
 	// ⭐⭐ **THE IMPL A PAYLOAD-FREE ENUM'S GRANTED `Hashable`/`Equatable` SLOT NAMES — the ONE answer, read by
-	// the WITNESS SLOT (`LowerMaxonToStd.witnessSlotImpl`) and by the DIRECT dispatch
+	// the WITNESS SLOT (`witnessSlotImplByConformerKind`) and by the DIRECT dispatch
 	// (`Parser.dispatchEnumConformanceMethod`), because a map that hashes a key one way and an `e.hash()` that
 	// answers another is a wrong answer no diagnostic can reach.**
 	//
@@ -2488,6 +2489,16 @@ extension ProgramSignatures
 
 		return qualifiedMethodName(IntConformerName, methodName: methodName)
 	end 'enumConformanceImplName'
+
+	// The witness table and `StdlibSource.witnessImplNamesOf` both name a slot's impl by this, so the impl a
+	// table stamps is the one the library reachability walk keeps.
+	export function witnessSlotImplByConformerKind(typeName ByteArray, methodName ByteArray) returns immutable ByteArray
+		return match self.discoveredConformerOf(typeName) 'discovered'
+			payloadFreeEnum gives self.enumConformanceImplName(typeName, methodName: methodName)
+			none or
+			arrayRecord gives qualifiedMethodName(typeName, methodName: methodName)
+		end 'discovered'
+	end 'witnessSlotImplByConformerKind'
 
 	// ⭐⭐ **DOES THIS ENUM DECLARE A MEMBER OF ITS OWN UNDER A GRANTED REQUIREMENT'S NAME? — the ONE home of
 	// the override probe, read by all THREE doors that turn on it.** `Parser.enumGrantedConformanceMethod`
@@ -2662,7 +2673,7 @@ extension ProgramSignatures
 	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, implementsClauses AliasImplementsClauseArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, freeFunctionNames NameRoster, testDecls DiscoveredTestArray, moduleDirectory String, filePath FilePath, fileStream DeclTokenStream, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// Which file holds which declarations decides how other files resolve them, so the boundary
 		// between files rides the hash.
-		self.hash = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeFileBoundary), bytes: filePath.toString().toByteArray())
+		self.hash = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeFileBoundary), bytes: filePath.toString().toByteArray())
 
 		// ⭐ The file's `test` declarations, appended in sweep order and contested by nothing: a minted
 		// `__test_` name is in the space no author may declare (E2051), so there is no name question to
@@ -3463,7 +3474,7 @@ extension ProgramSignatures
 
 		// In the index's key, so an extension edited to store or stop storing an associated type
 		// re-parses the conformers that bind it in other files.
-		self.hash = mixBytes(Hasher.combined(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeExtensionHeldArgument), bytes: key), value: held.position as HashDigest), bytes: held.baseName)
+		self.hash = mixBytes(KeyedHasher.combined(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeExtensionHeldArgument), bytes: key), value: held.position as HashDigest), bytes: held.baseName)
 	end 'noteExtensionHeldArgument'
 
 	export function extensionHeldArguments(conformer ByteArray, interfaceName ByteArray, associatedPosition ElementIndex) returns ExtensionHeldArgumentArray
@@ -3488,7 +3499,7 @@ extension ProgramSignatures
 		self.mainThreadSettled().funcParamConsumes.upsert(name, value: info)
 		self.mainThreadSettled().declParamConsumes.upsert(site, value: info)
 		self.forwardedStoresClosed = false
-		var state = mixBytes(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeParamConsume), bytes: name), bytes: site)
+		var state = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeParamConsume), bytes: name), bytes: site)
 
 		// The param NAMES ride too: a rename changes which labelled argument a caller slots to a consumed
 		// position, so a caller's memo must move when they do (`transferConsumedArgs` slots against them
@@ -3496,12 +3507,12 @@ extension ProgramSignatures
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamConsume: paramNames.get OOB at {i} despite i < count")
 			let bit = info.isConsumed(i as ParamCount)
-			state = Hasher.combined(mixBytes(state, bytes: paramName), value: SignatureDiscriminator.consumeBitSet if bit else SignatureDiscriminator.consumeBitClear)
-			state = Hasher.combined(state, value: SignatureDiscriminator.handedOnBitSet if info.isHandedOn(i as ParamCount) else SignatureDiscriminator.handedOnBitClear)
+			state = KeyedHasher.combined(mixBytes(state, bytes: paramName), value: SignatureDiscriminator.consumeBitSet if bit else SignatureDiscriminator.consumeBitClear)
+			state = KeyedHasher.combined(state, value: SignatureDiscriminator.handedOnBitSet if info.isHandedOn(i as ParamCount) else SignatureDiscriminator.handedOnBitClear)
 		end 'eachName'
 
 		for store in info.forwardedStores 'eachForwardedStore'
-			state = Hasher.combined(mixBytes(mixBytes(mixBytes(Hasher.combined(Hasher.combined(Hasher.combined(Hasher.combined(state, value: store.paramIndex as HashDigest), value: store.shape.ordinal as HashDigest), value: store.calleeParam as HashDigest), value: store.column as HashDigest), bytes: store.typeName), bytes: store.memberName), bytes: store.label), value: SignatureDiscriminator.forwardedStoreDiscriminator)
+			state = KeyedHasher.combined(mixBytes(mixBytes(mixBytes(KeyedHasher.combined(KeyedHasher.combined(KeyedHasher.combined(KeyedHasher.combined(state, value: store.paramIndex as HashDigest), value: store.shape.ordinal as HashDigest), value: store.calleeParam as HashDigest), value: store.column as HashDigest), bytes: store.typeName), bytes: store.memberName), bytes: store.label), value: SignatureDiscriminator.forwardedStoreDiscriminator)
 		end 'eachForwardedStore'
 
 		// The TYPE-PARAMETER FEEDS ride too: which position a parameter feeds decides whether a
@@ -3523,8 +3534,8 @@ extension ProgramSignatures
 	// owner, the other leaves ownership with the constructed value.
 	function mixTypeParamFeed(state HashDigest, feed TypeParamFeed) returns HashDigest
 		return match feed 'f'
-			feeds(position, sink) gives Hasher.combined(Hasher.combined(Hasher.combined(state, value: SignatureDiscriminator.feedShapeFeeds), value: position as HashDigest), value: feedSinkShape(sink))
-			none gives Hasher.combined(state, value: SignatureDiscriminator.feedShapeNone)
+			feeds(position, sink) gives KeyedHasher.combined(KeyedHasher.combined(KeyedHasher.combined(state, value: SignatureDiscriminator.feedShapeFeeds), value: position as HashDigest), value: feedSinkShape(sink))
+			none gives KeyedHasher.combined(state, value: SignatureDiscriminator.feedShapeNone)
 		end 'f'
 	end 'mixTypeParamFeed'
 
@@ -4027,12 +4038,12 @@ extension ProgramSignatures
 		self.mainThreadSettled().funcParamReassigns.upsert(site, value: info)
 		noteDeclarationSiteOfKey(self.mainThreadSettled().byRefSitesOfKey, name: name, site: site)
 
-		var state = mixBytes(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeParamByRef), bytes: name), bytes: site)
+		var state = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeParamByRef), bytes: name), bytes: site)
 
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamReassign: paramNames.get OOB at {i} despite i < count")
 			state = mixBytes(state, bytes: paramName)
-			state = Hasher.combined(state, value: SignatureDiscriminator.byRefBitSet if info.isByRef(i as ParamCount) else SignatureDiscriminator.byRefBitClear)
+			state = KeyedHasher.combined(state, value: SignatureDiscriminator.byRefBitSet if info.isByRef(i as ParamCount) else SignatureDiscriminator.byRefBitClear)
 		end 'eachName'
 
 		state = mixBytes(state, bytes: info.bareName)
@@ -4341,7 +4352,7 @@ extension ProgramSignatures
 	// "every parameter is required"), so the common function costs no map entry and no hash movement.
 	function recordParamDefaults(name ByteArray, info ParamDefaultInfo)
 		self.mainThreadSettled().funcParamDefaults.upsert(name, value: info)
-		var state = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeParamDefault), bytes: name)
+		var state = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeParamDefault), bytes: name)
 
 		// The param NAMES ride for `recordParamConsume`'s reason — a rename changes which labelled argument
 		// slots to a defaulted position — and the per-position presence bit rides because it is what decides
@@ -4357,7 +4368,7 @@ extension ProgramSignatures
 		// which is the stored-binding payload mistake `mixDeclAnswer` avoids, one registry over.
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamDefaults: paramNames.get OOB at {i} despite i < count")
-			state = Hasher.combined(mixBytes(state, bytes: paramName), value: defaultProducerMark(info.producerFor(i as ParamCount)))
+			state = KeyedHasher.combined(mixBytes(state, bytes: paramName), value: defaultProducerMark(info.producerFor(i as ParamCount)))
 		end 'eachName'
 
 		self.hash = state
@@ -4398,7 +4409,7 @@ extension ProgramSignatures
 		// The THROWS TYPE NAME rides too — a callee that changes which error it throws changes what type a
 		// caller's `(e)` binding recovers — and it rides through the SHARED `mixThrowsClause`, so a function's
 		// clause and an interface requirement's clause enter the hash the one way.
-		self.hash = mixThrowsClause(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeThrows), bytes: name), clause: clause)
+		self.hash = mixThrowsClause(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeThrows), bytes: name), clause: clause)
 	end 'recordThrows'
 
 	// Record one proved body fact — the write plus the hash, for `recordThrows`'
@@ -4406,7 +4417,7 @@ extension ProgramSignatures
 	// WHICH call shape reads them back, which is a property of the door and not of the recording.
 	function recordSweptBodyFact(name ByteArray, marked DeclaredBodyFactNameSet, shape HashDigest)
 		marked.insert(name)
-		self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: name)
+		self.hash = mixBytes(KeyedHasher.combined(self.hash, value: shape), bytes: name)
 	end 'recordSweptBodyFact'
 
 	// ⭐⭐ **DOES A CALL TO THIS NAME NEVER COME BACK? — the door `Parser.terminateAfterDivergingCall` asks
@@ -4544,7 +4555,7 @@ extension ProgramSignatures
 			into.upsert(name, value: FreshReturnForwardingDeclaration.create(forwards, declFilePath: declFilePath))
 		end 'theFirstDeclarationOfTheKeyIsTheOneKept'
 
-		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: name), bytes: declFilePath.toString().toByteArray())
+		self.hash = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: shape), bytes: name), bytes: declFilePath.toString().toByteArray())
 
 		for forward in forwards 'eachForward'
 			match forward 'shape'
@@ -4566,7 +4577,7 @@ extension ProgramSignatures
 	end 'mixFreshReturnForwardThroughFields'
 
 	function mixFreshReturnForward(shape HashDigest, typeName ByteArray, callee ByteArray)
-		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: typeName), bytes: callee)
+		self.hash = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: shape), bytes: typeName), bytes: callee)
 		self.noteForwardCalleeName(callee)
 		self.noteMentionedName(typeName)
 	end 'mixFreshReturnForward'
@@ -4923,16 +4934,16 @@ extension ProgramSignatures
 			self.mainThreadSettled().interfaceNamesInDeclOrder.push(iface.name)
 		end 'firstDeclarationOfThisName'
 
-		let named = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeInterface), bytes: iface.name)
-		self.hash = Hasher.combined(mixDeclaringTier(named, visibility: visibility, declFilePath: iface.declFilePath), value: iface.associatedTypeNames.count() as HashDigest)
+		let named = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeInterface), bytes: iface.name)
+		self.hash = KeyedHasher.combined(mixDeclaringTier(named, visibility: visibility, declFilePath: iface.declFilePath), value: iface.associatedTypeNames.count() as HashDigest)
 
 		for parentName in iface.extendsInterfaces 'eachParent'
-			self.hash = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeInterfaceParent), bytes: parentName)
+			self.hash = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeInterfaceParent), bytes: parentName)
 		end 'eachParent'
 
 		for method in iface.methods 'eachMethod'
 			self.mainThreadSettled().interfaceRequirementNames.insert(method.name)
-			self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
+			self.hash = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
 			self.hash = self.mixRequirementType(self.hash, requirement: method.returnType)
 			self.hash = mixInterfaceFormals(self.hash, names: method.paramNames, types: method.paramTypeNames)
 
@@ -4942,8 +4953,8 @@ extension ProgramSignatures
 
 			self.hash = mixThrowsClause(self.hash, clause: method.throwsClause)
 			self.hash = mixCapabilities(self.hash, params: method.paramCapabilities, result: method.returnCapability)
-			self.hash = Hasher.combined(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeSelfCapability), value: method.selfCapability.ordinal as HashDigest)
-			self.hash = Hasher.combined(self.hash, value: SignatureDiscriminator.receiverShapeAbsent if method.isStatic else SignatureDiscriminator.receiverShapePresent)
+			self.hash = KeyedHasher.combined(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeSelfCapability), value: method.selfCapability.ordinal as HashDigest)
+			self.hash = KeyedHasher.combined(self.hash, value: SignatureDiscriminator.receiverShapeAbsent if method.isStatic else SignatureDiscriminator.receiverShapePresent)
 		end 'eachMethod'
 	end 'recordInterfaceDeclaration'
 
@@ -5055,7 +5066,7 @@ extension ProgramSignatures
 		// ⇒ The rule is now the one sentence `upsertDeclaredEnum` already states — **a compiler-owned type
 		// name may be declared by the CORPUS and by nothing else** — and a USER declaration is dropped here
 		// exactly as before, which is what keeps `isCompilerOwnedTypeName`'s two measured silent wrong answers
-		// (a user `hash()` answering 7 where djb2 answers 5381; `Set with String` counting 3 where the control
+		// (a user `hash()` answering in place of the library's; `Set with String` counting 3 where the control
 		// says 2) closed. `specs/string-conformance.md`'s two `may-not-bind-the-name` cases pin it.
 		//
 		// ⭐⭐ **A LISTED MODULE DECLARING A COMPILER-OWNED NAME: KEEP THE RESERVATION, DROP ANY SECOND
@@ -5078,7 +5089,7 @@ extension ProgramSignatures
 
 		self.addRegisteredLayout(layout)
 
-		var state = mixDeclaringTier(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeStruct), bytes: layout.name), visibility: layout.visibility, declFilePath: layout.declFilePath)
+		var state = mixDeclaringTier(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeStruct), bytes: layout.name), visibility: layout.visibility, declFilePath: layout.declFilePath)
 
 		// The type PARAMETERS ride the hash: a change to `uses T` — a rename, or a change in
 		// COUNT — changes which `Box with …` instantiations are the right arity in any file, so a reader's
@@ -5086,7 +5097,7 @@ extension ProgramSignatures
 		// meaningful against this list).
 		for i in 0 upto layout.typeParamCount() 'eachTypeParam'
 			let paramName = try layout.typeParamNames.get(i) otherwise panic("ProgramSignatures.recordStruct: typeParamNames.get OOB at {i}")
-			state = mixBytes(Hasher.combined(state, value: SignatureDiscriminator.declShapeTypeParam), bytes: paramName)
+			state = mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.declShapeTypeParam), bytes: paramName)
 		end 'eachTypeParam'
 
 		// The `where` constraints ride the hash: a change to `where T is Digest` changes
@@ -5108,11 +5119,11 @@ extension ProgramSignatures
 		state = self.mixConformanceBindings(state, bindings: layout.conformanceBindings)
 
 		if layout.isUnique 'aUniqueType'
-			state = Hasher.combined(state, value: SignatureDiscriminator.declShapeUniqueType)
+			state = KeyedHasher.combined(state, value: SignatureDiscriminator.declShapeUniqueType)
 		end 'aUniqueType'
 
 		if layout.isLinear 'aLinearType'
-			state = Hasher.combined(state, value: SignatureDiscriminator.declShapeLinearType)
+			state = KeyedHasher.combined(state, value: SignatureDiscriminator.declShapeLinearType)
 		end 'aLinearType'
 
 		for i in 0 upto layout.fieldCount() 'eachField'
@@ -5145,7 +5156,7 @@ extension ProgramSignatures
 	function recordEnum(layout EnumLayout, declaredByTheCorpus bool)
 		upsertDeclaredEnum(self.mainThreadSettled().enumTypes, layout: layout, declaredByTheCorpus: declaredByTheCorpus)
 
-		var state = mixDeclaringTier(Hasher.combined(Hasher.combined(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeEnum), bytes: layout.name), value: SignatureDiscriminator.enumKindUnion if layout.isUnion else SignatureDiscriminator.enumKindEnum), value: enumBackingDiscriminator(layout.backing)), visibility: layout.visibility, declFilePath: layout.declFilePath)
+		var state = mixDeclaringTier(KeyedHasher.combined(KeyedHasher.combined(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeEnum), bytes: layout.name), value: SignatureDiscriminator.enumKindUnion if layout.isUnion else SignatureDiscriminator.enumKindEnum), value: enumBackingDiscriminator(layout.backing)), visibility: layout.visibility, declFilePath: layout.declFilePath)
 
 		// ⭐⭐ **THE BACKING STRUCT'S NAME, WHICH THE DISCRIMINATOR ABOVE CANNOT CARRY.** `Meta` and `Other`
 		// are both `structRecord`, so the backing bit says only THAT a struct backs the cases, never WHICH —
@@ -5165,7 +5176,7 @@ extension ProgramSignatures
 		// a file interpolating one of them compiles `green` for the first and `1` for the second: a warm
 		// rebuild across that edit would have served a parse of the reading file that renders the other one.
 		// A per-DECLARATION fact, so it rides here beside the struct name and not in `mixEnumCase`.
-		state = Hasher.combined(state, value: SignatureDiscriminator.enumDeclaresRawValues if layout.declaresRawValues else SignatureDiscriminator.enumAutoTagged)
+		state = KeyedHasher.combined(state, value: SignatureDiscriminator.enumDeclaresRawValues if layout.declaresRawValues else SignatureDiscriminator.enumAutoTagged)
 
 		// The `implements` list rides for the field list's reason — see `mixDeclaredConformances`,
 		// which states it once for both declaration kinds.
@@ -5238,7 +5249,7 @@ extension ProgramSignatures
 		// `__ManagedMemory with T` and `Array with T` fold to one `genericInstance`. A separate bit rather than
 		// a second fold, so a declaration that changes only its base's SPELLING still moves the hash.
 		let sizeBits = entry.shape.hashWord()
-		var state = mixDeclaringTier(Hasher.combined(Hasher.combined(mixBytes(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits() as HashDigest), value: sizeBits), visibility: entry.visibility, declFilePath: entry.filePath)
+		var state = mixDeclaringTier(KeyedHasher.combined(KeyedHasher.combined(mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits() as HashDigest), value: sizeBits), visibility: entry.visibility, declFilePath: entry.filePath)
 
 		for arg in args 'eachHash'
 			state = self.mixType(state, t: arg)
@@ -5397,12 +5408,12 @@ extension ProgramSignatures
 
 	// Fold one case's NAME, TAG and PAYLOAD SLOTS into the enum's hash. Split out so the SIGNED tag
 	// (`FullRangeInt`) crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultLiteral`
-	// have the same two lines for the same reason (a cast written inline as a nested `Hasher.combined`
+	// have the same two lines for the same reason (a cast written inline as a nested `KeyedHasher.combined`
 	// argument draws a false E3010, unneeded cast).
 	function mixEnumCase(state HashDigest, layout EnumLayout, index CaseIndex) returns HashDigest
 		let named = mixBytes(state, bytes: layout.caseNameAt(index))
 		let tagBits = layout.tagOfIndex(index) as HashDigest
-		var folded = Hasher.combined(named, value: tagBits)
+		var folded = KeyedHasher.combined(named, value: tagBits)
 
 		// ⚠ **A RAW VALUE THE TAG DOES NOT CARRY MUST RIDE SEPARATELY** — `a = "x"` and `a = "y"` fold to the
 		// identical name + tag + backing, which is the same blind spot the backing discriminator above exists
@@ -5443,20 +5454,20 @@ extension ProgramSignatures
 		var folded = state
 
 		for field in layout.backingFieldsAt(index) 'eachField'
-			let slotted = Hasher.combined(folded, value: SignatureDiscriminator.enumBackingFieldSlot)
+			let slotted = KeyedHasher.combined(folded, value: SignatureDiscriminator.enumBackingFieldSlot)
 			let labelled = mixBytes(slotted, bytes: field.name)
-			let placed = Hasher.combined(Hasher.combined(labelled, value: field.position as HashDigest), value: field.group as HashDigest)
+			let placed = KeyedHasher.combined(KeyedHasher.combined(labelled, value: field.position as HashDigest), value: field.group as HashDigest)
 
 			match field.value 'value'
 				// The literal's KIND rides beside its bits: `1` and `1.0` are different declarations that fold
 				// to the same `FullRangeInt` (`floatLiteralBits(0.0)` is 0), and they type-check differently.
-				literal(bits, kind) then folded = Hasher.combined(Hasher.combined(placed, value: bits as HashDigest), value: enumBackingLiteralDiscriminator(kind))
-				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(Hasher.combined(placed, value: SignatureDiscriminator.enumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
+				literal(bits, kind) then folded = KeyedHasher.combined(KeyedHasher.combined(placed, value: bits as HashDigest), value: enumBackingLiteralDiscriminator(kind))
+				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(KeyedHasher.combined(placed, value: SignatureDiscriminator.enumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
 
 				// The nested struct's own NAME, because it is checked against the field's declared type and a
 				// case naming a different one is a different declaration (`enumBackingNamedValueSuitsDomain`).
 				// Its constants ride as the entries of the group it owns, folded by this same loop.
-				nestedStruct(structName) then folded = mixBytes(Hasher.combined(placed, value: SignatureDiscriminator.enumBackingFieldNestedStruct), bytes: structName)
+				nestedStruct(structName) then folded = mixBytes(KeyedHasher.combined(placed, value: SignatureDiscriminator.enumBackingFieldNestedStruct), bytes: structName)
 			end 'value'
 		end 'eachField'
 
@@ -5474,9 +5485,9 @@ extension ProgramSignatures
 	// `__ManagedMemory` and `ByteArray` fold to the identical `genericInstance` through `mixType`, while a
 	// binding destructured out of the two reaches a different member roster.
 	function mixPayloadField(state HashDigest, field PayloadField) returns HashDigest
-		let named = self.mixType(mixBytes(Hasher.combined(state, value: SignatureDiscriminator.payloadShapeSlot), bytes: field.name), t: field.declaredType)
-		let surfaced = mixSurface(Hasher.combined(named, value: SignatureDiscriminator.payloadShapeSurface), surface: field.declaredSurface)
-		return Hasher.combined(surfaced, value: field.capability.ordinal as HashDigest)
+		let named = self.mixType(mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.payloadShapeSlot), bytes: field.name), t: field.declaredType)
+		let surfaced = mixSurface(KeyedHasher.combined(named, value: SignatureDiscriminator.payloadShapeSurface), surface: field.declaredSurface)
+		return KeyedHasher.combined(surfaced, value: field.capability.ordinal as HashDigest)
 	end 'mixPayloadField'
 
 	// Fold EVERYTHING the compiler reads off field `index` into the index's hash. See `recordStruct`
@@ -5486,12 +5497,12 @@ extension ProgramSignatures
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.mixField: fieldTypes.get OOB at {index} — the field columns fell out of lockstep")
 
 		let named = self.mixType(mixBytes(state, bytes: fieldName), t: fieldType)
-		let withMutability = Hasher.combined(named, value: SignatureDiscriminator.fieldShapeMutable if layout.fieldIsMutable(index) else SignatureDiscriminator.fieldShapeImmutable)
+		let withMutability = KeyedHasher.combined(named, value: SignatureDiscriminator.fieldShapeMutable if layout.fieldIsMutable(index) else SignatureDiscriminator.fieldShapeImmutable)
 
 		// The declared SPELLING — the one fact here `mixType` structurally cannot carry, since
 		// `__ManagedMemory` and `ByteArray` fold to the identical `genericInstance`. See `fieldShapeSurface`.
-		let withSpelling = mixSurface(Hasher.combined(withMutability, value: SignatureDiscriminator.fieldShapeSurface), surface: layout.fieldDeclaredSurface(index))
-		let withCapability = Hasher.combined(withSpelling, value: layout.fieldTypeSites.capabilityAt(index).ordinal as HashDigest)
+		let withSpelling = mixSurface(KeyedHasher.combined(withMutability, value: SignatureDiscriminator.fieldShapeSurface), surface: layout.fieldDeclaredSurface(index))
+		let withCapability = KeyedHasher.combined(withSpelling, value: layout.fieldTypeSites.capabilityAt(index).ordinal as HashDigest)
 		return self.mixFieldDefault(withCapability, defaultValue: layout.fieldDefault(index))
 	end 'mixField'
 
@@ -5512,10 +5523,10 @@ extension ProgramSignatures
 	// a literal — which is this constant.
 	function mixFieldDefault(state HashDigest, defaultValue FieldDefault) returns HashDigest
 		return match defaultValue 'shape'
-			none gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeNoDefault)
+			none gives KeyedHasher.combined(state, value: SignatureDiscriminator.fieldShapeNoDefault)
 			literal(given) gives self.mixDefaultLiteral(state, given: given)
-			helper gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultHelper)
-			emptyCreateHelper gives Hasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultEmptyCreate)
+			helper gives KeyedHasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultHelper)
+			emptyCreateHelper gives KeyedHasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaultEmptyCreate)
 		end 'shape'
 	end 'mixFieldDefault'
 
@@ -5523,7 +5534,7 @@ extension ProgramSignatures
 	// arrives as a bound PARAMETER: it is SIGNED (`FullRangeInt` — and a float default's is a bit
 	// pattern that routinely has its top bit set) while the hash domain is unsigned, so it crosses
 	// by an explicit cast, and that cast needs a local. `recordAlias` has the same two lines for the
-	// same reason: written inline as an argument to a nested `Hasher.combined`, the cast draws a
+	// same reason: written inline as an argument to a nested `KeyedHasher.combined`, the cast draws a
 	// false E3010 (unneeded cast), which costs nothing to route around.
 	//
 	// ⚠ **THE TAG RIDES, AND THE PAYLOAD ALONE WOULD NOT CARRY IT.** A default is stored as the source
@@ -5546,7 +5557,7 @@ extension ProgramSignatures
 		let sign = SignatureDiscriminator.fieldDefaultWrittenNegative if given.writtenNegative else SignatureDiscriminator.fieldDefaultWrittenAboveSignedMax if given.aboveSignedMax else SignatureDiscriminator.fieldDefaultWrittenPlain
 
 		// The ConstValue's `typeName` is not mixed: a field default's literal never carries one.
-		return Hasher.combined(Hasher.combined(self.mixValueTag(Hasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaulted), tag: given.tag, typeName: EmptySourceText), value: payloadBits), value: sign)
+		return KeyedHasher.combined(KeyedHasher.combined(self.mixValueTag(KeyedHasher.combined(state, value: SignatureDiscriminator.fieldShapeDefaulted), tag: given.tag, typeName: EmptySourceText), value: payloadBits), value: sign)
 	end 'mixDefaultLiteral'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
@@ -5565,7 +5576,7 @@ extension ProgramSignatures
 
 		// The bounds are SIGNED (`FullRangeInt`) and the hash domain is UNSIGNED, so each crosses by an
 		// explicit cast. Bound to locals rather than written inline: as arguments to a nested
-		// `Hasher.combined` the casts draw a false E3010 (unneeded cast), which costs nothing to route
+		// `KeyedHasher.combined` the casts draw a false E3010 (unneeded cast), which costs nothing to route
 		// around.
 		let low = alias.low as HashDigest
 		let high = alias.high as HashDigest
@@ -5580,8 +5591,8 @@ extension ProgramSignatures
 		// ⚠ **THE WHOLE TIER, NOT ONE BIT.** `export typealias Score` vs `public typealias Score` is a
 		// different answer to the unused-export audit, so the tiers must key different parses. The ordinal is
 		// used rather than a bit because it is what a tier IS; a new case rides automatically.
-		let named = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeAlias), bytes: alias.name)
-		self.hash = mixDeclaringTier(Hasher.combined(Hasher.combined(named, value: low), value: high), visibility: alias.visibility, declFilePath: alias.declFilePath)
+		let named = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeAlias), bytes: alias.name)
+		self.hash = mixDeclaringTier(KeyedHasher.combined(KeyedHasher.combined(named, value: low), value: high), visibility: alias.visibility, declFilePath: alias.declFilePath)
 	end 'recordAlias'
 
 	// Add one INNER ranged typealias under its BASE-QUALIFIED name AND fold it into the hash —
@@ -5597,8 +5608,8 @@ extension ProgramSignatures
 		let low = alias.low as HashDigest
 		let high = alias.high as HashDigest
 
-		let named = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeInnerAlias), bytes: qualified)
-		self.hash = mixDeclaringTier(Hasher.combined(Hasher.combined(named, value: low), value: high), visibility: alias.visibility, declFilePath: alias.declFilePath)
+		let named = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeInnerAlias), bytes: qualified)
+		self.hash = mixDeclaringTier(KeyedHasher.combined(KeyedHasher.combined(named, value: low), value: high), visibility: alias.visibility, declFilePath: alias.declFilePath)
 	end 'recordInnerAlias'
 
 	// ⭐ **NOTE THAT AN `extension` BODY DECLARES A PER-INSTANCE NESTED `typealias` CALLED `qualified`** — see
@@ -6072,7 +6083,7 @@ extension ProgramSignatures
 	// directory and `declShapeNamespaceQualifiedFunction` for why it must ride the hash at all.
 	function recordNamespaceQualifiedFunction(qualifiedName ByteArray, moduleDirectory String)
 		self.mainThreadSettled().namespaceQualifiedFunctions.upsert(qualifiedName, value: moduleDirectory)
-		self.hash = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeNamespaceQualifiedFunction), bytes: qualifiedName)
+		self.hash = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeNamespaceQualifiedFunction), bytes: qualifiedName)
 	end 'recordNamespaceQualifiedFunction'
 
 	// Add one FUNCTION typealias to the index AND fold it into the hash — the one write, for
@@ -6093,11 +6104,11 @@ extension ProgramSignatures
 	// (`Parser.readFunctionTypeAlias`), so it is the one parameter fact both passes mint identically.
 	function recordFunctionTypeAlias(alias FunctionTypeAlias)
 		self.mainThreadSettled().functionTypeAliases.record(alias)
-		let named = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeFunctionAlias), bytes: alias.name)
-		self.hash = mixDeclaringTier(Hasher.combined(self.mixAliasReturnSlot(named, alias: alias), value: alias.paramSpelling), visibility: alias.visibility, declFilePath: alias.declFilePath)
+		let named = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeFunctionAlias), bytes: alias.name)
+		self.hash = mixDeclaringTier(KeyedHasher.combined(self.mixAliasReturnSlot(named, alias: alias), value: alias.paramSpelling), visibility: alias.visibility, declFilePath: alias.declFilePath)
 
 		if alias.mutableFunction 'aMutableFunction'
-			self.hash = Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeMutableFunction)
+			self.hash = KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeMutableFunction)
 		end 'aMutableFunction'
 	end 'recordFunctionTypeAlias'
 
@@ -6142,10 +6153,10 @@ extension ProgramSignatures
 	// ⚠ **THE `typeParameter` HALF IS CORRECT RAW AND STAYS RAW**, for `mixType`'s own stated reason: a
 	// token is a digest of two source NAMES, not an intern-order id, so mixing it IS mixing those names.
 	function mixAliasReturnSlot(state HashDigest, alias FunctionTypeAlias) returns HashDigest
-		let tagged = Hasher.combined(mixBytes(Hasher.combined(state, value: alias.returnTag.rawValue as HashDigest), bytes: alias.returnTypeName), value: alias.returnCapability.ordinal as HashDigest)
+		let tagged = KeyedHasher.combined(mixBytes(KeyedHasher.combined(state, value: alias.returnTag.rawValue as HashDigest), bytes: alias.returnTypeName), value: alias.returnCapability.ordinal as HashDigest)
 
 		match alias.returnIdentity 'identity'
-			typeParamToken(token) then return Hasher.combined(tagged, value: token as HashDigest)
+			typeParamToken(token) then return KeyedHasher.combined(tagged, value: token as HashDigest)
 			genericInstance(id) then return self.mixGenericInstance(tagged, id: id)
 			nameOnly then return tagged
 		end 'identity'
@@ -6163,7 +6174,7 @@ extension ProgramSignatures
 		var out = state
 
 		for perInterface in bindings 'eachConformance'
-			out = mixDeclaredConformances(Hasher.combined(out, value: perInterface.spellings.count() as HashDigest), conformsTo: perInterface.spellings, shape: SignatureDiscriminator.declShapeConformanceBinding)
+			out = mixDeclaredConformances(KeyedHasher.combined(out, value: perInterface.spellings.count() as HashDigest), conformsTo: perInterface.spellings, shape: SignatureDiscriminator.declShapeConformanceBinding)
 
 			for bound in perInterface.types 'eachBoundType'
 				out = self.mixRequirementType(out, requirement: bound)
@@ -6174,12 +6185,12 @@ extension ProgramSignatures
 	end 'mixConformanceBindings'
 
 	function mixRequirementType(state HashDigest, requirement RequirementType) returns HashDigest
-		let tagged = mixBytes(Hasher.combined(state, value: requirement.identity.ordinal as HashDigest), bytes: requirement.brand)
+		let tagged = mixBytes(KeyedHasher.combined(state, value: requirement.identity.ordinal as HashDigest), bytes: requirement.brand)
 
 		return match requirement.identity 'identity'
-			typeParameter(token) gives Hasher.combined(tagged, value: token as HashDigest)
+			typeParameter(token) gives KeyedHasher.combined(tagged, value: token as HashDigest)
 			genericInstance(id) gives self.mixGenericInstance(tagged, id: id)
-			builtin(tag) gives Hasher.combined(tagged, value: tag.rawValue as HashDigest)
+			builtin(tag) gives KeyedHasher.combined(tagged, value: tag.rawValue as HashDigest)
 			nominal(name) gives mixBytes(tagged, bytes: name)
 			void or
 			selfType gives tagged
@@ -8540,11 +8551,11 @@ extension ProgramSignatures
 			// re-materializes the literal from exactly these bytes, so `export let G = "a"` → `"b"` changes
 			// what every OTHER file compiles to while their own bytes never move. The KIND rides too: the
 			// same bytes as a `String` and as a `b"…"` produce different records and different types.
-			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeManagedValue), kind: kind), bytes: bytes)
+			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(KeyedHasher.combined(keyed, value: SignatureDiscriminator.constShapeManagedValue), kind: kind), bytes: bytes)
 
-			storedRecord(valueType, brand, _, mapColumns) then return self.mixMapColumns(self.mixRecordStorage(mixBytes(self.mixType(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeFactoryValue), t: valueType), bytes: brand), decl: decl), columns: mapColumns)
-			imagedRecord(image) then return self.mixImageRecord(self.mixRecordStorage(mixBytes(self.mixType(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeArrayValue), t: image.valueType), bytes: image.brand), decl: decl), image: image)
-			imagedBox(nodes, root, typeName, tag) then return mixImageBoxTree(Hasher.combined(mixBytes(self.mixRecordStorage(Hasher.combined(keyed, value: SignatureDiscriminator.constShapeBoxedUnionValue), decl: decl), bytes: typeName), value: tag.ordinal as HashDigest), nodes: nodes, root: root, below: nodes.count())
+			storedRecord(valueType, brand, _, mapColumns) then return self.mixMapColumns(self.mixRecordStorage(mixBytes(self.mixType(KeyedHasher.combined(keyed, value: SignatureDiscriminator.constShapeFactoryValue), t: valueType), bytes: brand), decl: decl), columns: mapColumns)
+			imagedRecord(image) then return self.mixImageRecord(self.mixRecordStorage(mixBytes(self.mixType(KeyedHasher.combined(keyed, value: SignatureDiscriminator.constShapeArrayValue), t: image.valueType), bytes: image.brand), decl: decl), image: image)
+			imagedBox(nodes, root, typeName, tag) then return mixImageBoxTree(KeyedHasher.combined(mixBytes(self.mixRecordStorage(KeyedHasher.combined(keyed, value: SignatureDiscriminator.constShapeBoxedUnionValue), decl: decl), bytes: typeName), value: tag.ordinal as HashDigest), nodes: nodes, root: root, below: nodes.count())
 			deferredRecord then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is still a deferred record — `settleRecordInitializers` settles every record before it folds the hash")
 
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
@@ -8554,7 +8565,7 @@ extension ProgramSignatures
 			// failed with.
 			failed or
 			unvalidatedRecord or
-			poisoned then return Hasher.combined(keyed, value: SignatureDiscriminator.constShapeNoValue)
+			poisoned then return KeyedHasher.combined(keyed, value: SignatureDiscriminator.constShapeNoValue)
 			pending or
 			evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` folds the hash only after every walk has finished")
 		end 'o'
@@ -8580,14 +8591,14 @@ extension ProgramSignatures
 	// `VerifyWarmRebuild`'s property (e).
 	function mixRecordStorage(state HashDigest, decl TopLevelDecl) returns HashDigest
 		if decl.hasStorage 'aSlotTheReaderLoadsFrom'
-			return mixBytes(Hasher.combined(state, value: SignatureDiscriminator.recordStorageShapeSlot), bytes: try decl.dataLabel.label() otherwise EmptySourceText)
+			return mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.recordStorageShapeSlot), bytes: try decl.dataLabel.label() otherwise EmptySourceText)
 		end 'aSlotTheReaderLoadsFrom'
 
-		return Hasher.combined(state, value: SignatureDiscriminator.recordStorageShapeImage)
+		return KeyedHasher.combined(state, value: SignatureDiscriminator.recordStorageShapeImage)
 	end 'mixRecordStorage'
 
 	function mixImageRecord(state HashDigest, image TopLevelImageRecord) returns HashDigest
-		let counted = self.mixColumnBounds(Hasher.combined(Hasher.combined(state, value: image.elementCount as HashDigest), value: image.elementSize as HashDigest), bounds: image.bounds)
+		let counted = self.mixColumnBounds(KeyedHasher.combined(KeyedHasher.combined(state, value: image.elementCount as HashDigest), value: image.elementSize as HashDigest), bounds: image.bounds)
 
 		match image.kind 'kind'
 			constBlob then return mixBytes(counted, bytes: image.bytes)
@@ -8599,8 +8610,8 @@ extension ProgramSignatures
 
 	function mixMapColumns(state HashDigest, columns MapLiteralColumns) returns HashDigest
 		match columns 'mapShape'
-			none then return Hasher.combined(state, value: SignatureDiscriminator.mapColumnsNone)
-			columns(keys, values) then return self.mixColumnBounds(self.mixColumnBounds(Hasher.combined(state, value: SignatureDiscriminator.mapColumnsColumns), bounds: keys), bounds: values)
+			none then return KeyedHasher.combined(state, value: SignatureDiscriminator.mapColumnsNone)
+			columns(keys, values) then return self.mixColumnBounds(self.mixColumnBounds(KeyedHasher.combined(state, value: SignatureDiscriminator.mapColumnsColumns), bounds: keys), bounds: values)
 		end 'mapShape'
 	end 'mixMapColumns'
 
@@ -8610,15 +8621,15 @@ extension ProgramSignatures
 	// leave a reader's memo with the old ones baked in.
 	function mixColumnBounds(state HashDigest, bounds ColumnBounds) returns HashDigest
 		match bounds 'boundsShape'
-			unknown then return Hasher.combined(state, value: SignatureDiscriminator.columnBoundsUnknown)
-			integers(low, high) then return self.mixColumnRange(Hasher.combined(state, value: SignatureDiscriminator.columnBoundsIntegers), low: low, high: high)
-			unsignedIntegers(low, high) then return self.mixColumnRange(Hasher.combined(state, value: SignatureDiscriminator.columnBoundsUnsignedIntegers), low: low, high: high)
-			floats(low, high) then return self.mixColumnRange(Hasher.combined(state, value: SignatureDiscriminator.columnBoundsFloats), low: low, high: high)
+			unknown then return KeyedHasher.combined(state, value: SignatureDiscriminator.columnBoundsUnknown)
+			integers(low, high) then return self.mixColumnRange(KeyedHasher.combined(state, value: SignatureDiscriminator.columnBoundsIntegers), low: low, high: high)
+			unsignedIntegers(low, high) then return self.mixColumnRange(KeyedHasher.combined(state, value: SignatureDiscriminator.columnBoundsUnsignedIntegers), low: low, high: high)
+			floats(low, high) then return self.mixColumnRange(KeyedHasher.combined(state, value: SignatureDiscriminator.columnBoundsFloats), low: low, high: high)
 		end 'boundsShape'
 	end 'mixColumnBounds'
 
 	function mixColumnRange(state HashDigest, low FullRangeInt, high FullRangeInt) returns HashDigest
-		return Hasher.combined(Hasher.combined(state, value: low as HashDigest), value: high as HashDigest)
+		return KeyedHasher.combined(KeyedHasher.combined(state, value: low as HashDigest), value: high as HashDigest)
 	end 'mixColumnRange'
 
 	function mixImageTexts(state HashDigest, texts ByteBlobArray) returns HashDigest
@@ -8636,9 +8647,9 @@ extension ProgramSignatures
 	// give the reader a different TYPE, which is exactly the acceptance a stale memo would keep.
 	function mixManagedKind(state HashDigest, kind ManagedConstKind) returns HashDigest
 		return match kind 'k'
-			string gives Hasher.combined(state, value: SignatureDiscriminator.managedShapeString)
-			byteArray gives Hasher.combined(state, value: SignatureDiscriminator.managedShapeByteArray)
-			character gives Hasher.combined(state, value: SignatureDiscriminator.managedShapeCharacter)
+			string gives KeyedHasher.combined(state, value: SignatureDiscriminator.managedShapeString)
+			byteArray gives KeyedHasher.combined(state, value: SignatureDiscriminator.managedShapeByteArray)
+			character gives KeyedHasher.combined(state, value: SignatureDiscriminator.managedShapeCharacter)
 		end 'k'
 	end 'mixManagedKind'
 
@@ -8674,13 +8685,13 @@ extension ProgramSignatures
 			return self.mixConstantValue(state, payload: payload, tag: tag, typeName: typeName)
 		end 'inlinedBakesItsValue'
 
-		return mixBytes(self.mixValueTag(Hasher.combined(state, value: SignatureDiscriminator.constShapeValue), tag: tag, typeName: typeName), bytes: try decl.dataLabel.label() otherwise EmptySourceText)
+		return mixBytes(self.mixValueTag(KeyedHasher.combined(state, value: SignatureDiscriminator.constShapeValue), tag: tag, typeName: typeName), bytes: try decl.dataLabel.label() otherwise EmptySourceText)
 	end 'mixDeclAnswer'
 
 	// The TAG rides the hash beside the payload: a `boolean` 1 and an `integer` 1 are the same number
 	// and different values, and they compile to different code (an i1 versus an i64).
 	function mixConstantValue(state HashDigest, payload FullRangeInt, tag ValueTypeTag, typeName ByteArray) returns HashDigest
-		return Hasher.combined(self.mixValueTag(Hasher.combined(state, value: SignatureDiscriminator.constShapeValue), tag: tag, typeName: typeName), value: payload as HashDigest)
+		return KeyedHasher.combined(self.mixValueTag(KeyedHasher.combined(state, value: SignatureDiscriminator.constShapeValue), tag: tag, typeName: typeName), value: payload as HashDigest)
 	end 'mixConstantValue'
 
 	// Mix a FOLDED LITERAL's TAG. Shared by both arms of `mixDeclAnswer`, so an inlined and a stored binding
@@ -8716,9 +8727,9 @@ extension ProgramSignatures
 		match tag 'k'
 			// An `integer` or `float` constant's `typeName` is the typealias it carries, mixed for the
 			// `named` arm's reason: `5 as Tally` and `5 as Count` are different values.
-			integer then return mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeInteger), bytes: typeName)
-			boolean then return Hasher.combined(state, value: SignatureDiscriminator.typeShapeBoolean)
-			float then return mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeFloat), bytes: typeName)
+			integer then return mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeInteger), bytes: typeName)
+			boolean then return KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeBoolean)
+			float then return mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeFloat), bytes: typeName)
 
 			// ⭐⭐ **`named` IS REACHABLE, AND THE NAME RIDES WITH THE SHAPE.** A PAYLOAD-FREE ENUM CASE's
 			// value is its tag and its type is the enum (`let JumpTableBaseReg = X64Register.r10`), so this
@@ -8729,8 +8740,8 @@ extension ProgramSignatures
 			// tag 0 — so `let a = Reg.rcx` and `let a = CharClass.other` would hash IDENTICALLY on shape plus
 			// payload alone, and a file edited from one to the other would be answered from the other's parse.
 			// That is exactly the failure this function's own header names two arms down.
-			named then return mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeNamed), bytes: typeName)
-			exitCode then return mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeExitCode), bytes: typeName)
+			named then return mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeNamed), bytes: typeName)
+			exitCode then return mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeExitCode), bytes: typeName)
 			unresolved or
 			void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — only booleans, integers, exit codes, floats, enum cases and inline records are ever folded")
 
@@ -8739,7 +8750,7 @@ extension ProgramSignatures
 			// never a box address. The bytes ride with the shape for the `named` arm's reason — two inline records
 			// of identical widths are different types, and a file edited from one to the other must not be
 			// answered from the other's parse.
-			structRef then return mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeStructRef), bytes: typeName)
+			structRef then return mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeStructRef), bytes: typeName)
 
 			// A String top-level binding never reaches here: a managed literal folds to
 			// `TopLevelConstant.managedValue`, whose hash is `mixConstant`'s own arm (the BYTES and the KIND
@@ -9079,7 +9090,7 @@ extension ProgramSignatures
 	// changes a diagnostic must re-parse the files that report it.
 	function mixImplementsVerdict(clause AliasImplementsClause)
 		let verdict = self.aliasImplementsVerdictOf(clause.name, declFilePath: clause.declFilePath)
-		let shaped = Hasher.combined(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeAliasImplements), value: verdict.ordinal as HashDigest)
+		let shaped = KeyedHasher.combined(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeAliasImplements), value: verdict.ordinal as HashDigest)
 		self.hash = mixBytes(mixBytes(shaped, bytes: clause.name), bytes: clause.parentName)
 	end 'mixImplementsVerdict'
 
@@ -11662,7 +11673,7 @@ extension ProgramSignatures
 	// about the declaration rather than about whoever reads it.
 	function functionAliasShapeKey(alias FunctionTypeAlias, known FunctionAliasShapeKeyMap, declaredInstances DeclaredGenericAliasInstanceMap) returns HashDigest
 		let open = GenericInstanceIdArray.create(0)
-		var digest = self.mixFunctionAliasSlot(Hasher.empty(), tag: alias.returnTag, typeName: alias.returnTypeName, declFilePath: alias.declFilePath, known: known, open: open, declaredInstances: declaredInstances)
+		var digest = self.mixFunctionAliasSlot(OutputDigestOrigin, tag: alias.returnTag, typeName: alias.returnTypeName, declFilePath: alias.declFilePath, known: known, open: open, declaredInstances: declaredInstances)
 
 		for param in alias.paramTypes 'eachParam'
 			digest = self.mixFunctionAliasSlot(digest, tag: param.tag, typeName: param.typeName, declFilePath: alias.declFilePath, known: known, open: open, declaredInstances: declaredInstances)
@@ -11674,12 +11685,12 @@ extension ProgramSignatures
 	function mixGenericInstanceSlot(state HashDigest, id GenericInstanceId, declFilePath FilePath, known FunctionAliasShapeKeyMap, open GenericInstanceIdArray, declaredInstances DeclaredGenericAliasInstanceMap) returns HashDigest
 		for held in open 'eachOpenInstance'
 			if held == id 'aCycleAmongTheDeclarations'
-				return Hasher.combined(state, value: CyclicGenericSlotMark)
+				return outputCombined(state, value: CyclicGenericSlotMark)
 			end 'aCycleAmongTheDeclarations'
 		end 'eachOpenInstance'
 
 		open.push(id)
-		var digest = mixBytes(state, bytes: self.genericInstanceBaseName(id))
+		var digest = outputMixed(state, bytes: self.genericInstanceBaseName(id))
 
 		for arg in self.rowArgs(id) 'eachArgument'
 			let tag = maxonTypeTag(arg)
@@ -11708,7 +11719,7 @@ extension ProgramSignatures
 
 	function mixFunctionAliasShapeKey(spelled HashDigest, typeName ByteArray, declFilePath FilePath, known FunctionAliasShapeKeyMap) returns HashDigest
 		match self.settledDeclarations().functionTypeAliases.lookup(typeName, readerFilePath: declFilePath) 'aFunctionAliasSlot'
-			declared(slot) then return Hasher.combined(spelled, value: try known.get(functionAliasShapeKeyOf(typeName, declPath: slot.declFilePath.toString())) otherwise Hasher.empty())
+			declared(slot) then return outputCombined(spelled, value: try known.get(functionAliasShapeKeyOf(typeName, declPath: slot.declFilePath.toString())) otherwise OutputDigestOrigin)
 			undeclared then return spelled
 		end 'aFunctionAliasSlot'
 	end 'mixFunctionAliasShapeKey'
@@ -11722,7 +11733,7 @@ extension ProgramSignatures
 	// for every tuple. Two tuple targets differing only in a nested ranged alias are deliberately not split:
 	// canonicalisation erases that difference, so they are one struct.
 	function mixFunctionAliasSlot(state HashDigest, tag ValueTypeTag, typeName ByteArray, declFilePath FilePath, known FunctionAliasShapeKeyMap, open GenericInstanceIdArray, declaredInstances DeclaredGenericAliasInstanceMap) returns HashDigest
-		let spelled = mixBytes(Hasher.combined(state, value: tag.ordinal as HashDigest), bytes: self.declaredIdentityOfSpelling(typeName, declFilePath: declFilePath))
+		let spelled = outputMixed(outputCombined(state, value: tag.ordinal as HashDigest), bytes: self.declaredIdentityOfSpelling(typeName, declFilePath: declFilePath))
 
 		if typeName.isEmpty() 'aPrimitiveSlotCarriesNoName'
 			return spelled
@@ -11738,17 +11749,17 @@ extension ProgramSignatures
 
 		if self.readerMeansKind(typeName, readerFilePath: declFilePath, kind: TypeDeclKind.rangedAlias) 'mayBeARangedAliasSlot'
 			match self.settledDeclarations().typeAliases.lookup(typeName, readerFilePath: declFilePath) 'aRangedAliasSlot'
-				declared(ranged) then return Hasher.combined(Hasher.combined(spelled, value: ranged.low as HashDigest), value: ranged.high as HashDigest)
+				declared(ranged) then return outputCombined(outputCombined(spelled, value: ranged.low as HashDigest), value: ranged.high as HashDigest)
 				undeclared then break
 			end 'aRangedAliasSlot'
 		end 'mayBeARangedAliasSlot'
 
 		if self.isAliasOfFormFor(typeName, readerFilePath: declFilePath, wanted: FormAliasKind.tuple) 'aTupleAliasSlot'
-			return mixBytes(spelled, bytes: self.tupleAliasTargetFrom(typeName, readerFilePath: declFilePath))
+			return outputMixed(spelled, bytes: self.tupleAliasTargetFrom(typeName, readerFilePath: declFilePath))
 		end 'aTupleAliasSlot'
 
 		let form = try self.declaredFormOf(typeName, readerFilePath: declFilePath) otherwise return spelled
-		return Hasher.combined(spelled, value: form.ordinal as HashDigest)
+		return outputCombined(spelled, value: form.ordinal as HashDigest)
 	end 'mixFunctionAliasSlot'
 
 	// ⭐ **A FUNCTION TYPEALIAS SUBSTITUTED IN AS A TYPE ARGUMENT IS A `function` PLACE, AND IT ARRIVES AS A
@@ -11990,7 +12001,7 @@ extension ProgramSignatures
 			self.refileOwnLayout(slot, settled: freeze revised.clone())
 		end 'aType'
 
-		let named = mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeRefoldedConformance), bytes: site.declName)
+		let named = mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeRefoldedConformance), bytes: site.declName)
 		self.hash = self.mixConformanceBindings(mixDeclaredConformances(named, conformsTo: clause.names, shape: SignatureDiscriminator.declShapeDeclaredConformance), bindings: clause.bindings)
 	end 'refoldConformanceClause'
 
@@ -12000,14 +12011,14 @@ extension ProgramSignatures
 		revised.recordWhereConstraints(constraints)
 		self.refileOwnLayout(slot, settled: freeze revised.clone())
 
-		self.hash = self.mixWhereConstraints(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeRefoldedWhereConstraint), bytes: site.declName), constraints: constraints)
+		self.hash = self.mixWhereConstraints(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeRefoldedWhereConstraint), bytes: site.declName), constraints: constraints)
 	end 'refoldWhereConstraints'
 
 	function mixWhereConstraints(state HashDigest, constraints WhereConstraintArray) returns HashDigest
 		var mixed = state
 
 		for constraint in constraints 'eachConstraint'
-			mixed = mixBytes(Hasher.combined(Hasher.combined(mixed, value: SignatureDiscriminator.declShapeWhereConstraint), value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
+			mixed = mixBytes(KeyedHasher.combined(KeyedHasher.combined(mixed, value: SignatureDiscriminator.declShapeWhereConstraint), value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
 
 			for binding in constraint.associatedBindingTypes 'eachBinding'
 				mixed = self.mixRequirementType(mixed, requirement: binding)
@@ -12026,7 +12037,7 @@ extension ProgramSignatures
 				isolated gives SignatureDiscriminator.regionBoundIsolated
 			end 'kind'
 
-			mixed = Hasher.combined(Hasher.combined(Hasher.combined(mixed, value: SignatureDiscriminator.declShapeRegionBound), value: bound.typeParamIndex as HashDigest), value: kindMark)
+			mixed = KeyedHasher.combined(KeyedHasher.combined(KeyedHasher.combined(mixed, value: SignatureDiscriminator.declShapeRegionBound), value: bound.typeParamIndex as HashDigest), value: kindMark)
 		end 'eachBound'
 
 		return mixed

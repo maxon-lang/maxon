@@ -2438,6 +2438,7 @@ type MaxonToStdLowering
 			schedNumProcsAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedNumProcsLabel))
 			schedMaxActiveWorkersAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedMaxActiveWorkersLabel))
 			cpuAesUsableAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: CpuAesUsableLabel))
+			cpuShaUsableAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: CpuShaUsableLabel))
 			slabArenaListAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabArenaListLabel))
 			slabArenaMapL1Addr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabArenaMapL1Label))
 			slabStateAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabStateLabel))
@@ -3079,7 +3080,7 @@ type MaxonToStdLowering
 	end 'forwardCallerWitness'
 
 	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName`.** The
-	// `40 + 8*methodCount`-byte blob (`IrInterface.WitnessTableHeaderBytes` states the header) is
+	// `WitnessTableHeaderBytes + 8*methodCount`-byte blob (`IrInterface` states the header) is
 	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
 	// `funcAbs64InRdata` relocation whose target is the member `checkConformance` ACCEPTED for that
 	// requirement (`witnessSlotImpl` — NOT a second `<Type>.<method>` join of this pass's own) with
@@ -3108,9 +3109,9 @@ type MaxonToStdLowering
 		let methodCount = slots.count()
 		let associatedCount = self.heldAssociatedSlotCount(interfaceName, iface: iface)
 
-		// `methodCount@0`, then zero-fill through the header's four ownership words, every method
-		// slot and — where this interface holds an associated position at an interface — the associated
-		// block past them. The writer patches the slots via the relocations below. `scalarImage` is the SAME
+		// `methodCount@0`, zero-fill through the header's four ownership words, the conformer's
+		// `storageHashed@40` word, then zero-fill through every method slot and — where this interface holds
+		// an associated position at an interface — the associated block past them. The writer patches the slots via the relocations below. `scalarImage` is the SAME
 		// little-endian serializer the `.data`/`.rdata` images use, so the header word matches every other
 		// integer this backend writes.
 		//
@@ -3121,6 +3122,8 @@ type MaxonToStdLowering
 		let blobBytes = WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)
 		let blob = ByteArray.create(blobBytes, zeroed: false)
 		blob.append(scalarImage(methodCount as FullRangeInt, byteCount: WitnessSlotBytes as BytePos))
+		blob.growFilled(WitnessStorageHashedOffset as ElementIndex, value: 0)
+		blob.append(scalarImage(1 if self.signatures.conformerHashesAsStorage(typeName) else 0, byteCount: WitnessSlotBytes as BytePos))
 		blob.growFilled(blobBytes, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
@@ -4090,39 +4093,23 @@ type MaxonToStdLowering
 	//
 	// ⚠ **A MISS IS AN INTERNAL DISAGREEMENT AND PANICS — with ONE legitimate exception, and it is not a
 	// fallback.** A BUILTIN conformer (`int`/`float`/`bool`/`String`/`Character`) declares no `implements`, so
-	// `checkConformance` never ran for it and there is no selection to be the same value as: its impls are
-	// SYNTHESIZED one per `(conformer, method)` by `installBuiltinConformanceRuntime`, which mints them by
-	// this very join. The join IS the registration name there, and the gate is
+	// `checkConformance` never ran for it and there is no selection to be the same value as: its impl is
+	// `ProgramSignatures.witnessSlotImplByConformerKind`'s answer, the `(conformer, method)` join
+	// `installBuiltinConformanceRuntime` synthesizes under (or a corpus module defines). The gate is
 	// `isIntrinsicBuiltinConformance` — the SAME predicate that decides the conformance and decides which
 	// impls are installed, so the three cannot come to disagree about which pairs are builtin. Any other miss
 	// means this table is stamping a slot no conformance accepted, which is a pipeline-ordering break rather
 	// than anything an author could be told to write differently.
-	//
-	// ⭐⭐ **AND A PAYLOAD-FREE `enum` IS THE ONE GRANTED CONFORMER WHOSE IMPL IS NOT ITS OWN JOIN
-	// (enum-hashable).** Every other row here names `<conformer>.<method>` because that IS the symbol its
-	// installer mints; an enum mints none, because its value IS an i64 tag and `int.hash`/`int.equals` already
-	// answer for it. `ProgramSignatures.enumConformanceImplName` is that decision's one home — shared with the
-	// direct `e.hash()` dispatch, so `Map with (Color, …)` and `Color.red.hash()` cannot reach two bodies.
-	//
-	// ⚠ This arm answers for an enum that declared no clause at all. One that names the protocol explicitly
-	// is accepted by `checkConformance`, so the lookup above answers first — with the symbol this arm would
-	// have given, since the acceptance reads that same one home. The two roads cannot stamp two addresses.
 	function witnessSlotImpl(typeName ByteArray, interfaceName ByteArray, method InterfaceMethodSig) returns immutable ByteArray
 		if let selected = try self.witnessSlotImpls.get(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: method.name)) 'chosenByConformance'
 			return selected
 		end 'chosenByConformance'
 
-		let discovered = self.signatures.discoveredConformerOf(typeName)
-
-		if not isIntrinsicBuiltinConformance(self.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: discovered) 'noSelection'
+		if not isIntrinsicBuiltinConformance(self.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: self.signatures.discoveredConformerOf(typeName)) 'noSelection'
 			panic("witnessSlotImpl: no conformance selected a member for slot '{String.from(typeName)}.{String.from(interfaceName)}.{String.from(method.name)}' — `checkConformance` files one per accepted requirement before the pipeline runs, and lowering is only reached once it accepted every one, so this table is being built for a conformance that was never validated")
 		end 'noSelection'
 
-		return match discovered 'discovered'
-			payloadFreeEnum gives self.signatures.enumConformanceImplName(typeName, methodName: method.name)
-			none gives qualifiedMethodName(typeName, methodName: method.name)
-			arrayRecord gives qualifiedMethodName(self.signatures.arrayRecordBaseName(), methodName: method.name)
-		end 'discovered'
+		return self.signatures.witnessSlotImplByConformerKind(typeName, methodName: method.name)
 	end 'witnessSlotImpl'
 
 	// Resolve an interface NAME when building a witness table — through `lookupInterface`,

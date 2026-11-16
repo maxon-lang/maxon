@@ -548,11 +548,23 @@ export function emitRuntimeFatal(module StdModule, func IrFunction, block IrBloc
 	emitAbortDoorCall(module, func: func, block: block, reason: RuntimeAbortReason.fatal(fatal), ids: ids)
 end 'emitRuntimeFatal'
 
-function emitAbortDoorCall(module StdModule, func IrFunction, block IrBlock, reason RuntimeAbortReason, ids ValueMinter)
+function ensureRuntimeAbortDoor(module StdModule)
 	if not module.runtimeAbortDoorBuilt 'firstSite'
 		buildRuntimeAbortDoor(module)
 		module.runtimeAbortDoorBuilt = true
 	end 'firstSite'
+end 'ensureRuntimeAbortDoor'
+
+function emitAbortWithText(module StdModule, func IrFunction, block IrBlock, text ValueId, length ValueId, code FullRangeInt, ids ValueMinter)
+	ensureRuntimeAbortDoor(module)
+
+	let codeId = emitConst(module, block: block, value: code, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: RuntimeAbortName, args: threeArgs(text, second: length, third: codeId)))
+	emitDeadTerminator(module, func: func, block: block, ids: ids)
+end 'emitAbortWithText'
+
+function emitAbortDoorCall(module StdModule, func IrFunction, block IrBlock, reason RuntimeAbortReason, ids ValueMinter)
+	ensureRuntimeAbortDoor(module)
 
 	module.runtimeAbortSites.push(RuntimeAbortSite.create(reason, funcName: func.name))
 
@@ -613,6 +625,8 @@ export enum RuntimeFatal
 	resolvedPathHasNoExtendedForm
 	slabSpanHeaderOutsideTheTaggableRange
 	slabSpanTakenOffAStackWhileNotParked
+	hashSeedUnavailable
+	hashRefusalOfNoKnownKind
 end 'RuntimeFatal'
 
 export union RuntimeAbortReason
@@ -724,6 +738,8 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 		resolvedPathHasNoExtendedForm gives "a Windows path the operating system resolved could not be put in its extended form: it is neither drive-absolute nor a network path, or it left no room for the prefix"
 		slabSpanHeaderOutsideTheTaggableRange gives "a span header's address does not fit the allocator's tagged stack word: it is unaligned or lies above the address range the word packs"
 		slabSpanTakenOffAStackWhileNotParked gives "a span taken off a size class's stack did not carry the parked owner state, so another thread holds it or it was never pushed"
+		hashSeedUnavailable gives "the operating system refused to supply this process's hash seed"
+		hashRefusalOfNoKnownKind gives "the hash environment refusal was asked for a kind it has no sentence for"
 	end 'reason'
 end 'runtimeFatalReason'
 

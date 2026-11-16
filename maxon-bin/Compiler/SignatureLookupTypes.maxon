@@ -27,6 +27,7 @@ let ManagedFileOpenCreateNewMethod = b"openCreateNew"
 let ManagedFileExistsMethod = b"exists"
 let ManagedFileDeleteMethod = b"delete"
 let ManagedFileRenameMethod = b"rename"
+let ManagedFileRenameNewMethod = b"renameNew"
 let ManagedFileStatMethod = b"stat"
 let ManagedFileStatFieldMethod = b"statField"
 let ManagedFileStatFreeMethod = b"statFree"
@@ -931,17 +932,14 @@ end 'citedNameHeadOf'
 // appear, which is a real loss of detail at nesting depth ≥ 2 — bought with the asymptote above, and paid
 // only by nested tuples, since a depth-1 tuple's name carries no digest at all.
 //
-// ⭐ **THE DIGEST IS `Hasher`'s FNV-1a, NOT A SECOND HAND-ROLLED HASH.** `mixBytes` takes the
-// `ByteArray` a name already is (no `String` round-trip), folds a trailing LENGTH TAG so a prefix cannot
-// alias its extension, and runs in `int(0 to u64.max)` where the multiply WRAPS rather than traps — the one
-// arithmetic property a cross-target-identical digest needs, already shipping on every target because the
-// query spine keys on it. 64 bits is the width the collision argument rests on: at N = 10^4 distinct tuple
-// types P(collision) ≈ N²/2^65 ≈ 5×10⁻¹², where a 40-bit digest would be ≈ 5×10⁻⁵ — a number a real program
-// can hit. Do not shorten it to make the rendered Target IR prettier; `recordTupleElementToken`
-// panics on a collision, and that panic is a compile that STOPS.
+// The digest is `outputDigest`, never a seeded `KeyedHasher` digest, because the token enters emitted symbols
+// and must be one value in every process on every target. 64 bits is the width the collision argument
+// rests on: at N = 10^4 distinct tuple types P(collision) ≈ N²/2^65 ≈ 5×10⁻¹², where a 40-bit digest
+// would be ≈ 5×10⁻⁵ — a number a real program can hit. Do not shorten it to make the rendered Target IR
+// prettier; `recordTupleElementToken` panics on a collision, and that panic is a compile that STOPS.
 //
-// ⚠ The basis and prime are baked into emitted symbols on every target:
-// changing either renames every nested tuple in the tree.
+// ⚠ The digest is baked into emitted symbols on every target:
+// changing it renames every nested tuple in the tree.
 //
 // The rendering is HEX, the same `0-9a-f` the compiler already spells a machine value in. The alphabet is
 // what matters and hex satisfies it exactly: no `.`, so a token cannot hold the element separator, and no
@@ -960,7 +958,7 @@ end 'citedNameHeadOf'
 // It is derived here and NOT in `mangleTypeArg` for the reason that function's own header gives: a
 // descriptor label must never come "from a gid number ... a build-order artifact". This token is not one.
 function tupleElementTokenFor(name ByteArray) returns immutable ByteArray
-	let digest = mixBytes(Hasher.empty(), bytes: name)
+	let digest = outputDigest(name)
 	return mintedName(citedNameHeadOf(name), suffix: "{digest:x}".toByteArray())
 end 'tupleElementTokenFor'
 
@@ -3336,7 +3334,7 @@ export union InstanceShape
 			sized(count) gives count as HashDigest
 
 			// Combined rather than OR-ed: a mask reaching the flag's bit would alias it.
-			frozenArgs(mask) gives Hasher.combined(FrozenArgsHashFlag, value: mask as HashDigest)
+			frozenArgs(mask) gives KeyedHasher.combined(FrozenArgsHashFlag, value: mask as HashDigest)
 		end 'shape'
 	end 'hashWord'
 end 'InstanceShape'
@@ -5984,16 +5982,16 @@ end 'builtinInterfaceDeclIndices'
 // exactly that fact (`WitnessDispatchTarget.throwsClause`).
 function mixThrowsClause(state HashDigest, clause ThrowsClause) returns HashDigest
 	return match clause 'k'
-		none gives Hasher.combined(state, value: SignatureDiscriminator.throwsShapeNone)
-		throwing(throwsName) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.throwsShapeThrowing), bytes: throwsName.toByteArray())
+		none gives KeyedHasher.combined(state, value: SignatureDiscriminator.throwsShapeNone)
+		throwing(throwsName) gives mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.throwsShapeThrowing), bytes: throwsName.toByteArray())
 	end 'k'
 end 'mixThrowsClause'
 
 function mixCapabilities(state HashDigest, params ParamCapabilityArray, result ResultCapability) returns HashDigest
-	var out = Hasher.combined(state, value: result.ordinal as HashDigest)
+	var out = KeyedHasher.combined(state, value: result.ordinal as HashDigest)
 
 	for capability in params 'eachParam'
-		out = Hasher.combined(out, value: capability.ordinal as HashDigest)
+		out = KeyedHasher.combined(out, value: capability.ordinal as HashDigest)
 	end 'eachParam'
 
 	return out
@@ -6006,7 +6004,7 @@ end 'mixCapabilities'
 // leads because arity alone decides E3036 at every dispatch; per-slot markers are unnecessary because
 // `mixBytes` already carries a length tag, which is what keeps `("ab","c")` apart from `("a","bc")`.
 function mixInterfaceFormals(state HashDigest, names NameRoster, types NameRoster) returns HashDigest
-	var out = Hasher.combined(state, value: names.count() as HashDigest)
+	var out = KeyedHasher.combined(state, value: names.count() as HashDigest)
 
 	for i in 0 upto names.count() 'eachFormal'
 		let name = try names.get(i) otherwise panic("mixInterfaceFormals: names.get OOB at {i} below count {names.count()}")

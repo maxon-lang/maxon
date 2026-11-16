@@ -1016,6 +1016,28 @@ release's version as its heading when the release is cut.
   types ran the extension's body; it now runs the compiler's.
   Fix: declare `clone` on the type itself, in its body or in an `extension` of the type.
 
+- `String.hash()`, `Character.hash()`, `Array.hash()` and every `Hasher` hash are seeded: each process draws a
+  random seed at startup, so a hash differs between runs, and so does the iteration order of a `Map` or `Set`
+  keyed by those types. The values also differ between hash tiers and hosts. A program that printed, stored or
+  compared a hash across processes, or relied on an iteration order, reads different values.
+  Fix: compare hashes only within one process; for a digest that is the same everywhere use `sha256`; for a
+  reproducible run set `MAXON_HASH_SEED` to 16 hexadecimal digits and `MAXON_HASH_TIER` to the run's tier; sort
+  a `Map`'s or `Set`'s contents before printing them.
+- `Hasher` is the process's seeded hash, in the shape of Go's `hash/maphash` in place of FNV-1a: `Hasher.create()`
+  takes no seed, the hasher has `combine`, `combineBytes` and `finalize`, and `finalize()` returns a 32-bit
+  `HashValue`. `Hasher.empty`, `Hasher.combined`, `Hasher.combinedBytes` and `Hasher.resume` are removed: a 64-bit,
+  resumable or expression-position fold is a `KeyedHasher`, which takes an explicit `HashSeed`. Each step's state
+  seeds the next, so `combineBytes("ab")` then `combineBytes("c")` no longer reaches the hash of
+  `combineBytes("abc")`, and no FNV-1a value is reproduced.
+  Fix: a type's `hash()` folds its fields with `Hasher`; a digest the program keeps uses `KeyedHasher` with a
+  `HashSeed` of its own (`HashSeed.random()`, kept with `toBytes` and read back with `fromBytes`); a digest that
+  must be the same everywhere uses `sha256`. Fold one `combineBytes` over the joined bytes where the hash of the
+  concatenation is wanted.
+- `FileRenameError` has one more case, `alreadyExists`, thrown by `File.renameNew` and by a `File.rename` the
+  operating system refuses because the destination exists, which threw `failed`. A `match` over
+  `FileRenameError` that lists every case is no longer exhaustive (E2026).
+  Fix: add an arm for `alreadyExists`.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

@@ -1,0 +1,90 @@
+export typealias AesHashKeyArray = Array with FullRangeInt
+
+export enum AesHashRounds
+	laneClass
+	wholeInput
+	finish
+end 'AesHashRounds'
+
+export type AesHashFoldStep
+	export let accumulator as FullRangeInt
+	export let folded as FullRangeInt
+
+	export static function create(accumulator FullRangeInt, folded FullRangeInt) returns Self
+		return Self{accumulator: accumulator, folded: folded}
+	end 'create'
+end 'AesHashFoldStep'
+
+export typealias AesHashFoldStepArray = Array with AesHashFoldStep
+
+export type AesHashLaneSource
+	export let fromStart as bool
+	export let byteOffset as FullRangeInt
+
+	export static function create(fromStart bool, byteOffset FullRangeInt) returns Self
+		return Self{fromStart: fromStart, byteOffset: byteOffset}
+	end 'create'
+end 'AesHashLaneSource'
+
+function aesHashKeysThrough(last FullRangeInt) returns AesHashKeyArray
+	let keys = AesHashKeyArray.create(0)
+
+	for key in AesHashFirstKey to last 'eachKey'
+		keys.push(key)
+	end 'eachKey'
+
+	return keys
+end 'aesHashKeysThrough'
+
+function aesHashFinishKeys() returns AesHashKeyArray
+	let keys = AesHashKeyArray.create(0)
+
+	keys.push(AesHashThirdKey)
+	keys.push(AesHashFirstKey)
+
+	return keys
+end 'aesHashFinishKeys'
+
+export function aesHashRoundKeys(rounds AesHashRounds) returns AesHashKeyArray
+	return match rounds 'rounds'
+		laneClass gives aesHashKeysThrough(AesHashSecondKey)
+		wholeInput gives aesHashKeysThrough(AesHashThirdKey)
+		finish gives aesHashFinishKeys()
+	end 'rounds'
+end 'aesHashRoundKeys'
+
+export function aesHashFoldSteps(lanes FullRangeInt) returns AesHashFoldStepArray
+	let steps = AesHashFoldStepArray.create(0)
+	var half = lanes shr 1
+	var index = 0 as FullRangeInt
+
+	for _ in 0 upto lanes - 1 'eachPair'
+		steps.push(AesHashFoldStep.create(index, folded: index + half))
+		index = index + 1
+
+		if index == half 'nextStage'
+			half = half shr 1
+			index = 0
+		end 'nextStage'
+	end 'eachPair'
+
+	return steps
+end 'aesHashFoldSteps'
+
+export function aesHashBackOffset(bytes FullRangeInt) returns FullRangeInt
+	return -bytes
+end 'aesHashBackOffset'
+
+export function aesHashLaneSource(index FullRangeInt, lanes FullRangeInt, startLanes FullRangeInt) returns AesHashLaneSource
+	if index < startLanes 'fromTheStart'
+		return AesHashLaneSource.create(true, byteOffset: index * AesBlockBytes)
+	end 'fromTheStart'
+
+	return AesHashLaneSource.create(false, byteOffset: aesHashBackOffset((lanes - index) * AesBlockBytes))
+end 'aesHashLaneSource'
+
+export let Sha256ExtendedGroups = Sha256RoundGroups - Sha256LoadedGroups
+
+export function sha256ScheduleSlot(group FullRangeInt) returns FullRangeInt
+	return group mod Sha256LoadedGroups
+end 'sha256ScheduleSlot'

@@ -467,6 +467,20 @@ function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
 	return asm.finishFunction(LinuxSignalStackSizeName)
 end 'buildArm64LinuxSignalStackSizeChunk'
 
+function emitArm64HwcapFlag(asm Arm64RuntimeAsm, hwcap Arm64Register, mask MachineWord, label ByteArray)
+	let stored = asm.newLabel()
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x14, value: mask)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x15, lhs: hwcap, rhs: Arm64Register.x14)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x15, rhs: Arm64Register.x14)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: stored)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: 1)
+	asm.placeLabel(stored)
+	arm64EmitDataAddr(asm, dest: Arm64Register.x13, label: label)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x15, base: Arm64Register.x13, byteOffset: 0)
+end 'emitArm64HwcapFlag'
+
 function buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures bool) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginFunction(0)
 	let found = asm.newLabel()
@@ -478,19 +492,10 @@ function buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures bool) returns Functio
 	asm.placeLabel(found)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x9, byteOffset: LinuxAuxValueOffset)
 
-	if recordsCpuFeatures 'recordAes'
-		let aesStored = asm.newLabel()
-
-		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x14, value: LinuxHwcapHardwareAes)
-		arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x15, lhs: Arm64Register.x12, rhs: Arm64Register.x14)
-		arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x15, rhs: Arm64Register.x14)
-		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: 0)
-		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: aesStored)
-		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: 1)
-		asm.placeLabel(aesStored)
-		arm64EmitDataAddr(asm, dest: Arm64Register.x13, label: CpuAesUsableLabel)
-		arm64EmitStoreWord64At(asm, src: Arm64Register.x15, base: Arm64Register.x13, byteOffset: 0)
-	end 'recordAes'
+	if recordsCpuFeatures 'recordFeatures'
+		emitArm64HwcapFlag(asm, hwcap: Arm64Register.x12, mask: LinuxHwcapHardwareAes, label: CpuAesUsableLabel)
+		emitArm64HwcapFlag(asm, hwcap: Arm64Register.x12, mask: LinuxHwcapHardwareSha, label: CpuShaUsableLabel)
+	end 'recordFeatures'
 
 	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x12), rn: arm64RuntimeReg(Arm64Register.x12), sh: LinuxHwcapAtomicsShift)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: 1)

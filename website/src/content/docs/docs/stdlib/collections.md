@@ -10,7 +10,11 @@ sidebar:
 `Array` is a growable, contiguous, generic sequence. Declare a concrete type with `typealias`, or write a
 literal: `[1, 2, 3]`. `Array` implements `Iterable` and `Cloneable`; it is also `Hashable` and `Equatable`
 when its element is. `equals` (and `==`) compares two arrays element by element through the element's own
-`equals`, and `hash()` folds every element's own `hash()`, so equal arrays hash equal.
+`equals`, and equal arrays hash equal. `hash()` is a [`Hasher`](/docs/stdlib/data/#hasher) fold, so it differs between
+processes. An array whose elements are equal exactly when their bits are (every integer type, `Byte`
+included, and a payload-free enum that declares neither `hash` nor `equals`) is folded as one run of its
+storage bytes; any other array (`float`, `String`, an element with its own `hash` or `equals`)
+folds each element's `hash()` in turn.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -176,7 +180,10 @@ Output: `2 3` and `1 2`.
 
 `Map` is a hash table from keys to values. The key type must be `Hashable` and `Equatable`. Maps are built
 with `create()` or a dictionary literal `["a": 1, "b": 2]`, and iterate as `(key, value)` tuples in table
-order, which is unspecified. The table resizes when it is three-quarters full.
+order, which is unspecified and, for keys that hash through the process seed, differs from run to run.
+The seed's resistance to keys chosen to collide covers `String`, `Character` and `Array` keys and keys
+whose `hash()` is built with [`Hasher`](/docs/stdlib/data/#hasher); integer and float keys hash without it. The table
+resizes when it is three-quarters full.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -238,7 +245,10 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 ## Set
 
 `Set` is a hash set. The element type must be `Hashable` and `Equatable`. Build one with `create()`,
-`Set from [1, 2, 3]`, or `Set from values` over any `Array`. Iteration order is unspecified.
+`Set from [1, 2, 3]`, or `Set from values` over any `Array`. Iteration order is unspecified and, for
+elements that hash through the process seed, differs from run to run. The seed's resistance to elements
+chosen to collide covers `String`, `Character` and `Array` elements and elements whose `hash()` is built
+with [`Hasher`](/docs/stdlib/data/#hasher); integer and float elements hash without it.
 
 | Member | Returns | Description |
 |--------|---------|-------------|

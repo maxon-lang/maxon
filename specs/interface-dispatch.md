@@ -1965,7 +1965,7 @@ function main() returns ExitCode
 	let n = 1
 	let heap = widen("ab{n}cd")
 	let literal = widen("ab1cd")
-	print("heap={heap.hash()} literal={literal.hash()}\n")
+	print("heap=literal: {heap.hash() == literal.hash()}\n")
 	return 0
 end 'main'
 ```
@@ -1973,7 +1973,7 @@ end 'main'
 0
 ```
 ```stdout
-heap=252765120 literal=252765120
+heap=literal: true
 ```
 
 <!-- test: literal-conformer-stored-in-a-holder-field -->
@@ -1997,7 +1997,7 @@ end 'hold'
 
 function main() returns ExitCode
 	let box = hold("ab1cd")
-	print("held={box.h.hash()}\n")
+	print("held is the literal's hash: {box.h.hash() == "ab1cd".hash()}\n")
 	return 0
 end 'main'
 ```
@@ -2005,7 +2005,7 @@ end 'main'
 0
 ```
 ```stdout
-held=252765120
+held is the literal's hash: true
 ```
 
 <!-- test: literal-conformer-stored-directly-in-an-interface-field -->
@@ -2027,7 +2027,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let box = Holder.create(1)
-	print("literal={box.literal.hash()} heap={box.heap.hash()}\n")
+	print("literal=heap: {box.literal.hash() == box.heap.hash()}\n")
 	return 0
 end 'main'
 ```
@@ -2035,7 +2035,7 @@ end 'main'
 0
 ```
 ```stdout
-literal=252765120 heap=252765120
+literal=heap: true
 ```
 
 <!-- test: borrowed-conformer-stored-directly-in-two-interface-fields -->

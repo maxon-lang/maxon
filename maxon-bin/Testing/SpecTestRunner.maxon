@@ -344,6 +344,8 @@ let BatchStdinHoldSeconds = SpecSpawnTimeoutSeconds + BatchKillGraceSeconds + 1
 // execs what it is given with no guest PATH search.
 let GuestShell = "/bin/sh"
 let GuestShellCommandFlag = "-c"
+let GuestEnvCommand = "env"
+let BatchExecForwardScript = "\"exec \\\"\\$@\\\"\""
 
 // ⭐ **THE PREFLIGHT PROBES THE LANE, NOT MERELY THAT THE GUEST EXISTS.** A batched run step
 // executes a whole spec's binaries from a generated `/bin/sh` script that bounds each one with
@@ -461,15 +463,23 @@ function batchTrackShellVar() returns String
 	return "${BatchTrackShellName}"
 end 'batchTrackShellVar'
 
-// ⭐ **THE CASE'S `<!-- procs: N -->` COUNT, CARRIED INTO THE BATCH AS THE FIRST ARGUMENT OF EVERY CALL.**
-// The batched lane runs a whole spec's programs inside ONE `wsl` entry, so the per-child environment the
-// host lane builds with `Environment.inheritUpdating` has to be built by the SCRIPT instead — one export
-// inside the per-execution subshell. This is the name it lands in.
-//
-// ⚠ **THE SLOT IS ALWAYS PRESENT AND AN EMPTY VALUE MEANS "NAME NO COUNT".** That is the shell's own way of
-// spelling absence (`[ -z ]`), not a sentinel standing in for an unread marker: the argument is a shell
-// word, and there is no shorter word than none. A case with no marker therefore exports nothing at all and
-// resolves the same default it resolves on the host lane.
+let BatchEnvShellName = "w"
+
+function batchEnvShellVar() returns String
+	return "${BatchEnvShellName}"
+end 'batchEnvShellVar'
+
+let BatchEnvWordSeparator = "\n"
+let BatchLeadingTokenCount = 8
+
+function batchEnvTokenShellVar(owned HarnessEnvVar) returns String
+	return match owned 'owned'
+		maxProcs gives batchProcsShellVar()
+		preempt gives batchPreemptShellVar()
+		descendants gives batchTrackShellVar()
+	end 'owned'
+end 'batchEnvTokenShellVar'
+
 // The shell function the run function calls to perform ONE execution, and the shell name of the stdin
 // token it dispatches on. Both are one character for `BatchRunFunctionName`'s reason: the script names
 // them once per test and a reader never types them.
@@ -497,6 +507,15 @@ end 'batchStdinAnchorShellVar'
 // gives the direct-spawn path.
 let GuestNullDevice = "/dev/null"
 
+// ⭐ **THE CASE'S `<!-- procs: N -->` COUNT, CARRIED INTO THE BATCH AS THE FIRST ARGUMENT OF EVERY CALL.**
+// The batched lane runs a whole spec's programs inside ONE `wsl` entry, so the per-child environment the
+// host lane builds with `Environment.inheritUpdating` has to be built by the SCRIPT instead — one export
+// inside the per-execution subshell. This is the name it lands in.
+//
+// ⚠ **THE SLOT IS ALWAYS PRESENT AND AN EMPTY VALUE MEANS "NAME NO COUNT".** That is the shell's own way of
+// spelling absence (`[ -z ]`), not a sentinel standing in for an unread marker: the argument is a shell
+// word, and there is no shorter word than none. A case with no marker therefore exports nothing at all and
+// resolves the same default it resolves on the host lane.
 let BatchProcsShellName = "p"
 
 // The `$`-reference to it — `batchKeyShellVar`'s twin, and a function for the same reason.
@@ -602,6 +621,15 @@ export union TestOutcome
 			skipped gives false
 		end 'p'
 	end 'pinsEmittedCode'
+
+	export function isFail() returns bool
+		return match self 'p'
+			fail gives true
+			pass or
+			skipped or
+			notRunHere gives false
+		end 'p'
+	end 'isFail'
 
 	export function token() returns VerdictToken
 		return match self 'p'
@@ -934,16 +962,21 @@ type TestRun
 	export let outcome as TestOutcome
 	export let cpu as CompileCpu
 	export let minted as MintedIr
+	export let programVerdict as bool
 
 	static function create(outcome TestOutcome, cpu CompileCpu, minted MintedIr) returns TestRun
-		return Self{outcome: outcome, cpu: cpu, minted: minted}
+		return Self{outcome: outcome, cpu: cpu, minted: minted, programVerdict: false}
 	end 'create'
+
+	function decidedByTheProgram(decided bool) returns TestRun
+		return Self{outcome: self.outcome, cpu: self.cpu, minted: self.minted, programVerdict: decided}
+	end 'decidedByTheProgram'
 
 	// A test that never reached a compiler: staging failed, or the output path could not be formed.
 	// Named rather than spelled at each site so "no compile happened" and "the compile reported
 	// nothing" cannot drift into two different tallies. Nothing compiled, so no Target IR was rendered.
 	static function notCompiled(reason String) returns TestRun
-		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported, minted: MintedIr.none}
+		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported, minted: MintedIr.none, programVerdict: false}
 	end 'notCompiled'
 end 'TestRun'
 
@@ -976,6 +1009,7 @@ function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatt
 	end 'selectsNothing'
 
 	let results = SpecTestResultArray.create(tests.count(), zeroed: false)
+	let runPins = HashPins.ofThisProcess()
 	let tempDir = try specTempDirFor(specDir, specName: specName)
 
 	if not Directory.create(tempDir) 'noTempDir'
@@ -1011,7 +1045,8 @@ function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatt
 			awaiting(pending) gives finishPendingRun(pending, observation: observation, effectiveTarget: effectiveTarget)
 		end 'phase'
 
-		let run = batchingGapVerdict(settled, at: iter.index(), failures: performed.batchedFailures)
+		let judged = batchingGapVerdict(settled, at: iter.index(), failures: performed.batchedFailures)
+		let run = TestRun.create(outcomeNamingHashPins(judged.outcome, runPins: runPins, phase: hashPinsAtFailureOf(judged, test: test)), cpu: judged.cpu, minted: judged.minted)
 
 		releaseStep(step)
 
@@ -1121,7 +1156,7 @@ function batchingGapVerdict(run TestRun, at ElementIndex, failures BatchedFailur
 	let reason = try failures.get(at) otherwise return run
 
 	return match run.outcome 'outcome'
-		pass gives TestRun.create(TestOutcome.fail("passes alone but fails batched: {reason}\nThis is a batching gap: the case needs a process of its own (`<!-- process: own -->`) or a SoloReason the batching checks lack. The runner must keep it out of batches."), cpu: run.cpu, minted: run.minted)
+		pass gives TestRun.create(TestOutcome.fail("passes alone but fails batched: {reason}\nThis is a batching gap: the case needs a process of its own (`<!-- process: own -->`) or a SoloReason the batching checks lack. The runner must keep it out of batches."), cpu: run.cpu, minted: run.minted).decidedByTheProgram(true)
 		fail or
 		skipped or
 		notRunHere gives run
@@ -2570,6 +2605,7 @@ function collectTraceRemint(reminted BlockRemintArray, test SpecTest, observatio
 		completed(capture) then reminted.push(BlockRemint.create(traceSliceOf(test.traceCapture), fence: traceFenceOf(family), body: normalizeTrace(capture.stdout, family: family)))
 		notRequired or
 		failed or
+		notLaunched or
 		notRunnableHere then break
 	end 'observed'
 end 'collectTraceRemint'
@@ -2963,7 +2999,9 @@ end 'withMonitorStderrText'
 // See `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
 function finishPendingRun(pending PendingRun, observation RunObservation, effectiveTarget Target) returns TestRun
 	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, traceCapture: pending.compiled.test.traceCapture, asyncTrace: pending.compiled.test.asyncTrace)
-	return settleTargetIr(pending.compiled, outcome: outcome, action: pending.action, effectiveTarget: effectiveTarget)
+	let settled = settleTargetIr(pending.compiled, outcome: outcome, action: pending.action, effectiveTarget: effectiveTarget)
+
+	return settled.decidedByTheProgram(outcome.isFail() and programWasLaunched(observation))
 end 'finishPendingRun'
 
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
@@ -3798,6 +3836,14 @@ function buildLinuxVmRunCommand(exePath FilePath, capture GuestSuiteCapture) ret
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
 	argv.append(capture.redirectArguments())
+
+	let forwarded = hashPinsSetByEnvironment()
+
+	if not forwarded.isEmpty() 'aPinIsSet'
+		argv.push(GuestEnvCommand)
+		argv.append(forwarded)
+	end 'aPinIsSet'
+
 	argv.push(exePath.anchoredAt(Directory.currentPath()).toString())
 
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
@@ -4193,6 +4239,8 @@ union RunObservation
 	completed(capture ProcessCapture)
 	failed(reason String)
 
+	notLaunched(reason String)
+
 	// ⭐ THE EXECUTION WAS REQUIRED AND THIS MACHINE CANNOT PERFORM IT — see `ExternalRunner.unspawnable`.
 	// Distinct from `failed`, which says a launch was ATTEMPTED and did not work: that is a defect in
 	// something (the binary, the runner, the OS) and must stay a FAIL. This one is a machine limit known
@@ -4268,6 +4316,7 @@ type Execution
 	export let arguments as ProgramArgArray
 	export let procs as SpecProcs
 	export let preempt as SpecPreempt
+	export let environment as SpecEnvAssignmentArray
 	export let stdin as SpecStdin
 	export let traceCapture as SpecTraceCapture
 	export let label as String
@@ -4276,8 +4325,8 @@ type Execution
 	// its own.
 	export let reportsLeftProcesses as bool
 
-	static function create(exePath FilePath, key String, arguments ProgramArgArray, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, traceCapture SpecTraceCapture, label String, reportsLeftProcesses bool) returns Execution
-		return Self{exePath: exePath, key: key, arguments: arguments, procs: procs, preempt: preempt, stdin: stdin, traceCapture: traceCapture, label: label, reportsLeftProcesses: reportsLeftProcesses}
+	static function create(exePath FilePath, key String, arguments ProgramArgArray, procs SpecProcs, preempt SpecPreempt, environment SpecEnvAssignmentArray, stdin SpecStdin, traceCapture SpecTraceCapture, label String, reportsLeftProcesses bool) returns Execution
+		return Self{exePath: exePath, key: key, arguments: arguments, procs: procs, preempt: preempt, environment: environment, stdin: stdin, traceCapture: traceCapture, label: label, reportsLeftProcesses: reportsLeftProcesses}
 	end 'create'
 
 	function programArguments(serial ElementIndex, tracksDescendants bool) returns ProgramArgArray
@@ -4296,13 +4345,13 @@ typealias ExecutionArray = Array with Execution
 
 function caseExecution(pending PendingRun, specName String) returns Execution
 	let test = pending.compiled.test
-	return Execution.create(pending.compiled.exePath, key: pending.compiled.exePath.filename(), arguments: test.programArgs, procs: test.procs, preempt: test.preempt, stdin: test.stdin, traceCapture: test.traceCapture, label: testLabel(specName, testName: test.name), reportsLeftProcesses: false)
+	return Execution.create(pending.compiled.exePath, key: pending.compiled.exePath.filename(), arguments: test.programArgs, procs: test.procs, preempt: test.preempt, environment: test.environment, stdin: test.stdin, traceCapture: test.traceCapture, label: testLabel(specName, testName: test.name), reportsLeftProcesses: false)
 end 'caseExecution'
 
 function selectedExecution(program BatchProgram, indices TestRunIndexArray, key String, label String) returns Execution
 	let arguments = ProgramArgArray.create(1, zeroed: false)
 	arguments.push("{testSelectFlag()}{formatTestSelection(indices)}")
-	return Execution.create(program.exePath, key: key, arguments: arguments, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, traceCapture: SpecTraceCapture.off, label: label, reportsLeftProcesses: true)
+	return Execution.create(program.exePath, key: key, arguments: arguments, procs: SpecProcs.unset, preempt: SpecPreempt.unset, environment: SpecEnvAssignmentArray.create(0), stdin: SpecStdin.closed, traceCapture: SpecTraceCapture.off, label: label, reportsLeftProcesses: true)
 end 'selectedExecution'
 
 type RunLane
@@ -4423,7 +4472,7 @@ function soloPerformed(first RunObservationArray, solo SoloRuns, observations Ru
 		let observation = observationAt(first, index: iter.index())
 		try observations.set(at, value: observation) otherwise panic("SpecTestRunner: solo execution {iter.index()} belongs to prepared test {at}, past the {observations.count()} the spec prepared")
 
-		if wasExecuted(observation) 'ranHere'
+		if executionWasAttempted(observation) 'ranHere'
 			alone = alone + 1
 		end 'ranHere'
 	end 'eachSolo'
@@ -4431,17 +4480,28 @@ function soloPerformed(first RunObservationArray, solo SoloRuns, observations Ru
 	return BatchTally.create(0, programs: 0, alone: alone)
 end 'soloPerformed'
 
-function wasExecuted(observation RunObservation) returns bool
+function executionWasAttempted(observation RunObservation) returns bool
+	return match observation 'observed'
+		completed or
+		failed or
+		notLaunched gives true
+		notRequired or
+		notRunnableHere gives false
+	end 'observed'
+end 'executionWasAttempted'
+
+function programWasLaunched(observation RunObservation) returns bool
 	return match observation 'observed'
 		completed or
 		failed gives true
 		notRequired or
+		notLaunched or
 		notRunnableHere gives false
 	end 'observed'
-end 'wasExecuted'
+end 'programWasLaunched'
 
 function batchedPerformed(program BatchProgram, ordinal ElementIndex, prepared PreparedTestArray, batchObservation RunObservation, lane RunLane, observations RunObservationArray) returns BatchTally
-	if not wasExecuted(batchObservation) 'neverRan'
+	if not executionWasAttempted(batchObservation) 'neverRan'
 		placeBatchedObservations(prepared, ordinal: ordinal, members: notRunnableHereFor(program.members.count()), observations: observations)
 		return BatchTally.zero()
 	end 'neverRan'
@@ -4449,6 +4509,7 @@ function batchedPerformed(program BatchProgram, ordinal ElementIndex, prepared P
 	let readings = match batchObservation 'observed'
 		completed(capture) gives readBatch(capture, caseCount: program.members.count())
 		failed or
+		notLaunched or
 		notRequired or
 		notRunnableHere gives unreadBatch(program.members.count())
 	end 'observed'
@@ -4563,26 +4624,39 @@ function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTa
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingDirPrefix`.
-	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: WorkingDirectory.at(runWorkingDir), environment: runEnvironmentFor(execution.procs, preempt: execution.preempt, effectiveTarget: effectiveTarget, serial: serial), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
-		return RunObservation.failed(runFailureReason(e))
+	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: WorkingDirectory.at(runWorkingDir), environment: runEnvironmentFor(execution.procs, preempt: execution.preempt, assignments: execution.environment, effectiveTarget: effectiveTarget, serial: serial), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
+		return observationOfFailedRun(e, subject: ProgramSubject)
 	end 'runSpawnFailed'
 
 	return RunObservation.completed(spawned)
 end 'spawnExecution'
 
+function observationOfFailedRun(e SubprocessError, subject String) returns RunObservation
+	return match e 'why'
+		executableNotFound or
+		spawnFailed or
+		detachRefused gives RunObservation.notLaunched(runFailureReason(e, subject: subject))
+		timeout or
+		treeNotEnded or
+		statusLost or
+		ioFailed or
+		inputTooLarge gives RunObservation.failed(runFailureReason(e, subject: subject))
+	end 'why'
+end 'observationOfFailedRun'
+
 // A deadline that fired is not a spawn that failed, and calling it one sends the reader to look for a missing
 // executable. The partial output rides along because a killed run leaves no other evidence: its
 // `CollectedOutput` is never returned, so what the child had printed before the kill exists only on the error.
-function runFailureReason(e SubprocessError) returns String
+function runFailureReason(e SubprocessError, subject String) returns String
 	return match e 'why'
-		timeout(_, out, err) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
-		treeNotEnded(_, out, err, _) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
-		statusLost(out, err) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
+		timeout(_, out, err) gives "{subject} {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
+		treeNotEnded(_, out, err, _) gives "{subject} {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
+		statusLost(out, err) gives "{subject} {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
 		executableNotFound or
 		spawnFailed or
 		ioFailed or
 		detachRefused or
-		inputTooLarge gives "program spawn failed: {e.displayReason()}"
+		inputTooLarge gives "{subject} spawn failed: {e.displayReason()}"
 	end 'why'
 end 'runFailureReason'
 
@@ -4613,25 +4687,29 @@ end 'partialOutputBeforeTheKill'
 // under one name and read under another is accepted, ignored and silent.
 //
 // ⚠ Nothing here forwards the variables across a launcher, because no lane hands this environment
-// to one. A batched lane carries them in its script, which exports them inside the guest per case
+// to one. A batched lane carries them in its script, which sets them inside the guest per case
 // (`batchScript`), so `orb run`'s `ORBENV` filter never sees them; the delegated lane's compiler
 // spawns its own children in the machine and reaches this same block (`runSuiteInGuest`).
-function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt, effectiveTarget Target, serial ElementIndex) returns Environment
+function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt, assignments SpecEnvAssignmentArray, effectiveTarget Target, serial ElementIndex) returns Environment
 	let overrides = EnvMap.create()
 
 	if targetProvidesFacility(effectiveTarget, facility: HostFacility.processDescendants) 'tracksDescendants'
-		overrides.upsert(String.from(DescendantsEnvName), value: descendantTrackingValue(serial))
+		overrides.upsert(harnessEnvName(HarnessEnvVar.descendants), value: descendantTrackingValue(serial))
 	end 'tracksDescendants'
 
 	match procs 'p'
 		unset then break
-		pinned(count) then overrides.upsert(String.from(MaxProcsEnvName), value: "{count}")
+		pinned(count) then overrides.upsert(harnessEnvName(HarnessEnvVar.maxProcs), value: "{count}")
 	end 'p'
 
 	match preempt 'q'
 		unset then break
-		off then overrides.upsert(String.from(PreemptEnvName), value: String.from(PreemptEnvOffValue))
+		off then overrides.upsert(harnessEnvName(HarnessEnvVar.preempt), value: String.from(PreemptEnvOffValue))
 	end 'q'
+
+	for assignment in assignments 'eachAssignment'
+		overrides.upsert(assignment.name, value: assignment.value)
+	end 'eachAssignment'
 
 	if overrides.count() == 0 'unchanged'
 		return Environment.inherit
@@ -4679,8 +4757,10 @@ end 'runWithStdin'
 // what keeps the pool's one-record-per-test accounting true.
 union BatchLaunch
 	completed(capture ProcessCapture)
-	failed(reason String)
+	failed(observation RunObservation)
 end 'BatchLaunch'
+
+let ProgramSubject = "program"
 
 // ⭐⭐ **ONE GUEST ENTRY FOR THE WHOLE SPEC.** See the batch constants block for the measurement that
 // motivates it and for why the capture is files rather than a stream.
@@ -4728,6 +4808,10 @@ enum BatchLauncher
 		end 'launcher'
 	end 'executableName'
 
+	function runSubject() returns String
+		return "the batched {executableName()} run"
+	end 'runSubject'
+
 	// `orb` takes the script on stdin: under `/private/var/folders`, where a staged project's scratch
 	// directory lives, the guest's view of a file the host wrote moments earlier can be stale.
 	function readsScriptFromFile() returns bool
@@ -4769,7 +4853,7 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	end 'nothingToRun'
 
 	if not Directory.create(batchDir) 'noBatchDir'
-		return BatchLaunch.failed("could not create the batch capture directory {batchDir.toString()}")
+		return BatchLaunch.failed(RunObservation.notLaunched("could not create the batch capture directory {batchDir.toString()}"))
 	end 'noBatchDir'
 
 	// ⭐ DELETED BEFORE, NOT ONLY AFTER — the same rule the metrics file is deleted under, for the same
@@ -4784,7 +4868,7 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	// already reads — two answers that could disagree about whether the file is there.
 	let stdinPath = batchDir.join("{BatchStdinFileName}")
 	try File.writeText(stdinPath, content: "{SpecStdinFedWord}\n") otherwise 'noStdinFile'
-		return BatchLaunch.failed("could not write the batch stdin file {stdinPath.toString()}")
+		return BatchLaunch.failed(RunObservation.notLaunched("could not write the batch stdin file {stdinPath.toString()}"))
 	end 'noStdinFile'
 
 	let script = batchScript(executions, launcher: launcher, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, firstSerial: firstSerial)
@@ -4792,7 +4876,7 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	if launcher.readsScriptFromFile() 'scriptFile'
 		let scriptPath = batchDir.join("{BatchScriptName}")
 		try File.writeText(scriptPath, content: script) otherwise 'noScript'
-			return BatchLaunch.failed("could not write the batch script {scriptPath.toString()}")
+			return BatchLaunch.failed(RunObservation.notLaunched("could not write the batch script {scriptPath.toString()}"))
 		end 'noScript'
 	end 'scriptFile'
 
@@ -4800,11 +4884,11 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 
 	match launcher.settleGuestView() 'settling'
 		settled then break
-		unsettled(reason) then return BatchLaunch.failed(reason)
+		unsettled(reason) then return BatchLaunch.failed(RunObservation.notLaunched(reason))
 	end 'settling'
 
 	let batch = try runProcess(Executable.name(launcher.executableName()), argv: argv, workingDirectory: WorkingDirectory.at(runWorkingDir), timeoutMs: batchDeadlineMs(executions.count() as TestTally), standardInput: batchScriptInput(launcher, script: script)) otherwise (e) 'batchSpawnFailed'
-		return BatchLaunch.failed("the batched {launcher.executableName()} run failed: {e.displayReason()}")
+		return BatchLaunch.failed(observationOfFailedRun(e, subject: launcher.runSubject()))
 	end 'batchSpawnFailed'
 
 	// The script's own exit status is the last execution's and means nothing — every verdict is in the
@@ -4861,7 +4945,7 @@ end 'discardBatchCaptures'
 // One test's observation, read back out of the files its execution wrote.
 function batchObservationFor(key String, launcher BatchLauncher, batchDir FilePath, launch BatchLaunch) returns RunObservation
 	return match launch 'l'
-		failed(reason) gives RunObservation.failed(reason)
+		failed(observation) gives observation
 		completed(capture) gives batchCaptureFor(key, launcher: launcher, batchDir: batchDir, batch: capture)
 	end 'l'
 end 'batchObservationFor'
@@ -4870,7 +4954,7 @@ function batchCaptureFor(key String, launcher BatchLauncher, batchDir FilePath, 
 	// THE STATUS FIRST, because it is the file that says the execution finished at all — the other two
 	// exist from the moment the redirection is set up, so neither can answer that question.
 	let status = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStatusExtension)) otherwise 'noStatus'
-		return RunObservation.failed("the batched {launcher.executableName()} run recorded no exit status for this test; the batch itself exited {batch.exitCode}{batchStderrNote(batch)}")
+		return RunObservation.failed("{launcher.runSubject()} recorded no exit status for this test; the batch itself exited {batch.exitCode}{batchStderrNote(batch)}")
 	end 'noStatus'
 
 	let recorded = status.trim()
@@ -4883,15 +4967,15 @@ function batchCaptureFor(key String, launcher BatchLauncher, batchDir FilePath, 
 	// disagreement between this reader and the script above it, which is a harness break rather than a
 	// verdict about the program — so it FAILS this one test with the bytes it could not read.
 	let exitCode = try parseCount(recorded) otherwise (e) 'unreadableStatus'
-		return RunObservation.failed("the batched {launcher.executableName()} run wrote an unreadable exit status '{recorded}': {scaleErrorText(e)}")
+		return RunObservation.failed("{launcher.runSubject()} wrote an unreadable exit status '{recorded}': {scaleErrorText(e)}")
 	end 'unreadableStatus'
 
 	let stdout = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStdoutExtension)) otherwise 'noStdout'
-		return RunObservation.failed("the batched {launcher.executableName()} run recorded exit status {exitCode} but no stdout capture for this test")
+		return RunObservation.failed("{launcher.runSubject()} recorded exit status {exitCode} but no stdout capture for this test")
 	end 'noStdout'
 
 	let stderr = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStderrExtension)) otherwise 'noStderr'
-		return RunObservation.failed("the batched {launcher.executableName()} run recorded exit status {exitCode} but no stderr capture for this test")
+		return RunObservation.failed("{launcher.runSubject()} recorded exit status {exitCode} but no stderr capture for this test")
 	end 'noStderr'
 
 	return RunObservation.completed(ProcessCapture.create(exitCode as ExitCodeValue, stdout: stdout, stderr: stderr))
@@ -4927,14 +5011,21 @@ end 'batchStderrNote'
 function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target, firstSerial ElementIndex) returns String
 	let out = StringBuilder.create()
 	let scratch = guestScratchExpression(launcher, tempDir: tempDir)
+	let execCall = "{BatchExecFunctionName} \"$o\" \"$e\" \"$c\" \"{batchEnvShellVar()}\" \"$a\" \"$@\""
 
 	out.append(guestBasePrologue(launcher, tempDir: tempDir, runWorkingDir: runWorkingDir))
+
+	let pins = HashPins.ofThisProcess()
+	out.append("export {hashSeedVariable()}={shQuoted(pins.seed)} {hashTierVariable()}={shQuoted(pins.tier)}\n")
 
 	// ⭐ THE EXECUTION ITSELF, IN ITS OWN FUNCTION, so the three stdin shapes below differ by their
 	// REDIRECTION alone. Written once because the alternative is the whole `timeout` line spelled three
 	// times, and three copies of one command is how two of them come to disagree.
 	out.append("{BatchExecFunctionName}() (\n")
-	out.append("\t{GuestTimeoutCommand} -k {BatchKillGraceSeconds}{GuestTimeoutSecondsSuffix} {SpecSpawnTimeoutSeconds}{GuestTimeoutSecondsSuffix} {GuestShell} {GuestShellCommandFlag} 'exe=$1; out=$2; err=$3; code=$4; shift 4; ( exec \"$exe\" \"$@\" > \"$out\" 2> \"$err\" ); printf %s $? > \"$code\"' _ \"$@\"\n")
+
+	// `env` takes the case's words at exec, so no shell assigns them; the `sh -c 'exec "$@"'` hop keeps a
+	// program path holding `=` from reading as one more assignment.
+	out.append("\t{GuestTimeoutCommand} -k {BatchKillGraceSeconds}{GuestTimeoutSecondsSuffix} {SpecSpawnTimeoutSeconds}{GuestTimeoutSecondsSuffix} {GuestShell} {GuestShellCommandFlag} 'code=$3; ( exec > \"$1\" 2> \"$2\"; IFS=\"{BatchEnvWordSeparator}\"; set -f; {BatchEnvShellName}=$4; shift 4; [ -z \"{batchEnvShellVar()}\" ] && exec \"$@\"; exec {GuestEnvCommand} {batchEnvShellVar()} {GuestShell} {GuestShellCommandFlag} {BatchExecForwardScript} _ \"$@\" ); printf %s $? > \"$code\"' _ \"$@\"\n")
 	out.append(")\n")
 
 	out.append("{BatchRunFunctionName}() (\n")
@@ -4945,14 +5036,16 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	out.append("\t{BatchStdinAnchorShellName}=$5\n")
 	out.append("\t{BatchExeShellName}=$6\n")
 	out.append("\t{BatchTrackShellName}=$7\n")
-	out.append("\tshift 7\n")
+	out.append("\t{BatchEnvShellName}=$8\n")
+	out.append("\tshift {BatchLeadingTokenCount}\n")
 
 	// ⭐ THE CASE'S OWN PROCESSOR COUNT AND PREEMPTION SWITCH, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND
 	// NOWHERE ELSE. The function body is a SUBSHELL (see this function's header), so the exports die with the
 	// execution and the next test in the batch starts from the batch's own environment however this one ended.
-	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
-	out.append("\t[ -z \"{batchPreemptShellVar()}\" ] || export {String.from(PreemptEnvName)}=\"{batchPreemptShellVar()}\"\n")
-	out.append("\t[ -z \"{batchTrackShellVar()}\" ] || export {String.from(DescendantsEnvName)}=\"{batchTrackShellVar()}\"\n")
+	for owned in HarnessEnvVar.allCases 'eachOwned'
+		out.append("\t[ -z \"{batchEnvTokenShellVar(owned)}\" ] || export {harnessEnvName(owned)}=\"{batchEnvTokenShellVar(owned)}\"\n")
+	end 'eachOwned'
+
 	out.append("\tc=\"{guestCapturePath(scratch, extension: BatchStatusExtension)}\"\n")
 	out.append("\ta=\"{scratch}{PortablePathSeparator}{batchExeShellVar()}\"\n")
 	out.append("\to=\"{guestCapturePath(scratch, extension: BatchStdoutExtension)}\"\n")
@@ -4964,9 +5057,9 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	// `after` waits for the program's stdout capture to hold the named line (or its status file to
 	// appear), delivers the line and closes; `held` never delivers at all.
 	out.append("\tcase \"{batchStdinShellVar()}\" in\n")
-	out.append("\t{BatchStdinClosedToken}) {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" < {GuestNullDevice} ;;\n")
-	out.append("\t{BatchStdinAfterToken}) ( {BatchStdinPollShellName}=0; while ! grep -qxF -- \"{batchStdinAnchorShellVar()}\" \"$o\" 2> {GuestNullDevice} && [ ! -f \"$c\" ] && [ \"{batchStdinPollShellVar()}\" -lt {BatchStdinReadyPollLimit} ]; do sleep {BatchStdinReadyPollSeconds}; {BatchStdinPollShellName}=$(({BatchStdinPollShellName}+1)); done; cat \"{guestStdinPath(scratch)}\" ) | {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" ;;\n")
-	out.append("\t{BatchStdinHeldToken}) sleep {BatchStdinHoldSeconds} | {BatchExecFunctionName} \"$a\" \"$o\" \"$e\" \"$c\" \"$@\" ;;\n")
+	out.append("\t{BatchStdinClosedToken}) {execCall} < {GuestNullDevice} ;;\n")
+	out.append("\t{BatchStdinAfterToken}) ( {BatchStdinPollShellName}=0; while ! grep -qxF -- \"{batchStdinAnchorShellVar()}\" \"$o\" 2> {GuestNullDevice} && [ ! -f \"$c\" ] && [ \"{batchStdinPollShellVar()}\" -lt {BatchStdinReadyPollLimit} ]; do sleep {BatchStdinReadyPollSeconds}; {BatchStdinPollShellName}=$(({BatchStdinPollShellName}+1)); done; cat \"{guestStdinPath(scratch)}\" ) | {execCall} ;;\n")
+	out.append("\t{BatchStdinHeldToken}) sleep {BatchStdinHoldSeconds} | {execCall} ;;\n")
 	out.append("\tesac\n")
 	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
 	out.append(")\n")
@@ -5073,7 +5166,7 @@ end 'guestSpecTempPrefix'
 
 // One test's line: the function, the case's processor count, its preemption switch, its key, the stdin
 // token and the line an `after` token waits for, the binary's own filename, the descendant-tracking
-// token, then the case's own `Args:`.
+// token, the case's `<!-- env: -->` words, then the case's own `Args:`.
 //
 // ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
 // (`buildRunCommand`): the shell function forwards whatever follows its own positionals straight to the
@@ -5082,6 +5175,7 @@ end 'guestSpecTempPrefix'
 // shifts them off before anything reaches the binary.
 function batchCallLine(execution Execution, serial ElementIndex, tracksDescendants bool) returns String
 	let line = StringBuilder.create()
+
 	line.append(BatchRunFunctionName)
 	line.append(" ")
 	line.append(shQuoted(match execution.procs 'procs'
@@ -5105,6 +5199,8 @@ function batchCallLine(execution Execution, serial ElementIndex, tracksDescendan
 	line.append(shQuoted(execution.exePath.filename()))
 	line.append(" ")
 	line.append(shQuoted(descendantTrackingValue(serial) if tracksDescendants else ""))
+	line.append(" ")
+	line.append(shQuoted(batchEnvironmentWords(execution.environment)))
 
 	for arg in execution.programArguments(serial, tracksDescendants: tracksDescendants) 'eachArg'
 		line.append(" ")
@@ -5114,6 +5210,16 @@ function batchCallLine(execution Execution, serial ElementIndex, tracksDescendan
 	line.append("\n")
 	return line.build()
 end 'batchCallLine'
+
+function batchEnvironmentWords(assignments SpecEnvAssignmentArray) returns String
+	let words = StringArray.create(assignments.count(), zeroed: false)
+
+	for assignment in assignments 'eachAssignment'
+		words.push("{assignment.name}={assignment.value}")
+	end 'eachAssignment'
+
+	return joinedWith(words, separator: BatchEnvWordSeparator)
+end 'batchEnvironmentWords'
 
 // One value, quoted so the shell reads it as exactly the bytes it was given. See the `ShQuote` block:
 // single quotes make everything literal, so the only case is the quote itself.
@@ -5330,6 +5436,7 @@ function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecS
 	return match observation 'observed'
 		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
 		failed(reason) gives TestOutcome.fail(reason)
+		notLaunched(reason) gives TestOutcome.fail(reason)
 		notRunnableHere gives TestOutcome.notRunHere
 		completed(capture) gives auditedRunAssertions(expected, stderr: stderr, stdout: stdout, run: capture, traceCapture: traceCapture, asyncTrace: asyncTrace)
 	end 'observed'

@@ -327,10 +327,6 @@ function snapshotParses(project Project) returns ParseSnapshotMap
 	return snapshot
 end 'snapshotParses'
 
-function digestOf(bytes ByteArray) returns HashDigest
-	return Hasher.combinedBytes(Hasher.empty(), bytes: bytes)
-end 'digestOf'
-
 function partDigests(artifact FileParseArtifact) returns PartDigestArray
 	let digests = PartDigestArray.create(0)
 
@@ -339,13 +335,13 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 		one.push(func)
 		let writer = LibraryCacheWriter.create()
 		cacheWriteIrFunctionArray(writer, value: one)
-		digests.push(digestOf(writer.payload()))
+		digests.push(digestOfBytes(writer.payload()))
 	end 'eachFunction'
 
 	for entry in artifact.rangeChecks 'eachRangeCheckEntry'
 		let writer = LibraryCacheWriter.create()
 		entry.checks.cacheWrite(writer)
-		digests.push(digestOf(writer.payload()))
+		digests.push(digestOfBytes(writer.payload()))
 	end 'eachRangeCheckEntry'
 
 	for layout in artifact.structTypes 'eachStructLayout'
@@ -353,7 +349,7 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 		one.push(layout)
 		let writer = LibraryCacheWriter.create()
 		cacheWriteStructLayoutArray(writer, value: one)
-		digests.push(digestOf(writer.payload()))
+		digests.push(digestOfBytes(writer.payload()))
 	end 'eachStructLayout'
 
 	var first = 0 as ElementIndex
@@ -368,7 +364,7 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 
 		let writer = LibraryCacheWriter.create()
 		cacheWriteIrBlockArray(writer, value: chunk)
-		digests.push(digestOf(writer.payload()))
+		digests.push(digestOfBytes(writer.payload()))
 		first = first + BlocksPerDigest
 	end 'eachBlockChunk'
 
@@ -381,13 +377,13 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 			cacheWriteMaxonOp(writer, value: try artifact.module.ops.get(position) otherwise panic("partDigests: ops.get OOB at {position}"))
 		end 'eachOp'
 
-		digests.push(digestOf(writer.payload()))
+		digests.push(digestOfBytes(writer.payload()))
 		first = first + OpsPerDigest
 	end 'eachOpChunk'
 
 	let whole = LibraryCacheWriter.create()
 	artifact.cacheWrite(whole)
-	digests.push(digestOf(whole.payload()))
+	digests.push(digestOfBytes(whole.payload()))
 	return digests
 end 'partDigests'
 

@@ -141,7 +141,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way — `false` for a program with no managed
 // top-level global, which is every program in the scalar corpus.
-function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, startsHash bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	let code = ByteArray.create(0)
 	let callFixups = CallFixupArray.create(0)
 	let iatRelocs = RelocationArray.create(0)
@@ -186,7 +186,7 @@ function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenTh
 		arm64EmitLeaFuncAddr(code, funcAdrpRelocs: funcAdrpRelocs, dest: arm64RuntimeReg(Arm64Register.x0), funcName: MainThreadEntryName)
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtRunMainName)
 	end 'mainIsAGreenThread' else 'mainOnTheOsStack'
-		arm64EmitMainCall(code, callFixups: callFixups, initGlobals: initGlobals, releasesGlobals: initGlobals, entryFunction: entryFunction)
+		arm64EmitMainCall(code, callFixups: callFixups, initGlobals: initGlobals, startsHash: startsHash, releasesGlobals: initGlobals, entryFunction: entryFunction)
 	end 'mainOnTheOsStack'
 
 	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE.**
@@ -275,7 +275,11 @@ end 'buildArm64EntryStubChunk'
 // access instead (see `ModuleInit`) — and released AFTER it, before the leak gate, where a global still held
 // would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands it back in
 // x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows through with no move.
-function arm64EmitMainCall(code ByteArray, callFixups CallFixupArray, initGlobals bool, releasesGlobals bool, entryFunction ByteArray)
+function arm64EmitMainCall(code ByteArray, callFixups CallFixupArray, initGlobals bool, startsHash bool, releasesGlobals bool, entryFunction ByteArray)
+	if startsHash 'hashInit'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: HashInitName)
+	end 'hashInit'
+
 	if initGlobals 'moduleInit'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
 	end 'moduleInit'
@@ -293,11 +297,11 @@ end 'arm64EmitMainCall'
 // saves x30 because it calls, and it NEVER WRITES x29: a fresh green thread's zero stays in place,
 // so `main`'s saved x29 ends the walk right after the return address into this chunk — which
 // carries no symbol and so prints `in mrt_start`, the line a program without green threads prints.
-function buildArm64MainThreadEntryChunk(initGlobals bool, gatesDescendants bool, entryFunction ByteArray) returns FunctionCodeChunk
+function buildArm64MainThreadEntryChunk(initGlobals bool, startsHash bool, gatesDescendants bool, entryFunction ByteArray) returns FunctionCodeChunk
 	let asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
-	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
+	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, startsHash: startsHash, releasesGlobals: false, entryFunction: entryFunction)
 
 	if gatesDescendants 'descendantGate'
 		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: ProcessDescendantGateName)

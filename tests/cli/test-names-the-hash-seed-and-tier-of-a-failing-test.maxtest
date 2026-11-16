@@ -1,0 +1,27 @@
+let TestNamesTheHashSeedCaseDirName = "test-names-the-hash-seed"
+
+test 'a failing test reports the hash seed and tier its process and its children ran with, and they reproduce its value'
+	requireHeldOutsideCheckout(TestNamesTheHashSeedCaseDirName, check: TestNamesTheHashSeedAndTier.create())
+end 'a failing test reports the hash seed and tier its process and its children ran with, and they reproduce its value'
+
+type TestNamesTheHashSeedAndTier implements OutsideCheckoutCase
+	static function create() returns TestNamesTheHashSeedAndTier
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let testDir = stagedHashReportTest(dir)
+
+		let first = try hashTestFailureOf(runHashReportTest(dir, testDir: testDir, seed: HashPinUnset, tier: HashPinUnset))
+		let second = try hashTestFailureOf(runHashReportTest(dir, testDir: testDir, seed: HashPinUnset, tier: HashPinUnset))
+
+		try Expect.notEqual(second.pins.seed, expected: first.pins.seed, message: "two maxon test runs, neither pinning a seed, both name the seed {first.pins.seed}: a run draws its own.")
+		try Expect.notEqual(second.received, expected: first.received, message: "two maxon test runs under two seeds both received the hash {first.received}, so the seed did not reach the test process.")
+
+		let again = try hashTestFailureOf(runHashReportTest(dir, testDir: testDir, seed: first.pins.seed, tier: first.pins.tier))
+
+		try Expect.equal(again.pins.seed, expected: first.pins.seed, message: "a maxon test run launched under {hashPinsSpelling(first.pins)} names the seed {again.pins.seed}.")
+		try Expect.equal(again.pins.tier, expected: first.pins.tier, message: "a maxon test run launched under {hashPinsSpelling(first.pins)} names the tier {again.pins.tier}.")
+		try Expect.equal(again.received, expected: first.received, message: "a maxon test run launched under {hashPinsSpelling(first.pins)} received the hash {again.received}, where the run that named them received {first.received}: the failure does not reproduce.")
+	end 'requireHeldIn'
+end 'TestNamesTheHashSeedAndTier'

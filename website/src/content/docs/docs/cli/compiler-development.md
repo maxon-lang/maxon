@@ -30,7 +30,7 @@ case is compiled inside this process, so the compiler under test is the executab
 |--------|-------------|
 | `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`, a case-sensitive substring: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. Repeatable: the run takes every test any pattern selects, in one pool of workers. A comma is part of the pattern. |
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
-| `--shard=<k>/<n>` | Run only the specs in shard `<k>` of `<n>`, where 1 ≤ `<k>` ≤ `<n>` ≤ 256. A spec file is in shard (H mod `<n>`) + 1, where H is the 64-bit FNV-1a hash of its name, so every host splits the suite the same way and shards 1 to `<n>` together are the whole run. Any other value is refused as an invalid option value. |
+| `--shard=<k>/<n>` | Run only the specs in shard `<k>` of `<n>`, where 1 ≤ `<k>` ≤ `<n>` ≤ 256. A spec file is in shard (H mod `<n>`) + 1, where H is the first 64 bits of the SHA-256 of its name, so every host splits the suite the same way and shards 1 to `<n>` together are the whole run. Any other value is refused as an invalid option value. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it: `wasm32-wasi` under the vendored wasmtime; a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine `maxon-linux`. There, a target for the Mac's own CPU is compiled and run by a copy of the compiler that `spec-test` builds for the machine, and on Apple silicon `x64-linux` cases are compiled on the Mac and run under Rosetta, which must be enabled in OrbStack (`orb config set rosetta true`, then restart OrbStack). Each entry into the machine is preceded by a `root` entry (`orb run -u root`) that refreshes the machine's cached view of the host's files, so a binary compiled a moment earlier runs at its current size. The suite a copy of the compiler runs in the machine writes its output to files the host prints, because `orb run` can drop the tail of a large piped output. On a host that cannot execute the target, each case is compiled and reported as not run. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
 | `--batch=on\|off` | `on` (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly. `off` compiles and runs every case on its own. Any other value is refused. |
@@ -57,6 +57,23 @@ A spec's shared batch program that the harness cannot build for a reason of the 
 isolate the breaking case of within its budget of trial builds, prints a `harness error:` line on stderr
 after the report, naming the cases that ran alone. Their own results decide them, and the run
 exits **1** even when every case passed.
+
+**The hash seed and tier.** A run draws one hash seed and hands it to every program it starts as
+`MAXON_HASH_SEED`, with a `MAXON_HASH_TIER`, so each run hashes, and orders its maps, differently. The tier
+is `aes` where the target has an `aes` tier, its programs run natively on this CPU and the CPU has AES, and
+`software` on an emulated lane and on `wasm32-wasi`; a lane where no program runs takes the host's best.
+A case's `<!-- env: -->` pin of either variable (`docs/SPECS.md`, "Test Section") wins for its program, and
+so does a non-empty value already in `spec-test`'s own environment for the whole run. Every failure report ends
+with the pair of the phase that failed, on a line of its own:
+
+```text
+    MAXON_HASH_SEED=<16 hex digits> MAXON_HASH_TIER=<tier>
+```
+
+A case that fails to compile, or whose `TargetIr` pin differs, names the run's pair, the one the compiler
+ran under; a case whose program's check fails names the pair that program ran with. A case whose worker
+died names the compiler's pair, then, when its program's pair differs, the same line led by `program: `.
+Running with both variables set to the pair named reproduces the failing phase.
 
 Every case's program runs with its working directory in `.spec-run-<pid>/`, a directory of the run's own
 directly under the checkout root, and on a native target a case that leaves a process running fails,
@@ -107,7 +124,9 @@ itself broke.
 
 Before the first measured rung it compiles the smallest rung once, unmeasured, to warm the library cache,
 so every measured rung reads the cache the same way. A phase's memory counts the compile's own work: what
-the tree lock's upkeep allocates while the phase runs is subtracted from it.
+the tree lock's upkeep allocates while the phase runs is subtracted from it. Every compile it measures runs
+with one fixed `MAXON_HASH_SEED`, so the compiler's own hash tables lay out alike in each compile and
+repeated compiles of a rung allocate the same.
 
 Each rung is compiled by `maxon build`, run, and then checked by [`maxon lint`](/docs/cli/#maxon-lint), whose
 measurements add three rows to each per-phase table and to the result document's `phases`:

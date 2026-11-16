@@ -569,10 +569,14 @@ export let ManagedAppendOpaqueName = b"__managed_append_opaque"
 // ⭐⭐ **THE NATIVE `hash`/`equals` OF `Array` (array-hashable).** A direct call, the `==`/`!=`
 // operator and a witness slot all name these in place of `stdlib/Array.maxon`'s element-wise
 // bodies, for an instance whose element `ProgramSignatures.arrayBitwiseKind` admits; see the
-// section above `buildArrayHash`.
+// section above `emitRecordContentByteLen`.
 export let ManagedHashName = b"__managed_hash"
 export let ManagedFloatHashName = b"__managed_hash_float"
 export let ManagedEqName = b"__managed_eq"
+
+export function isManagedArrayHashCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedHashName) or callee.equals(ManagedFloatHashName)
+end 'isManagedArrayHashCallee'
 
 // ⭐⭐ **THE `__ManagedMemory` MEMBERS.** `__ManagedMemory` IS an `Array with Byte`
 // (`SignatureIndex.ManagedMemoryTypeName`), so its members are entries of this same runtime — which is
@@ -1387,8 +1391,12 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 	buildManagedRetain(module)
 	buildManagedIncref(module)
 	buildManagedAppend(module)
-	buildArrayHash(module, name: ManagedHashName, element: ArrayHashElement.integerValue)
-	buildArrayHash(module, name: ManagedFloatHashName, element: ArrayHashElement.floatBits)
+
+	if usage.usesHash 'arrayHashes'
+		buildArrayStorageHash(module)
+		buildArrayFloatHash(module)
+	end 'arrayHashes'
+
 	buildArrayEquals(module, name: ManagedEqName)
 	buildCountedDecref(module, name: ManagedDecrefName, releaseCallee: ManagedReleaseName, shape: DecrefRecordShape.bufferRecord)
 	buildManagedRelease(module)
@@ -4956,17 +4964,12 @@ end 'buildManagedAppend'
 // SOUND BECAUSE EVERY SHRINK PATH ZEROES WHAT IT VACATES** — `pop`, `clear`, `resize` and `remove`
 // alike, so two logically equal packed arrays have byte-identical buffers however they were built,
 // and masking the tail would be a branch guarding a state the runtime does not produce. ⇒ **A
-// shrink path that stops zeroing its vacated bits breaks `__managed_eq` silently** — it would call
-// two equal arrays unequal. The remedy then is to mask the final byte down to `totalBits mod 8`
+// shrink path that stops zeroing its vacated bits breaks `__managed_eq` and `__managed_hash`
+// silently** — two equal arrays would compare unequal and hash apart. The remedy then is to mask the final byte down to `totalBits mod 8`
 // bits, here, in this one place.
 function emitRecordContentByteLen(module StdModule, block IrBlock, arr ValueId, count ValueId, ids ValueMinter) returns ValueId
 	return emitElementByteLen(module, block: block, count: count, es: emitLoadElementStride(module, block: block, record: arr, ids: ids), ids: ids)
 end 'emitRecordContentByteLen'
-
-enum ArrayHashElement
-	integerValue
-	floatBits
-end 'ArrayHashElement'
 
 // An element's term is `float.hash`'s value for it, `-0.0` arm included (`buildFloatHash`): `[0.0]`
 // and `[-0.0]` are equal arrays and must hash equal.
@@ -4976,18 +4979,12 @@ function emitFloatElementHashStep(module StdModule, func IrFunction, fold IrBloc
 	emitArrayHashStepTail(module, block: step, header: header, i: i, h: h, term: term, ids: ids)
 end 'emitFloatElementHashStep'
 
-// The stdlib body's fold — `h = (h * 33 + element.hash()) and 0xFFFFFFFF` from `5381` — masked once
-// at the end instead, which keeps the same low 32 bits (`emitDjb2HashOverByteRange` states why). An
-// integer element's term is `emitIntHashTerm` of its loaded slot, which is the element's `hash` for
-// an element that loads as its value (`ProgramSignatures.elementLoadsAsItsValue`). A negative value
-// in a 4-byte slot loads zero- or sign-extended and still agrees: slot and value both lie in [-2^32, 2^32),
-// where `int.hash` keeps only the low 32 bits. `ProgramSignatures.requireNativeHashSlotWidth`
-// refuses any slot width at which a load could leave that range.
-function buildArrayHash(module StdModule, name ByteArray, element ArrayHashElement)
-	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
+function buildArrayFloatHash(module StdModule)
+	let func = IrFunction.createFromStd(ManagedFloatHashName, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let start = module.addBlock(func, label: b"start", heat: BlockHeat.normal)
 	let header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
 	let body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
 	let fold = module.addBlock(func, label: b"fold", heat: BlockHeat.normal)
@@ -4998,28 +4995,48 @@ function buildArrayHash(module StdModule, name ByteArray, element ArrayHashEleme
 
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let count = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let hSeed = emitConst(module, block: entry, value: Djb2Seed, ids: ids)
-	let iSeed = emitConst(module, block: entry, value: 0, ids: ids)
+	let seed = emitRuntimeCall(module, block: entry, callee: HashSeedName, args: ValueIdArray.create(0), ids: ids)
+
+	module.setTerminator(entry, op: StdOp.branch(start.id))
+
+	let iSeed = emitConst(module, block: start, value: 0, ids: ids)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	let h = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(h, argType: StdType.i64))
-	emitBranchCarrying(module, from: entry, to: header, values: twoArgs(iSeed, second: hSeed))
+	emitBranchCarrying(module, from: start, to: header, values: twoArgs(iSeed, second: seed))
 
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
 
 	let loaded = emitLoadElemAt(module, func: func, cur: body, exit: fold, record: arr, buffer: buffer, index: i, ids: ids)
 
-	match element 'kind'
-		integerValue then emitArrayHashStepTail(module, block: fold, header: header, i: i, h: h, term: emitIntHashTerm(module, block: fold, value: loaded, ids: ids), ids: ids)
-		floatBits then emitFloatElementHashStep(module, func: func, fold: fold, header: header, i: i, h: h, bits: loaded, ids: ids)
-	end 'kind'
+	emitFloatElementHashStep(module, func: func, fold: fold, header: header, i: i, h: h, bits: loaded, ids: ids)
 
 	returnLow32Masked(module, block: done, value: h, ids: ids)
 
 	module.functions.push(func)
-end 'buildArrayHash'
+end 'buildArrayFloatHash'
+
+function buildArrayStorageHash(module StdModule)
+	let func = IrFunction.createFromStd(ManagedHashName, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0
+
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let count = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let byteLen = emitRecordContentByteLen(module, block: entry, arr: arr, count: count, ids: ids)
+	let seed = emitRuntimeCall(module, block: entry, callee: HashSeedName, args: ValueIdArray.create(0), ids: ids)
+	let digest = emitRuntimeCall(module, block: entry, callee: HashRunName, args: threeArgs(buffer, second: byteLen, third: seed), ids: ids)
+
+	returnLow32Masked(module, block: entry, value: digest, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrayStorageHash'
 
 // `<name>(a, b) -> bool` — equal LENGTHS, then equal BYTES: `__str_eq`'s shape one record over. It
 // reuses that record's byte loop (`emitByteRangeCompareLoop`) for the reason that emitter is shared
@@ -6072,8 +6089,8 @@ end 'buildManagedCursorPeek'
 // ⭐ **ONE BUILDER SERVES ALL THREE, because they differ only in HOW THE CANDIDATE POSITION IS COMPUTED** —
 // `position + 1`, `position - 1`, or an argument taken as-is. The bounds test, the refusal, the store and the
 // return are identical, so a builder each would have been one navigation protocol written three times, and
-// the difference is passed in as a step and a parameter count. (`buildArrayHash`/`buildArrayEquals` take a
-// family the same way, and `dispatchArrayMethod`'s shift arm folds its pair for the same reason.)
+// the difference is passed in as a step and a parameter count. (`dispatchArrayMethod`'s shift arm folds
+// its pair for the same reason.)
 //
 // ⚠ **`seek`'s CANDIDATE IS ITS ARGUMENT AND IS NOT DERIVED FROM `position` AT ALL**, so it is the one arm
 // that takes two parameters. That is the whole of the asymmetry, and it is why the step is a `CursorStep`

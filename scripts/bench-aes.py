@@ -28,7 +28,8 @@ Lanes (default: the host's own native lane):
          vendor/wasmtime; arms: maxon, go-std (Go's wasm std IS its portable code)
 
 Go is found by scripts/bench_common.locate_go (MAXON_GO, PATH, then the usual install directory).
-Every Maxon arm compiles its own checkout's copy of bench/aes/aes.maxon; --ref builds a compiler from
+Every Maxon arm compiles its own checkout's copy of bench/aes/aes.maxon together with
+bench/common/BenchProgram.maxon; --ref builds a compiler from
 a git ref the way bench-fannkuch.py does.
 
 Exit codes: 0 ok; 1 a verification failure (no log row is written); 2 a build failure; 3 usage.
@@ -40,18 +41,15 @@ import os
 import pathlib
 import platform
 import shlex
-import subprocess
 import sys
 import time
 
 import bench_common
 
 BENCH_DIR = os.path.join(bench_common.REPO, "bench", "aes")
-GO_DIR_NAME = "go"
-GO_DIR = os.path.join(BENCH_DIR, GO_DIR_NAME)
+SPEC = bench_common.BenchSpec("bench-aes", os.path.join(BENCH_DIR, "go"), os.path.join(BENCH_DIR, "aes.maxon"), "aes", bench_common.MICROS_PER_OP,
+                             "in bench/aes/aes.maxon (baseIterationsOf) and bench/aes/go/main.go together")
 DEFAULT_OUT_DIR = os.path.join(BENCH_DIR, "out")
-MAXON_SOURCE = os.path.join(BENCH_DIR, "aes.maxon")
-MAXON_STEM = "aes"
 LOG_RELATIVE_PATH = "docs/aes-benchmark-log.md"
 LOG_PATH = os.path.join(bench_common.REPO, *LOG_RELATIVE_PATH.split("/"))
 MAC_HOST_SCRIPT = "scripts/mac-host.sh"
@@ -60,16 +58,11 @@ LANE_X64 = "x64"
 LANE_ARM64 = "arm64"
 LANE_WASM = "wasm"
 LANES = (LANE_X64, LANE_ARM64, LANE_WASM)
-X64_MACHINES = ("amd64", "x86_64")
-ARM64_MACHINES = ("arm64", "aarch64")
 
 ROLE_PORTABLE = "portable"
 ROLE_HARDWARE = "hardware"
 ROLES = (ROLE_PORTABLE, ROLE_HARDWARE)
 
-GO_MODULE_FILE = "go.mod"
-GO_SOURCE_SUFFIX = ".go"
-GO_PACKAGE = "."
 GO_VARIANT_DEFAULT = "default"
 GO_VARIANT_PUREGO = "purego"
 GO_VARIANT_TAGS = {GO_VARIANT_DEFAULT: [], GO_VARIANT_PUREGO: ["purego"]}
@@ -81,7 +74,7 @@ MAXON_WASM_SUFFIX = ".wasm"
 WASMTIME_DIR = "wasmtime"
 WASMTIME_EXIT_CODE_FLAGS = ["-S", "cli-exit-with-code=y"]
 
-# REPEATS and WASM_DIVISOR equal `defaultRepeats` and `wasmDivisor` in bench/aes/aes.maxon, which
+# REPEATS and WASM_DIVISOR equal `defaultRepeats` and `wasmDivisor` in bench/common/BenchProgram.maxon, which
 # reads no arguments on wasm.
 REPEATS = 5
 NATIVE_DIVISOR = 1
@@ -89,18 +82,6 @@ WASM_DIVISOR = 10
 PROFILE_REPEATS = 1
 PROFILE_DIVISOR = 10
 PROFILE_RATE_HZ = 1000
-OUTPUT_FIELDS = 6
-OUTPUT_LAYOUT = "workload bytesPerOp iterations repeats bestNanos digest"
-CLOCK_LINE = "clock"
-CLOCK_FIELDS = 2
-CLOCK_LAYOUT = "clock resolutionNanos"
-# A timed interval is wrong by under one clock tick, so 1000 ticks bounds the error at 0.1%.
-RESOLVABLE_TICKS = 1000
-KIND_MAXON = "maxon"
-KIND_GO = "go"
-BYTES_PER_MB_PER_NS = 1e3
-NANOS_PER_MICRO = 1e3
-NO_CELL = "-"
 
 MAC_SESSION_PREFIX = "bench-aes-"
 MAC_LOCK_WAIT_SECONDS = 1800
@@ -119,30 +100,20 @@ LOG_COLUMNS = ("date", "head", "tree", "lane", "host", "runs", "arm", "workload"
 COLUMN_ARM = LOG_COLUMNS.index("arm")
 COLUMN_WORKLOAD = LOG_COLUMNS.index("workload")
 
-LOG_PREAMBLE = """# AES benchmark log
-
-Best-of time of the stdlib AES and AES-GCM (`bench/aes/aes.maxon`) against Go, per workload and lane,
+LOG_HEADER = bench_common.log_header(
+    "AES benchmark log",
+    """Best-of time of the stdlib AES and AES-GCM (`bench/aes/aes.maxon`) against Go, per workload and lane,
 by `scripts/bench-aes.py`. **Read the tables downwards**: each row is one measurement of one workload,
-dated, and the ratio columns are the numbers the AES parity work drives to 1.0 or below.
-
-- **Rows are appended by the tool, never by hand.** A run without `--note` records nothing; a run with
-  one records unconditionally. The note says WHY the number moved - the instrument cannot.
-- **This is an instrument, not a gate.** There is nothing to pass; a row that did not move is a
-  datapoint, and a row that moved the wrong way is a reading to explain.
-- **Rows rot.** Re-measure before planning from one; an A/B is two arms in ONE session, interleaved,
-  never a before/after across a source change.
-- **Only rows from one lane and host compare.** Each row names both.
-
-Columns: `Maxon` and the Go columns are the best time of `runs` interleaved process runs, each of which
+dated, and the ratio columns are the numbers the AES parity work drives to 1.0 or below.""",
+    ["**Only rows from one lane and host compare.** Each row names both: the host cell holds the OS, the machine, the CPU model "
+     "and the Go version the row ran."],
+    """Columns: `Maxon` and the Go columns are the best time of `runs` interleaved process runs, each of which
 already took the best of 5 repetitions: MB/s, or microseconds per operation for key setup. `vs ...` is the
 Maxon time over that Go arm's time, so below 1.0 Maxon is faster. The Go arms are `portable` (`-tags purego`
 on x64 and arm64, Go's own wasm build on wasm: the table AES with constant-time GHASH) and `hardware`
 (Go's default build: AES-NI and PCLMULQDQ on x64, ARMv8 Crypto on arm64; absent on wasm). `arm` names the
-Maxon compiler (`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harness's checkout was clean.
-
-"""
-LOG_TABLE_HEADER = "| " + " | ".join(LOG_COLUMNS) + " |\n|" + "---|" * len(LOG_COLUMNS) + "\n"
-LOG_HEADER = LOG_PREAMBLE + LOG_TABLE_HEADER
+Maxon compiler (`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harness's checkout was clean.""",
+    LOG_COLUMNS)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -182,9 +153,9 @@ LANE_TABLE = {
 
 def host_lane():
     machine = platform.machine().lower()
-    if machine in X64_MACHINES:
+    if machine in bench_common.X64_MACHINES:
         return LANE_X64
-    if machine in ARM64_MACHINES:
+    if machine in bench_common.ARM64_MACHINES:
         return LANE_ARM64
     raise bench_common.UsageFailure(f"this host is {platform.machine()}, which is neither x64 nor arm64; only --lane wasm runs here")
 
@@ -208,33 +179,12 @@ def wasmtime_version(wasmtime):
 
 
 def host_description(lane, wasmtime):
-    description = f"{platform.system()} {platform.machine()}"
+    description = bench_common.host_description()
     return f"{description}, {wasmtime_version(wasmtime)}" if lane == LANE_WASM else description
 
 
-def go_source_files():
-    return [os.path.join(GO_DIR, name) for name in os.listdir(GO_DIR)
-            if name == GO_MODULE_FILE or name.endswith(GO_SOURCE_SUFFIX)]
-
-
-def build_go_arms(go, lane, out_dir):
-    env = bench_common.go_build_environment(lane.go_env)
-    version = bench_common.go_query(go, env, "version")
-    stamp = {"sources": bench_common.file_digests(go_source_files(), GO_DIR), "version": version,
-             "settings": bench_common.go_target_settings(go, env)}
-    go_out = os.path.join(out_dir, lane.name, GO_DIR_NAME)
-    executables = {}
-    for variant in sorted({arm.variant for arm in lane.go_arms}):
-        tags = GO_VARIANT_TAGS[variant]
-        flags = ["-tags", ",".join(tags)] if tags else []
-        executables[variant] = bench_common.build_go_cached(go, env, flags, GO_PACKAGE, GO_DIR,
-                                                            os.path.join(go_out, variant + lane.go_suffix), stamp,
-                                                            f"the {variant} variant on {lane.name}")
-    return executables, version
-
-
 def program_arguments(lane, kind):
-    if kind == KIND_MAXON and lane.name == LANE_WASM:
+    if kind == bench_common.KIND_MAXON and lane.name == LANE_WASM:
         return []
     return [str(REPEATS), str(lane.divisor)]
 
@@ -243,164 +193,8 @@ def runnable_command(lane, wasmtime, kind, exe):
     arguments = program_arguments(lane, kind)
     if lane.name != LANE_WASM:
         return [exe] + arguments
-    flags = WASMTIME_EXIT_CODE_FLAGS if kind == KIND_MAXON else []
+    flags = WASMTIME_EXIT_CODE_FLAGS if kind == bench_common.KIND_MAXON else []
     return [wasmtime, "run"] + flags + [exe] + arguments
-
-
-def parse_clock_line(name, line, fields):
-    digits = fields[1]
-
-    if not (digits.isascii() and digits.isdigit()):
-        raise bench_common.VerificationFailure(f"{name} printed {line!r}, not '{CLOCK_LAYOUT}' with a positive integer")
-
-    resolution = int(digits)
-
-    if resolution < 1:
-        raise bench_common.VerificationFailure(f"{name} printed {line!r}, whose resolution is not positive")
-
-    return resolution
-
-
-def parse_output(name, stdout):
-    results = {}
-    resolutions = []
-    for line in stdout.replace("\r\n", "\n").splitlines():
-        fields = line.split()
-        if fields and fields[0] == CLOCK_LINE and len(fields) == CLOCK_FIELDS:
-            resolutions.append(parse_clock_line(name, line, fields))
-            continue
-        if len(fields) != OUTPUT_FIELDS:
-            raise bench_common.VerificationFailure(f"{name} printed {line!r}, not '{OUTPUT_LAYOUT}'")
-        workload, per_op, iterations, repeats, nanos, digest = fields
-        if workload in results:
-            raise bench_common.VerificationFailure(f"{name} printed {workload} twice")
-        try:
-            results[workload] = {"bytes": int(per_op), "iterations": int(iterations), "repeats": int(repeats),
-                                 "nanos": int(nanos), "digest": digest}
-        except ValueError:
-            raise bench_common.VerificationFailure(f"{name} printed {line!r}, whose numeric fields are not integers") from None
-    if not results:
-        raise bench_common.VerificationFailure(f"{name} printed nothing")
-    return results, resolutions
-
-
-def run_once(runnable):
-    try:
-        result = bench_common.run(runnable["command"], cwd=runnable["dir"], timeout=bench_common.RUN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        raise bench_common.VerificationFailure(f"{runnable['name']} timed out after {bench_common.RUN_TIMEOUT_S} s") from None
-    bench_common.verify_exit(runnable["name"], "a full run", result, leak_checked=runnable["kind"] == KIND_MAXON)
-    return parse_output(runnable["name"], result.stdout)
-
-
-def collect(runnables, runs, warmup):
-    measured = bench_common.interleave(runnables, lambda r: r["name"], warmup, runs, run_once)
-    best = {}
-    seen = {}
-    order = []
-    resolutions = {}
-    kinds = {r["name"]: r["kind"] for r in runnables}
-    for name, rounds in measured.items():
-        for results, clock_lines in rounds:
-            resolution = arm_resolution(name, kinds[name], clock_lines)
-            if name in resolutions and (resolutions[name] is None) != (resolution is None):
-                raise bench_common.VerificationFailure(f"{name} printed a '{CLOCK_LAYOUT}' line in some runs and not in others")
-            resolutions[name] = resolution if resolutions.get(name) is None else max(resolutions[name], resolution)
-            for workload, cell in results.items():
-                if workload not in order:
-                    order.append(workload)
-                key = (workload, name)
-                best[key] = min(best.get(key, cell["nanos"]), cell["nanos"])
-                shape = (cell["bytes"], cell["iterations"], cell["repeats"], cell["digest"])
-                seen.setdefault(workload, {}).setdefault(shape, set()).add(name)
-    check_agreement(seen, runnables, order)
-    check_resolution(best, resolutions, order)
-    return best, seen, order, resolutions
-
-
-def arm_resolution(name, kind, clock_lines):
-    # A control compiler built before the clock line existed prints none; only a Maxon arm may.
-    if kind == KIND_MAXON and not clock_lines:
-        return None
-
-    if len(clock_lines) != 1:
-        raise bench_common.VerificationFailure(f"{name} printed {len(clock_lines)} '{CLOCK_LAYOUT}' lines, not one")
-
-    return clock_lines[0]
-
-
-def describe_resolutions(resolutions):
-    return ", ".join(f"{name} {resolution} ns" if resolution is not None else f"{name} built before the clock line existed, not gated"
-                     for name, resolution in resolutions.items())
-
-
-def check_resolution(best, resolutions, order):
-    for workload in order:
-        for name, resolution in resolutions.items():
-            if resolution is None or (workload, name) not in best:
-                continue
-
-            floor = RESOLVABLE_TICKS * resolution
-            if best[(workload, name)] < floor:
-                raise bench_common.VerificationFailure(
-                    f"{name} timed {workload} at {best[(workload, name)]} ns, under {RESOLVABLE_TICKS} times its clock's "
-                    f"{resolution} ns resolution ({floor} ns): the reading cannot resolve it. Raise {workload}'s base iterations "
-                    f"in bench/aes/aes.maxon (baseIterationsOf) and bench/aes/go/main.go together")
-
-
-def check_agreement(seen, runnables, order):
-    expected = {r["name"] for r in runnables}
-    maxon_arms = {r["name"] for r in runnables if r["kind"] == KIND_MAXON}
-    for workload in order:
-        shapes = seen[workload]
-        if len(shapes) != 1:
-            detail = "; ".join(f"{sorted(names)} printed bytes/iterations/repeats/digest {shape}" for shape, names in sorted(shapes.items()))
-            raise bench_common.VerificationFailure(f"the arms disagree on {workload}: {detail}")
-        (_, names), = shapes.items()
-        missing = expected - names
-        if missing and not (missing <= maxon_arms and names & maxon_arms):
-            raise bench_common.VerificationFailure(f"{sorted(missing)} printed no {workload} line")
-
-
-def shape_of(seen, workload):
-    (bytes_per_op, iterations, _, _), = seen[workload]
-    return bytes_per_op, iterations
-
-
-def throughput_cell(best, seen, workload, name):
-    if (workload, name) not in best:
-        return NO_CELL
-    nanos = best[(workload, name)]
-    bytes_per_op, iterations = shape_of(seen, workload)
-    if nanos <= 0:
-        return NO_CELL
-    per_op = nanos / iterations
-    if bytes_per_op == 0:
-        return f"{per_op / NANOS_PER_MICRO:.2f} us"
-    return f"{bytes_per_op * BYTES_PER_MB_PER_NS / per_op:.1f} MB/s"
-
-
-def ratio_cell(best, workload, numerator, denominator):
-    if (workload, numerator) not in best:
-        return NO_CELL
-    over = best[(workload, denominator)]
-    if over <= 0:
-        return NO_CELL
-    return f"{best[(workload, numerator)] / over:.2f}"
-
-
-def print_tables(order, best, seen, maxon_names, go_arms):
-    names = maxon_names + [arm.name for arm in go_arms]
-    print()
-    print(f"  {'workload':<18}" + "".join(f"{name:>16}" for name in names))
-    for workload in order:
-        print(f"  {workload:<18}" + "".join(f"{throughput_cell(best, seen, workload, name):>16}" for name in names))
-    for maxon_name in maxon_names:
-        print()
-        print(f"  ratios, {maxon_name} time / Go time (below 1.00 Maxon is faster)")
-        print(f"  {'workload':<18}" + "".join(f"{'vs ' + arm.name:>18}" for arm in go_arms))
-        for workload in order:
-            print(f"  {workload:<18}" + "".join(f"{ratio_cell(best, workload, maxon_name, arm.name):>18}" for arm in go_arms))
 
 
 def log_rows(context, order, best, seen, maxon_names, go_arms, note):
@@ -411,54 +205,40 @@ def log_rows(context, order, best, seen, maxon_names, go_arms, note):
             if (workload, maxon_name) not in best:
                 continue
 
-            cells = [throughput_cell(best, seen, workload, maxon_name)]
+            cells = [bench_common.throughput_cell(best, seen, workload, maxon_name, SPEC.per_op_unit)]
             ratios = []
             for role in ROLES:
                 arm = by_role.get(role)
-                cells.append(throughput_cell(best, seen, workload, arm.name) if arm else NO_CELL)
-                ratios.append(ratio_cell(best, workload, maxon_name, arm.name) if arm else NO_CELL)
-            rows.append([context["today"], context["head"], bench_common.tree_state(context["dirty"]), context["lane"],
-                         context["host"], str(context["runs"]), maxon_name, workload] + cells + ratios + [" ".join(note.replace("|", "/").split())])
+                cells.append(bench_common.throughput_cell(best, seen, workload, arm.name, SPEC.per_op_unit) if arm else bench_common.NO_CELL)
+                ratios.append(bench_common.ratio_cell(best, workload, maxon_name, arm.name) if arm else bench_common.NO_CELL)
+            rows.append(bench_common.row_prefix(context, lane=context["lane"]) + [maxon_name, workload] + cells + ratios
+                        + [bench_common.note_cell(note)])
     return rows
 
 
 def run_lane(args, lane_name):
     lane = LANE_TABLE[lane_name]
-    out_dir = os.path.abspath(args.out_dir)
-    go = bench_common.locate_go()
     wasmtime = locate_wasmtime() if lane_name == LANE_WASM else None
-    plan = bench_common.plan_arms(args, reserved_labels=[arm.name for arm in lane.go_arms])
-    bench_common.open_output_root(out_dir, args.keep_refs, plan)
+    built = bench_common.build_programs(SPEC, args, reserved_labels=[arm.name for arm in lane.go_arms],
+                                        variant_tags={arm.variant: GO_VARIANT_TAGS[arm.variant] for arm in lane.go_arms},
+                                        subdir=lane.name, go_env=lane.go_env, go_suffix=lane.go_suffix, maxon_args=lane.maxon_args,
+                                        maxon_suffix=lane.maxon_suffix, target_label=f" on {lane.name}")
+    context = bench_common.run_context(host_description(lane_name, wasmtime), built, args, lane=lane_name)
+    bench_common.print_run_header(SPEC, context, args, built, details=[f"lane {lane_name}"])
 
-    go_executables, go_version = build_go_arms(go, lane, out_dir)
-    maxon_arms = [bench_common.build_arm(planned, out_dir, MAXON_SOURCE, MAXON_STEM, build_args=lane.maxon_args,
-                                         exe_suffix=lane.maxon_suffix, arms_dir=os.path.join(out_dir, lane.name))
-                  for planned in plan]
-    context = dict(bench_common.session_context(), lane=lane_name, host=host_description(lane_name, wasmtime), runs=args.runs)
-
-    print(f"bench-aes  {context['today']}  head {context['head']}{'*' if context['dirty'] else ''}  lane {lane_name}  runs={args.runs}  warmup={args.warmup}")
-    print(f"  host: {context['host']}")
-    print(f"  {go_version}")
-    for arm in maxon_arms:
-        print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
-    print(f"  program: {bench_common.describe_sources({arm['label']: {MAXON_STEM: arm['source_sha256']} for arm in maxon_arms})}")
-
-    runnables = []
-    for arm in maxon_arms:
-        runnables.append({"name": arm["label"], "kind": KIND_MAXON, "dir": arm["dir"],
-                          "command": runnable_command(lane, wasmtime, KIND_MAXON, arm["exe"])})
+    maxon_names = [arm["label"] for arm in built.maxon_arms]
+    go_names = [arm.name for arm in lane.go_arms]
+    runnables = [bench_common.runnable(arm["label"], bench_common.KIND_MAXON, arm["dir"],
+                                       runnable_command(lane, wasmtime, bench_common.KIND_MAXON, arm["exe"])) for arm in built.maxon_arms]
     for go_arm in lane.go_arms:
-        exe = go_executables[go_arm.variant]
-        runnables.append({"name": go_arm.name, "kind": KIND_GO, "dir": os.path.dirname(exe),
-                          "command": runnable_command(lane, wasmtime, KIND_GO, exe)})
-
-    best, seen, order, resolutions = collect(runnables, args.runs, args.warmup)
-    maxon_names = [arm["label"] for arm in maxon_arms]
-    print("  clock resolution: " + describe_resolutions(resolutions))
-    print_tables(order, best, seen, maxon_names, lane.go_arms)
+        exe = built.go_executables[go_arm.variant]
+        runnables.append(bench_common.runnable(go_arm.name, bench_common.KIND_GO, os.path.dirname(exe),
+                                               runnable_command(lane, wasmtime, bench_common.KIND_GO, exe)))
+    best, seen, order = bench_common.run_and_report(SPEC, args, runnables, maxon_names + go_names,
+                                                    bench_common.ratio_tables_per_maxon_arm(maxon_names, go_names))
 
     if args.profile:
-        profile_maxon_arms(maxon_arms)
+        profile_maxon_arms(built.maxon_arms)
 
     if args.note:
         rows = log_rows(context, order, best, seen, maxon_names, lane.go_arms, args.note)
@@ -611,42 +391,33 @@ def parse_arguments():
     bench_common.add_arm_arguments(ap, warmup_default=0)
     ap.add_argument("--lane", choices=LANES, default=None, help="the lane to measure (default: this host's native lane)")
     ap.add_argument("--profile", action="store_true", help="profile each Maxon arm with `maxon profile run` (native lanes)")
-    ap.add_argument("--note", default="", help="append log rows to docs/aes-benchmark-log.md with this note")
-    ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
-    ap.add_argument("--check-go", action="store_true", help="only locate Go and print its version")
+    bench_common.add_log_arguments(ap, LOG_RELATIVE_PATH, DEFAULT_OUT_DIR)
     ap.add_argument("--rows-file", default="", help=argparse.SUPPRESS)
     return ap.parse_args()
 
 
-def check_go():
-    go = bench_common.locate_go()
-    print(f"{go}: {bench_common.go_query(go, bench_common.go_build_environment(), 'version')}")
-    return bench_common.EXIT_OK
+def run_harness(args):
+    if args.check_go:
+        return bench_common.check_go()
+    bench_common.check_arm_arguments(args)
+    if args.rows_file and not args.note:
+        raise bench_common.UsageFailure("--rows-file carries the rows --note records")
+    lane = args.lane or host_lane()
+    if args.profile and lane == LANE_WASM:
+        raise bench_common.UsageFailure("--profile profiles a native binary; use --lane x64 or arm64")
+    if args.profile and not native_lane_here(lane):
+        raise bench_common.UsageFailure(f"--profile needs a host that runs the {lane} lane natively; "
+                                        "start the run on the Mac with scripts/mac-host.sh run")
+    if lane == LANE_ARM64 and not native_lane_here(lane):
+        return run_on_mac(args)
+    if lane == LANE_X64 and not native_lane_here(lane):
+        raise bench_common.UsageFailure(f"this host is {platform.machine()}; the x64 lane runs on an x64 host")
+    return run_lane(args, lane)
 
 
 def main():
     args = parse_arguments()
-    try:
-        if args.check_go:
-            return check_go()
-        bench_common.check_arm_arguments(args)
-        if args.rows_file and not args.note:
-            raise bench_common.UsageFailure("--rows-file carries the rows --note records")
-        lane = args.lane or host_lane()
-        if args.profile and lane == LANE_WASM:
-            raise bench_common.UsageFailure("--profile profiles a native binary; use --lane x64 or arm64")
-        if args.profile and not native_lane_here(lane):
-            raise bench_common.UsageFailure(f"--profile needs a host that runs the {lane} lane natively; "
-                                            "start the run on the Mac with scripts/mac-host.sh run")
-        if lane == LANE_ARM64 and not native_lane_here(lane):
-            return run_on_mac(args)
-        if lane == LANE_X64 and not native_lane_here(lane):
-            raise bench_common.UsageFailure(f"this host is {platform.machine()}; the x64 lane runs on an x64 host")
-        return run_lane(args, lane)
-    except (bench_common.UsageFailure, bench_common.BuildFailure, bench_common.VerificationFailure) as e:
-        return bench_common.report_failure(e)
-    except subprocess.TimeoutExpired as e:
-        return bench_common.report_failure(bench_common.BuildFailure(f"a step timed out: {e}"))
+    return bench_common.guarded_main(lambda: run_harness(args))
 
 
 if __name__ == "__main__":

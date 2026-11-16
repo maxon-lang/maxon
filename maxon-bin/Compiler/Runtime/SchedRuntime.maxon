@@ -3392,7 +3392,6 @@ export let RequestedProcessorCountSign = 0x2B as FullRangeInt
 function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
 	let cpuFloor = module.addBlock(func, label: b"maxprocscpufloor", heat: BlockHeat.normal)
 	let cpuKnown = module.addBlock(func, label: b"maxprocscpuok", heat: BlockHeat.normal)
-	let reread = module.addBlock(func, label: b"maxprocsreread", heat: BlockHeat.normal)
 	let unfit = module.addBlock(func, label: b"maxprocsunfit", heat: BlockHeat.normal)
 	let parseStart = module.addBlock(func, label: b"maxprocsparse", heat: BlockHeat.normal)
 	let parsedCount = module.addBlock(func, label: b"maxprocsparsed", heat: BlockHeat.normal)
@@ -3411,21 +3410,13 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 
 	emitStoreGlobalWord(module, block: cpuKnown, label: SchedNcpuLabel, value: liveCpus, ids: ids)
 
-	let firstCapacity = emitConst(module, block: cpuKnown, value: SchedEnvValueBufBytes, ids: ids)
-	let read = emitReadSchedEnvValue(module, block: cpuKnown, name: MaxProcsEnvName, capacity: firstCapacity, ids: ids)
 	let valueBuf = ids.mint()
 	parseStart.blockArgs.push(IrBlockArg.create(valueBuf, argType: StdType.i64))
-	emitBranchOnCompareValues(module, block: cpuKnown, a: read.written, pred: StdCmpPred.ge, b: read.capacity, whenTrue: reread, whenFalse: parseStart, ids: ids)
-	pushBranchEdge(cpuKnown, to: parseStart, values: argsOf(read.buf))
+	let envValue = emitReadEnvValueWhole(module, func: func, block: cpuKnown, name: MaxProcsEnvName, firstBytes: SchedEnvValueBufBytes, ids: ids)
+	emitBranchOnCompareValues(module, block: envValue.block, a: envValue.written, pred: StdCmpPred.lt, b: envValue.capacity, whenTrue: parseStart, whenFalse: unfit, ids: ids)
+	pushBranchEdge(envValue.block, to: parseStart, values: argsOf(envValue.buffer))
 
-	// A too-small read answers the size the value needs, terminator included, so one re-read at that size
-	// fits unless the environment changed in between.
-	emitSlabFree(module, block: reread, ptr: read.buf, kind: SlabBufferKind.environmentValue, ids: ids)
-	let fullRead = emitReadSchedEnvValue(module, block: reread, name: MaxProcsEnvName, capacity: read.written, ids: ids)
-	emitBranchOnCompareValues(module, block: reread, a: fullRead.written, pred: StdCmpPred.lt, b: fullRead.capacity, whenTrue: parseStart, whenFalse: unfit, ids: ids)
-	pushBranchEdge(reread, to: parseStart, values: argsOf(fullRead.buf))
-
-	emitSlabFree(module, block: unfit, ptr: fullRead.buf, kind: SlabBufferKind.environmentValue, ids: ids)
+	emitSlabFree(module, block: unfit, ptr: envValue.buffer, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.setTerminator(unfit, op: StdOp.branch(rejected.id))
 
 	let requested = ids.mint()
@@ -3440,30 +3431,6 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 
 	emitBranchCarrying(module, from: rejected, to: settled, values: argsOf(liveCpus))
 end 'emitResolveMaxProcs'
-
-// One `osEnvRead` of a scheduler setting: the byte count the OS answered, the zeroed buffer it wrote into,
-// and that buffer's size, so a reader compares the count against the size the read was actually given.
-type SchedEnvRead
-	export let written as ValueId
-	export let buf as ValueId
-	export let capacity as ValueId
-
-	static function create(written ValueId, buf ValueId, capacity ValueId) returns Self
-		return Self{written: written, buf: buf, capacity: capacity}
-	end 'create'
-end 'SchedEnvRead'
-
-// Read the environment variable `name` into a fresh zeroed slab buffer of `capacity` bytes, which the
-// caller frees. The buffer is zeroed (`__slab_alloc`, not the raw door), so a value that fits is
-// NUL-terminated and a byte walk that reads at most `capacity` bytes stays in bounds whatever the OS wrote.
-function emitReadSchedEnvValue(module StdModule, block IrBlock, name ByteArray, capacity ValueId, ids ValueMinter) returns SchedEnvRead
-	let nameBuf = emitLiteralHostString(module, block: block, ids: ids, text: name)
-	let buf = emitSlabAlloc(module, block: block, bytes: capacity, kind: SlabBufferKind.environmentValue, ids: ids)
-	let written = emitHostEnvReadAscii(module, block: block, name: nameBuf, valueBuf: buf, capacity: capacity, ids: ids)
-	emitSlabFree(module, block: block, ptr: nameBuf, kind: SlabBufferKind.hostText, ids: ids)
-
-	return SchedEnvRead.create(written, buf: buf, capacity: capacity)
-end 'emitReadSchedEnvValue'
 
 // 1 when the NUL-terminated bytes at `cstr` are exactly `literal`, else 0: one byte compare per literal byte
 // PLUS the terminator, so a longer value with `literal` as its prefix answers 0. Reads `literal.count() + 1`
@@ -3508,7 +3475,7 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	let unreadable = module.addBlock(func, label: b"preemptunreadable", heat: BlockHeat.normal)
 
 	let capacity = emitConst(module, block: cur, value: SchedEnvValueBufBytes, ids: ids)
-	let read = emitReadSchedEnvValue(module, block: cur, name: PreemptEnvName, capacity: capacity, ids: ids)
+	let read = emitReadHostEnvValue(module, block: cur, name: PreemptEnvName, capacity: capacity, ids: ids)
 	let isOff = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOffValue, ids: ids)
 	let isOn = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOnValue, ids: ids)
 	emitSlabFree(module, block: cur, ptr: read.buf, kind: SlabBufferKind.environmentValue, ids: ids)
@@ -4554,6 +4521,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osFileSize or
 		osFileDelete or
 		osFileRename or
+		osFileRenameNew or
 		osFileFindFirst or
 		osFileFindClose or
 		osFileFindNext or

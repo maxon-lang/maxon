@@ -1,0 +1,12 @@
+let SingleRungFlag = "--rungs=1"
+let TwoCompilesFlag = "--repeat=2"
+let RandomSeedValue = ""
+let NondeterminismWord = "NONDETERMINISTIC"
+
+test 'scale-test compiles one rung twice and both compiles report the same memory'
+	let run = spawnCompiler([ScaleTestCommandWord, SingleRungFlag, TwoCompilesFlag], environment: Environment.inheritUpdating([HashSeedVariable: RandomSeedValue]))
+	let command = "`maxon {ScaleTestCommandWord} {SingleRungFlag} {TwoCompilesFlag}` with {HashSeedVariable} empty"
+
+	Expect.equal(run.exitCode(), expected: 0, message: "{command} did not deliver its ladder. Every compile it measures runs under one pinned hash seed, so two compiles of one rung allocate the same; a seed left to the process lets a hash table's shape, and with it the allocations, differ between them. stdout:\n{run.stdout}\nstderr:\n{run.stderr}")
+	Expect.isFalse(run.stdout.contains(NondeterminismWord) or run.stderr.contains(NondeterminismWord), message: "{command} reported two compiles of one rung allocating differently. stdout:\n{run.stdout}\nstderr:\n{run.stderr}")
+end 'scale-test compiles one rung twice and both compiles report the same memory'

@@ -44,6 +44,7 @@ enum FileRenameError implements Error
 	notFound
 	accessDenied
 	busy
+	alreadyExists
 end 'FileRenameError'
 
 enum FileInfoError implements Error
@@ -718,6 +719,104 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+### File.renameNew
+
+Atomically rename (move) a file to a name that is not taken. It never replaces an existing destination:
+when `to` already exists it throws and leaves both files as they were, so the destination either does
+not exist or holds the whole source.
+
+**Signature:** `static function renameNew(from FilePath, to FilePath) throws FileRenameError`
+
+<!-- test: rename-new-moves-a-file-to-a-free-name -->
+```maxon
+function main() returns ExitCode
+	let src = FilePath from "test_rename_new_free_src.txt"
+	let dst = FilePath from "test_rename_new_free_dst.txt"
+	try File.delete(dst) otherwise ignore
+	try File.writeText(src, content: "moved") otherwise return 2
+
+	try File.renameNew(src, to: dst) otherwise 'refused'
+		try File.delete(src) otherwise ignore
+		return 3
+	end 'refused'
+
+	let sourceRemains = File.exists(src)
+	let text = try File.readText(dst) otherwise "(unreadable)"
+	try File.delete(src) otherwise ignore
+	try File.delete(dst) otherwise ignore
+	print("source exists {sourceRemains}\n")
+	print("destination holds {text}\n")
+	return 0
+end 'main'
+```
+```stdout
+source exists false
+destination holds moved
+```
+```exitcode
+0
+```
+
+<!-- test: rename-new-refuses-an-existing-destination -->
+```maxon
+function main() returns ExitCode
+	let src = FilePath from "test_rename_new_taken_src.txt"
+	let dst = FilePath from "test_rename_new_taken_dst.txt"
+	try File.writeText(src, content: "source") otherwise return 2
+	try File.writeText(dst, content: "destination") otherwise return 3
+
+	var refused = false
+	try File.renameNew(src, to: dst) otherwise 'taken'
+		refused = true
+	end 'taken'
+
+	let sourceText = try File.readText(src) otherwise "(gone)"
+	let destinationText = try File.readText(dst) otherwise "(gone)"
+	try File.delete(src) otherwise ignore
+	try File.delete(dst) otherwise ignore
+	print("refused {refused}\n")
+	print("source holds {sourceText}\n")
+	print("destination holds {destinationText}\n")
+	return 0
+end 'main'
+```
+```stdout
+refused true
+source holds source
+destination holds destination
+```
+```exitcode
+0
+```
+
+<!-- test: rename-new-refuses-a-missing-source -->
+```maxon
+function main() returns ExitCode
+	let src = FilePath from "test_rename_new_missing_src.txt"
+	let dst = FilePath from "test_rename_new_missing_dst.txt"
+	try File.delete(src) otherwise ignore
+	try File.delete(dst) otherwise ignore
+
+	var refused = false
+	try File.renameNew(src, to: dst) otherwise 'unmoved'
+		refused = true
+	end 'unmoved'
+
+	let destinationCreated = File.exists(dst)
+	try File.delete(dst) otherwise ignore
+	print("refused {refused}\n")
+	print("destination exists {destinationCreated}\n")
+	return 0
+end 'main'
+```
+```stdout
+refused true
+destination exists false
+```
+```exitcode
+0
 ```
 
 <!-- test: a-path-holding-a-nul-names-no-file-not-its-prefix -->

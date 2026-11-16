@@ -68,32 +68,23 @@ EXPECTED = {7: (228, 16), 10: (73196, 38), 11: (556355, 51), 12: (3968050, 65)}
 CENSUS_COLUMNS = ("ops", "jmp", "jmp->next", "jmponly-blocks", "imul-imm", "imul-pow2", "idiv",
                   "call-direct", "mgd-call", "im-blocks", "mov")
 
-LOG_HEADER = """# fannkuch-redux benchmark log
+LOG_COLUMNS = ("date", "head", "tree", "n", "runs", "C min/med ms", "Maxon min/med ms", "ratio (med)", "exe bytes", "ops", "arm", "note")
 
-Wall time of `examples/fannkuch-redux.maxon` against the C gcc #5 reference
+LOG_HEADER = bench_common.log_header(
+    "fannkuch-redux benchmark log",
+    """Wall time of `examples/fannkuch-redux.maxon` against the C gcc #5 reference
 (`bench/fannkuch/fannkuchredux.gcc-5.c`, built single-threaded with clang), both run on this
 machine by `scripts/bench-fannkuch.py`. **Read the tables downwards**: each row is one measurement,
-dated, and the ratio column is the number the loop drives at 1.0.
-
-- **Rows are appended by the tool, never by hand.** A run without `--note` records nothing; a run
-  with one records unconditionally. The note says WHY the number moved - the instrument cannot.
-- **This is an instrument, not a gate.** There is nothing to pass; a row that did not move is a
-  datapoint, and a row that moved the wrong way is a reading to explain.
-- **Rows rot.** Re-measure before planning from one; an A/B is two arms in ONE session, interleaved,
-  never a before/after across a source change.
-- **Only rows from one host compare.** `-march=native` makes the C figure machine-specific.
-- `docs/optimization-log.md` is the compile-time axis and is never touched by this tool.
-
-Host: Intel Core i7-8700 (6C/12T, 3.2 GHz), Windows 11, x64. C reference: clang, single-threaded.
+dated, and the ratio column is the number the loop drives at 1.0.""",
+    ["**Only rows from one host compare.** `-march=native` makes the C figure machine-specific.",
+     "`docs/optimization-log.md` is the compile-time axis and is never touched by this tool."],
+    """Host: Intel Core i7-8700 (6C/12T, 3.2 GHz), Windows 11, x64. C reference: clang, single-threaded.
 
 Columns: `C min/med ms` and `Maxon min/med ms` are the minimum and median of `runs` interleaved
 timed runs after one warm-up each; `ratio` is Maxon median / C median; `ops` is the emitted-code
 census of the Maxon binary (`scripts/emitted-code-count.py`); `arm` names the compiler
-(`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harness's checkout was clean.
-
-| date | head | tree | n | runs | C min/med ms | Maxon min/med ms | ratio (med) | exe bytes | ops | arm | note |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-"""
+(`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harness's checkout was clean.""",
+    LOG_COLUMNS)
 
 
 def load_census():
@@ -219,12 +210,10 @@ def main():
     except (bench_common.UsageFailure, bench_common.BuildFailure) as e:
         return bench_common.report_failure(e)
 
-    print(f"bench-fannkuch  {context['today']}  head {context['head']}{'*' if context['dirty'] else ''}  n={args.n}  runs={args.runs}  warmup={args.warmup}")
+    bench_common.print_session_header("bench-fannkuch", context, args, details=[f"n={args.n}"])
     if c_exe:
         print(f"  C: {clang_line}  {' '.join(CLANG_FLAGS)}  (no -fopenmp)")
-    for arm in maxon_arms:
-        print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
-    print(f"  program: {bench_common.describe_sources({arm['label']: {SOURCE_STEM: arm['source_sha256']} for arm in maxon_arms})}")
+    bench_common.print_arm_lines(maxon_arms, SOURCE_STEM)
 
     # Runnable arms: the C reference first, then every Maxon arm. Each round runs every arm once,
     # alternating direction so neither drift nor a fixed order can manufacture a sign.
@@ -314,7 +303,7 @@ def main():
             s = stats[arm["label"]]
             c_cell = f"{bench_common.fmt_ms(c_stats['min'])} / {bench_common.fmt_ms(c_stats['median'])}" if c_stats else "-"
             ratio = f"{s['median'] / c_stats['median']:.2f}" if c_stats else "-"
-            note = args.note.replace("|", "/")
+            note = bench_common.note_cell(args.note)
             if arm["label"] in self_compiles:
                 note = f"{note}; self-compile {bench_common.fmt_ms(self_compiles[arm['label']]['ms'])} ms"
             bench_common.append_log_rows(LOG_PATH, LOG_HEADER, [[

@@ -1,0 +1,679 @@
+export let HashSeedName = b"__hash_seed"
+export let HashInitName = b"__hash_init"
+export let HashElementsStoredName = b"__hash_elements_stored"
+let HashRunName = b"__hash_run"
+let HashSoftwareName = b"__hash_software"
+let HashRefuseName = b"__hash_refuse"
+
+let HashSeedLabel = b"__mrt_hash_seed"
+let HashTierLabel = b"__mrt_hash_tier"
+
+export let HashTierEnvName = b"MAXON_HASH_TIER"
+export let HashSeedEnvName = b"MAXON_HASH_SEED"
+export let HashTierAesName = b"aes"
+export let HashTierSoftwareName = b"software"
+
+let HashTierRefusalPrefix = b"MAXON_HASH_TIER="
+let HashSeedRefusalPrefix = b"MAXON_HASH_SEED="
+let HashSeedRefusalTail = b" is not a hash seed: expected 16 hexadecimal digits\n"
+let HashRefusalUnknownLead = b" is not a hash tier: expected "
+let HashRefusalUnknownSeparator = b" or "
+let HashRefusalUnavailableLead = b" is not available on this host: its best hash tier is "
+let HashRefusalLineEnd = b"\n"
+let HashRefusalExitCode = 1
+
+let HashEnvValueBufBytes = 32
+let HashSeedBytes = 8
+let HashHexDigitsPerByte = 2
+let HashSeedDigits = HashSeedBytes * HashHexDigitsPerByte
+let HashHexNibbleBits = 4
+let HashHexCaseBit = 0x20
+let HashHexLetterFirst = 0x61
+let HashHexLetterLast = 0x66
+let HashHexLetterFirstValue = 10
+let HashHexLetterBias = HashHexLetterFirst - HashHexLetterFirstValue
+let HashWordBytes = 8
+let HashScratchSlot = 0 as SpillSlot
+
+let HashSoftwareFirstSecret = 0xa0761d6478bd642f as MachineWord
+let HashSoftwareSecondSecret = 0xe7037ed1a0b428db as MachineWord
+let HashSoftwareThirdSecret = 0x8ebc6af09c88c6e3 as MachineWord
+let HashSoftwareFourthSecret = 0x589965cc75374cc3 as MachineWord
+let HashSoftwareHalfBits = 32
+let HashSoftwareHalfMask = 0xFFFFFFFF
+let HashSoftwareSecondByteShift = 8
+let HashSoftwareThirdByteShift = 16
+let HashSoftwareWordBytes = 8
+let HashSoftwareHalfWordBytes = 4
+let HashSoftwarePairBytes = 16
+let HashSoftwareStrideBytes = 48
+let HashSoftwareStrideSecondOffset = 16
+let HashSoftwareStrideThirdOffset = 32
+let HashSoftwareParams = 3
+
+enum HashTier
+	software = 0
+	aes = 1
+end 'HashTier'
+
+enum HashRefusal
+	unknownTier = 0
+	aesUnavailable = 1
+	unknownSeed = 2
+end 'HashRefusal'
+
+type HashHexNibble
+	let value as ValueId
+	let valid as ValueId
+
+	static function create(value ValueId, valid ValueId) returns Self
+		return Self{value: value, valid: valid}
+	end 'create'
+end 'HashHexNibble'
+
+export function isHashRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(HashSeedName) or callee.equals(HashElementsStoredName) or isHardwareHashRuntimeCallee(callee) or isManagedArrayHashCallee(callee)
+end 'isHashRuntimeCallee'
+
+function recordHashUsage(usage RuntimeUsage)
+	usage.usesHash = true
+	usage.usesCpuFeatures = true
+	usage.usesEntropy = true
+	usage.usesHeap = true
+end 'recordHashUsage'
+
+export function hashRuntimeGlobals() returns DataSectionEntryArray
+	let out = DataSectionEntryArray.create(0)
+
+	pushRuntimeGlobal(out, label: HashSeedLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: HashTierLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+
+	return out
+end 'hashRuntimeGlobals'
+
+export function hashHasAesTier(target Target) returns bool
+	return match cpuFeatureSource(target) 'source'
+		cpuid or
+		auxiliaryVector or
+		alwaysPresent gives true
+		absent gives false
+	end 'source'
+end 'hashHasAesTier'
+
+export function installHashRuntime(module StdModule, usage RuntimeUsage, target Target)
+	if not usage.usesHash 'notAsked'
+		return
+	end 'notAsked'
+
+	buildHashSeed(module)
+	buildHashRefuse(module)
+	buildHashInit(module, target: target)
+	buildHashSoftware(module)
+	buildHashRun(module, target: target)
+	buildHashBytes(module)
+	buildHashWord(module, target: target)
+	buildHashElementsStored(module)
+end 'installHashRuntime'
+
+function buildHashSeed(module StdModule)
+	let func = IrFunction.createFromStd(HashSeedName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let seed = emitLoadGlobalWord(module, block: entry, label: HashSeedLabel, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(seed))
+
+	module.functions.push(func)
+end 'buildHashSeed'
+
+function emitHashSeedDraw(module StdModule, func IrFunction, entry IrBlock, drawn IrBlock, ids ValueMinter)
+	let refused = module.addBlock(func, label: b"hiseedrefused", heat: BlockHeat.cold)
+	let seedAddr = ids.mint()
+
+	module.appendOp(entry, op: StdOp.globalAddr(seedAddr, label: HashSeedLabel))
+
+	let seedBytes = emitConst(module, block: entry, value: HashSeedBytes, ids: ids)
+	let status = ids.mint()
+	module.appendOp(entry, op: StdOp.osRandomFill(status, bufPtrId: seedAddr, lenId: seedBytes))
+	emitBranchOnCompare(module, block: entry, value: status, pred: StdCmpPred.ne, against: 0, whenTrue: refused, whenFalse: drawn, ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: refused, fatal: RuntimeFatal.hashSeedUnavailable, ids: ids)
+end 'emitHashSeedDraw'
+
+function emitHashAesAvailable(module StdModule, block IrBlock, target Target, ids ValueMinter) returns ValueId
+	if hashHasAesTier(target) 'probed'
+		return emitLoadGlobalWord(module, block: block, label: CpuAesUsableLabel, ids: ids)
+	end 'probed'
+
+	return emitConst(module, block: block, value: 0, ids: ids)
+end 'emitHashAesAvailable'
+
+function emitHashTierSettled(module StdModule, block IrBlock, buffer ValueId, tier ValueId, settled IrBlock, ids ValueMinter)
+	emitSlabFree(module, block: block, ptr: buffer, kind: SlabBufferKind.environmentValue, ids: ids)
+	emitStoreGlobalWord(module, block: block, label: HashTierLabel, value: tier, ids: ids)
+	module.setTerminator(block, op: StdOp.branch(settled.id))
+end 'emitHashTierSettled'
+
+function emitHashProcessState(module StdModule, block IrBlock, ids ValueMinter)
+	let seedAddr = ids.mint()
+
+	module.appendOp(block, op: StdOp.globalAddr(seedAddr, label: HashSeedLabel))
+
+	let drawn = emitLoadGlobalWord(module, block: block, label: HashSeedLabel, ids: ids)
+	let noBytes = emitConst(module, block: block, value: 0, ids: ids)
+	let empty = emitRuntimeCall(module, block: block, callee: HashRunName, args: threeArgs(seedAddr, second: noBytes, third: drawn), ids: ids)
+
+	emitStoreGlobalWord(module, block: block, label: HashSeedLabel, value: empty, ids: ids)
+	module.setTerminator(block, op: StdOp.retVoid)
+end 'emitHashProcessState'
+
+function emitHashTierRequest(module StdModule, func IrFunction, block IrBlock, buffer ValueId, requested ValueId, available ValueId, tier HashTier, refused IrBlock, settled IrBlock, ids ValueMinter) returns IrBlock
+	let chosen = module.addBlock(func, label: b"hichosen", heat: BlockHeat.normal)
+	let rest = module.addBlock(func, label: b"hirest", heat: BlockHeat.normal)
+	let present = module.addBlock(func, label: b"hipresent", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: block, value: requested, pred: StdCmpPred.ne, against: 0, whenTrue: present, whenFalse: rest, ids: ids)
+	emitBranchOnCompare(module, block: present, value: available, pred: StdCmpPred.ne, against: 0, whenTrue: chosen, whenFalse: refused, ids: ids)
+
+	let tierValue = emitConst(module, block: chosen, value: tier.rawValue, ids: ids)
+	emitHashTierSettled(module, block: chosen, buffer: buffer, tier: tierValue, settled: settled, ids: ids)
+
+	return rest
+end 'emitHashTierRequest'
+
+function buildHashInit(module StdModule, target Target)
+	let func = IrFunction.createFromStd(HashInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let drawn = module.addBlock(func, label: b"hidrawn", heat: BlockHeat.normal)
+	let tierStart = module.addBlock(func, label: b"hitier", heat: BlockHeat.normal)
+	let unset = module.addBlock(func, label: b"hiunset", heat: BlockHeat.normal)
+	let named = module.addBlock(func, label: b"hinamed", heat: BlockHeat.normal)
+	let unavailable = module.addBlock(func, label: b"hiunavailable", heat: BlockHeat.cold)
+	let unknown = module.addBlock(func, label: b"hiunknown", heat: BlockHeat.cold)
+	let settled = module.addBlock(func, label: b"hisettled", heat: BlockHeat.normal)
+
+	emitHashSeedDraw(module, func: func, entry: entry, drawn: drawn, ids: ids)
+	emitHashSeedFromEnvironment(module, func: func, block: drawn, next: tierStart, ids: ids)
+
+	let aesFlag = emitHashAesAvailable(module, block: tierStart, target: target, ids: ids)
+	let hasAes = emitCompareWithConstant(module, block: tierStart, value: aesFlag, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let softwareTier = emitConst(module, block: tierStart, value: HashTier.software.rawValue, ids: ids)
+	let aesTier = emitConst(module, block: tierStart, value: HashTier.aes.rawValue, ids: ids)
+	let best = emitSelectWord(module, block: tierStart, cond: hasAes, whenSet: aesTier, whenClear: softwareTier, ids: ids)
+
+	let request = emitReadEnvValueWhole(module, func: func, block: tierStart, name: HashTierEnvName, firstBytes: HashEnvValueBufBytes, ids: ids)
+
+	emitBranchOnCompare(module, block: request.block, value: request.written, pred: StdCmpPred.eq, against: 0, whenTrue: unset, whenFalse: named, ids: ids)
+	emitHashTierSettled(module, block: unset, buffer: request.buffer, tier: best, settled: settled, ids: ids)
+
+	let isAes = emitCStringEqualsLiteral(module, block: named, cstr: request.buffer, literal: HashTierAesName, ids: ids)
+	let isSoftware = emitCStringEqualsLiteral(module, block: named, cstr: request.buffer, literal: HashTierSoftwareName, ids: ids)
+	let printedLength = emitHashPrintedLength(module, block: named, value: request, ids: ids)
+	let one = emitConst(module, block: named, value: 1, ids: ids)
+
+	let afterAes = emitHashTierRequest(module, func: func, block: named, buffer: request.buffer, requested: isAes, available: hasAes, tier: HashTier.aes, refused: unavailable, settled: settled, ids: ids)
+	let afterSoftware = emitHashTierRequest(module, func: func, block: afterAes, buffer: request.buffer, requested: isSoftware, available: one, tier: HashTier.software, refused: unavailable, settled: settled, ids: ids)
+	module.setTerminator(afterSoftware, op: StdOp.branch(unknown.id))
+
+	let unavailableKind = emitConst(module, block: unavailable, value: HashRefusal.aesUnavailable.rawValue, ids: ids)
+	emitHashRefuseCall(module, block: unavailable, buffer: request.buffer, length: printedLength, kind: unavailableKind, ids: ids)
+
+	emitHashProcessState(module, block: settled, ids: ids)
+
+	let unknownKind = emitConst(module, block: unknown, value: HashRefusal.unknownTier.rawValue, ids: ids)
+	emitHashRefuseCall(module, block: unknown, buffer: request.buffer, length: printedLength, kind: unknownKind, ids: ids)
+
+	module.functions.push(func)
+end 'buildHashInit'
+
+function emitHashPrintedLength(module StdModule, block IrBlock, value SettledEnvRead, ids ValueMinter) returns ValueId
+	let fits = emitCmp(module, block: block, a: value.written, b: value.capacity, pred: StdCmpPred.lt, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let cappedLength = emitBin(module, block: block, a: value.capacity, b: one, opcode: StdBinOpcode.sub, ids: ids)
+
+	return emitSelectWord(module, block: block, cond: fits, whenSet: value.written, whenClear: cappedLength, ids: ids)
+end 'emitHashPrintedLength'
+
+function emitHashRefuseCall(module StdModule, block IrBlock, buffer ValueId, length ValueId, kind ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: HashRefuseName, args: threeArgs(buffer, second: length, third: kind)))
+	module.setTerminator(block, op: StdOp.retVoid)
+end 'emitHashRefuseCall'
+
+function emitHashHexNibble(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, ids ValueMinter) returns HashHexNibble
+	let position = emitConst(module, block: block, value: index, ids: ids)
+	let digit = emitLoadByteIndexed(module, block: block, base: cstr, index: position, ids: ids)
+
+	let atLeastZero = emitCompareWithConstant(module, block: block, value: digit, pred: StdCmpPred.ge, against: AsciiZeroDigit, ids: ids)
+	let atMostNine = emitCompareWithConstant(module, block: block, value: digit, pred: StdCmpPred.le, against: AsciiNineDigit, ids: ids)
+	let isDecimal = emitBin(module, block: block, a: atLeastZero, b: atMostNine, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	let caseBit = emitConst(module, block: block, value: HashHexCaseBit, ids: ids)
+	let folded = emitBin(module, block: block, a: digit, b: caseBit, opcode: StdBinOpcode.bitOr, ids: ids)
+	let atLeastA = emitCompareWithConstant(module, block: block, value: folded, pred: StdCmpPred.ge, against: HashHexLetterFirst, ids: ids)
+	let atMostF = emitCompareWithConstant(module, block: block, value: folded, pred: StdCmpPred.le, against: HashHexLetterLast, ids: ids)
+	let isLetter = emitBin(module, block: block, a: atLeastA, b: atMostF, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	let zero = emitConst(module, block: block, value: AsciiZeroDigit, ids: ids)
+	let letterBias = emitConst(module, block: block, value: HashHexLetterBias, ids: ids)
+	let decimalValue = emitBin(module, block: block, a: digit, b: zero, opcode: StdBinOpcode.sub, ids: ids)
+	let letterValue = emitBin(module, block: block, a: folded, b: letterBias, opcode: StdBinOpcode.sub, ids: ids)
+	let value = emitSelectWord(module, block: block, cond: isDecimal, whenSet: decimalValue, whenClear: letterValue, ids: ids)
+	let valid = emitBin(module, block: block, a: isDecimal, b: isLetter, opcode: StdBinOpcode.bitOr, ids: ids)
+
+	return HashHexNibble.create(value, valid: valid)
+end 'emitHashHexNibble'
+
+function emitHashSeedFromEnvironment(module StdModule, func IrFunction, block IrBlock, next IrBlock, ids ValueMinter)
+	let named = module.addBlock(func, label: b"hseednamed", heat: BlockHeat.normal)
+	let unset = module.addBlock(func, label: b"hseedunset", heat: BlockHeat.normal)
+	let pinned = module.addBlock(func, label: b"hseedpinned", heat: BlockHeat.normal)
+	let malformed = module.addBlock(func, label: b"hseedmalformed", heat: BlockHeat.cold)
+
+	let request = emitReadEnvValueWhole(module, func: func, block: block, name: HashSeedEnvName, firstBytes: HashEnvValueBufBytes, ids: ids)
+
+	emitBranchOnCompare(module, block: request.block, value: request.written, pred: StdCmpPred.eq, against: 0, whenTrue: unset, whenFalse: named, ids: ids)
+	emitSlabFree(module, block: unset, ptr: request.buffer, kind: SlabBufferKind.environmentValue, ids: ids)
+	module.setTerminator(unset, op: StdOp.branch(next.id))
+
+	var wellFormed = emitCompareWithConstant(module, block: named, value: request.written, pred: StdCmpPred.eq, against: HashSeedDigits, ids: ids)
+	let seedBytes = ValueIdArray.create(0)
+	let nibbleBits = emitConst(module, block: named, value: HashHexNibbleBits, ids: ids)
+
+	for pair in 0 upto HashSeedBytes 'eachSeedByte'
+		let high = emitHashHexNibble(module, block: named, cstr: request.buffer, index: pair * HashHexDigitsPerByte, ids: ids)
+		let low = emitHashHexNibble(module, block: named, cstr: request.buffer, index: pair * HashHexDigitsPerByte + 1, ids: ids)
+		let raised = emitBin(module, block: named, a: high.value, b: nibbleBits, opcode: StdBinOpcode.shl, ids: ids)
+
+		seedBytes.push(emitBin(module, block: named, a: raised, b: low.value, opcode: StdBinOpcode.bitOr, ids: ids))
+		wellFormed = emitBin(module, block: named, a: wellFormed, b: high.valid, opcode: StdBinOpcode.bitAnd, ids: ids)
+		wellFormed = emitBin(module, block: named, a: wellFormed, b: low.valid, opcode: StdBinOpcode.bitAnd, ids: ids)
+	end 'eachSeedByte'
+
+	emitBranchOnCompare(module, block: named, value: wellFormed, pred: StdCmpPred.ne, against: 0, whenTrue: pinned, whenFalse: malformed, ids: ids)
+
+	let seedAddr = ids.mint()
+	module.appendOp(pinned, op: StdOp.globalAddr(seedAddr, label: HashSeedLabel))
+
+	for (iter, seedByte) in seedBytes.withIterator() 'eachStoredByte'
+		module.appendOp(pinned, op: StdOp.storeIndirect(seedAddr, offset: iter.index() as ByteOffset, valueId: seedByte, valueType: StdType.u8))
+	end 'eachStoredByte'
+
+	emitSlabFree(module, block: pinned, ptr: request.buffer, kind: SlabBufferKind.environmentValue, ids: ids)
+	module.setTerminator(pinned, op: StdOp.branch(next.id))
+
+	let kind = emitConst(module, block: malformed, value: HashRefusal.unknownSeed.rawValue, ids: ids)
+	let printedLength = emitHashPrintedLength(module, block: malformed, value: request, ids: ids)
+	emitHashRefuseCall(module, block: malformed, buffer: request.buffer, length: printedLength, kind: kind, ids: ids)
+end 'emitHashSeedFromEnvironment'
+
+function emitHashRefusalMessage(module StdModule, func IrFunction, block IrBlock, value ValueId, length ValueId, prefix ByteArray, tail ByteArray, ids ValueMinter)
+	let prefixBytes = emitConst(module, block: block, value: prefix.count() as FullRangeInt, ids: ids)
+	let tailBytes = emitConst(module, block: block, value: tail.count() as FullRangeInt, ids: ids)
+	let withPrefix = emitBin(module, block: block, a: prefixBytes, b: length, opcode: StdBinOpcode.add, ids: ids)
+	let total = emitBin(module, block: block, a: withPrefix, b: tailBytes, opcode: StdBinOpcode.add, ids: ids)
+	let message = emitSlabAlloc(module, block: block, bytes: total, kind: SlabBufferKind.hostText, ids: ids)
+
+	emitStoreLiteralBytes(module, block: block, base: message, offset: 0, text: prefix, ids: ids)
+
+	let valueAt = emitBin(module, block: block, a: message, b: prefixBytes, opcode: StdBinOpcode.add, ids: ids)
+	let copied = emitForwardCopy(module, func: func, cur: block, dest: valueAt, src: value, byteCount: length, ids: ids)
+	let tailAt = emitBin(module, block: copied, a: valueAt, b: length, opcode: StdBinOpcode.add, ids: ids)
+
+	emitStoreLiteralBytes(module, block: copied, base: tailAt, offset: 0, text: tail, ids: ids)
+	emitAbortWithText(module, func: func, block: copied, text: message, length: total, code: HashRefusalExitCode, ids: ids)
+end 'emitHashRefusalMessage'
+
+function emitHashRefusalArm(module StdModule, func IrFunction, block IrBlock, kind ValueId, refusal HashRefusal, prefix ByteArray, tail ByteArray, next IrBlock, value ValueId, length ValueId, ids ValueMinter)
+	let arm = module.addBlock(func, label: b"hrarm", heat: BlockHeat.cold)
+
+	emitBranchOnCompare(module, block: block, value: kind, pred: StdCmpPred.eq, against: refusal.rawValue, whenTrue: arm, whenFalse: next, ids: ids)
+	emitHashRefusalMessage(module, func: func, block: arm, value: value, length: length, prefix: prefix, tail: tail, ids: ids)
+end 'emitHashRefusalArm'
+
+function hashUnknownTierTail() returns ByteArray
+	let tail = ByteArray.create(0)
+
+	tail.append(HashRefusalUnknownLead)
+	tail.append(HashTierAesName)
+	tail.append(HashRefusalUnknownSeparator)
+	tail.append(HashTierSoftwareName)
+	tail.append(HashRefusalLineEnd)
+
+	return tail
+end 'hashUnknownTierTail'
+
+function hashAesUnavailableTail() returns ByteArray
+	let tail = ByteArray.create(0)
+
+	tail.append(HashRefusalUnavailableLead)
+	tail.append(HashTierSoftwareName)
+	tail.append(HashRefusalLineEnd)
+
+	return tail
+end 'hashAesUnavailableTail'
+
+function buildHashRefuse(module StdModule)
+	let func = IrFunction.createFromStd(HashRefuseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let afterUnknown = module.addBlock(func, label: b"hrafterunknown", heat: BlockHeat.normal)
+	let afterAes = module.addBlock(func, label: b"hrafteraes", heat: BlockHeat.normal)
+	let impossible = module.addBlock(func, label: b"hrimpossible", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 3)
+	let value = 0
+	let length = 1
+	let kind = 2
+
+	emitHashRefusalArm(module, func: func, block: entry, kind: kind, refusal: HashRefusal.unknownTier, prefix: HashTierRefusalPrefix, tail: hashUnknownTierTail(), next: afterUnknown, value: value, length: length, ids: ids)
+	emitHashRefusalArm(module, func: func, block: afterUnknown, kind: kind, refusal: HashRefusal.aesUnavailable, prefix: HashTierRefusalPrefix, tail: hashAesUnavailableTail(), next: afterAes, value: value, length: length, ids: ids)
+	emitHashRefusalArm(module, func: func, block: afterAes, kind: kind, refusal: HashRefusal.unknownSeed, prefix: HashSeedRefusalPrefix, tail: HashSeedRefusalTail, next: impossible, value: value, length: length, ids: ids)
+	emitRuntimeFatal(module, func: func, block: impossible, fatal: RuntimeFatal.hashRefusalOfNoKnownKind, ids: ids)
+
+	module.functions.push(func)
+end 'buildHashRefuse'
+
+function buildHashRun(module StdModule, target Target)
+	let func = IrFunction.createFromStd(HashRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let data = 0
+	let count = 1
+	let seed = 2
+
+	if hashHasAesTier(target) 'tierDispatch'
+		emitHashTierDispatch(module, func: func, entry: entry, data: data, count: count, seed: seed, ids: ids)
+	end 'tierDispatch' else 'softwareOnly'
+		emitCallAndReturn(module, block: entry, callee: HashSoftwareName, args: threeArgs(data, second: count, third: seed), ids: ids)
+	end 'softwareOnly'
+
+	module.functions.push(func)
+end 'buildHashRun'
+
+function emitHashTierDispatch(module StdModule, func IrFunction, entry IrBlock, data ValueId, count ValueId, seed ValueId, ids ValueMinter)
+	let aes = module.addBlock(func, label: b"hdaes", heat: BlockHeat.normal)
+	let software = module.addBlock(func, label: b"hdsoftware", heat: BlockHeat.normal)
+
+	let tier = emitLoadGlobalWord(module, block: entry, label: HashTierLabel, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: tier, pred: StdCmpPred.eq, against: HashTier.aes.rawValue, whenTrue: aes, whenFalse: software, ids: ids)
+
+	let unused = emitConst(module, block: aes, value: 0, ids: ids)
+	let answer = ids.mint()
+	module.appendOp(aes, op: StdOp.cryptoRoutine(answer, routine: CryptoRoutine.aesHash, a0Id: data, a1Id: count, a2Id: seed, a3Id: unused))
+	module.setTerminator(aes, op: StdOp.ret(answer))
+
+	emitCallAndReturn(module, block: software, callee: HashSoftwareName, args: threeArgs(data, second: count, third: seed), ids: ids)
+end 'emitHashTierDispatch'
+
+function buildHashElementsStored(module StdModule)
+	let func = IrFunction.createFromStd(HashElementsStoredName, returnType: StdReturnType.value(valueTagToStdType(ValueTypeTag.boolean)), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let table = 0
+
+	let stored = emitLoadField(module, block: entry, record: table, offset: WitnessStorageHashedOffset, ids: ids)
+	let verdict = emitCompareWithConstant(module, block: entry, value: stored, pred: StdCmpPred.ne, against: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(verdict))
+
+	module.functions.push(func)
+end 'buildHashElementsStored'
+
+function buildHashBytes(module StdModule)
+	let func = IrFunction.createFromStd(HashBytesRuntimeName, returnType: StdReturnType.value(StdType.i64), paramCount: HashBytesParams, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(HashBytesParams)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let hashing = module.addBlock(func, label: b"hbhash", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"hbbad", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: HashBytesParams)
+	let bytes = 0
+	let at = 1
+	let count = 2
+	let seed = 3
+
+	emitLengthSpanGuards(module, func: func, entry: entry, next: hashing, refused: bad, arr: bytes, at: at, length: count, prefix: "hb", ids: ids)
+
+	let base = emitLoadField(module, block: hashing, record: bytes, offset: ManagedRecordBufferOffset, ids: ids)
+	let data = emitBin(module, block: hashing, a: base, b: at, opcode: StdBinOpcode.add, ids: ids)
+	emitCallAndReturn(module, block: hashing, callee: HashRunName, args: threeArgs(data, second: count, third: seed), ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: bad, fatal: RuntimeFatal.cryptoBufferOutOfRange, ids: ids)
+
+	module.functions.push(func)
+end 'buildHashBytes'
+
+function buildHashWord(module StdModule, target Target)
+	let func = IrFunction.createFromStd(HashWordRuntimeName, returnType: StdReturnType.value(StdType.i64), paramCount: HashWordParams, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(HashWordParams)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: HashWordParams)
+	let word = 0
+	let seed = 1
+
+	if hashHasAesTier(target) 'tierDispatch'
+		func.stackSize = HashWordBytes
+
+		let scratch = ids.mint()
+		module.appendOp(entry, op: StdOp.stackRecordAddr(scratch, slot: HashScratchSlot))
+		emitStoreField(module, block: entry, record: scratch, offset: 0, value: word)
+
+		let length = emitConst(module, block: entry, value: HashWordBytes, ids: ids)
+		emitCallAndReturn(module, block: entry, callee: HashRunName, args: threeArgs(scratch, second: length, third: seed), ids: ids)
+	end 'tierDispatch' else 'softwareOnly'
+		let state = emitHashSoftwareState(module, block: entry, seed: seed, ids: ids)
+		emitHashFinish(module, block: entry, low: word, high: word, state: state, count: emitConst(module, block: entry, value: HashWordBytes, ids: ids), ids: ids)
+	end 'softwareOnly'
+
+	module.functions.push(func)
+end 'buildHashWord'
+
+function emitHashMulHigh(module StdModule, block IrBlock, left ValueId, right ValueId, ids ValueMinter) returns ValueId
+	let halfBits = emitConst(module, block: block, value: HashSoftwareHalfBits, ids: ids)
+	let halfMask = emitConst(module, block: block, value: HashSoftwareHalfMask, ids: ids)
+	let leftLow = emitBin(module, block: block, a: left, b: halfMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let leftHigh = emitBin(module, block: block, a: left, b: halfBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let rightLow = emitBin(module, block: block, a: right, b: halfMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let rightHigh = emitBin(module, block: block, a: right, b: halfBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+
+	let lowProduct = emitBin(module, block: block, a: leftLow, b: rightLow, opcode: StdBinOpcode.mul, ids: ids)
+	let crossLeft = emitBin(module, block: block, a: leftHigh, b: rightLow, opcode: StdBinOpcode.mul, ids: ids)
+	let crossRight = emitBin(module, block: block, a: leftLow, b: rightHigh, opcode: StdBinOpcode.mul, ids: ids)
+	let highProduct = emitBin(module, block: block, a: leftHigh, b: rightHigh, opcode: StdBinOpcode.mul, ids: ids)
+
+	let lowCarry = emitBin(module, block: block, a: lowProduct, b: halfBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let crossLeftLow = emitBin(module, block: block, a: crossLeft, b: halfMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let crossRightLow = emitBin(module, block: block, a: crossRight, b: halfMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let carried = emitBin(module, block: block, a: lowCarry, b: crossLeftLow, opcode: StdBinOpcode.add, ids: ids)
+	let middle = emitBin(module, block: block, a: carried, b: crossRightLow, opcode: StdBinOpcode.add, ids: ids)
+
+	let crossLeftHigh = emitBin(module, block: block, a: crossLeft, b: halfBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let crossRightHigh = emitBin(module, block: block, a: crossRight, b: halfBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let middleHigh = emitBin(module, block: block, a: middle, b: halfBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let upper = emitBin(module, block: block, a: highProduct, b: crossLeftHigh, opcode: StdBinOpcode.add, ids: ids)
+	let upperCarried = emitBin(module, block: block, a: upper, b: crossRightHigh, opcode: StdBinOpcode.add, ids: ids)
+
+	return emitBin(module, block: block, a: upperCarried, b: middleHigh, opcode: StdBinOpcode.add, ids: ids)
+end 'emitHashMulHigh'
+
+function emitHashFold(module StdModule, block IrBlock, left ValueId, right ValueId, ids ValueMinter) returns ValueId
+	let product = emitBin(module, block: block, a: left, b: right, opcode: StdBinOpcode.mul, ids: ids)
+	let high = emitHashMulHigh(module, block: block, left: left, right: right, ids: ids)
+	let folded = emitBin(module, block: block, a: product, b: high, opcode: StdBinOpcode.bitXor, ids: ids)
+	let operands = emitBin(module, block: block, a: left, b: right, opcode: StdBinOpcode.bitXor, ids: ids)
+
+	return emitBin(module, block: block, a: folded, b: operands, opcode: StdBinOpcode.bitXor, ids: ids)
+end 'emitHashFold'
+
+function emitHashSoftwareState(module StdModule, block IrBlock, seed ValueId, ids ValueMinter) returns ValueId
+	let firstSecret = emitConst(module, block: block, value: HashSoftwareFirstSecret as FullRangeInt, ids: ids)
+
+	return emitBin(module, block: block, a: seed, b: firstSecret, opcode: StdBinOpcode.bitXor, ids: ids)
+end 'emitHashSoftwareState'
+
+function emitHashFinish(module StdModule, block IrBlock, low ValueId, high ValueId, state ValueId, count ValueId, ids ValueMinter)
+	let secondSecret = emitConst(module, block: block, value: HashSoftwareSecondSecret as FullRangeInt, ids: ids)
+	let first = emitBin(module, block: block, a: low, b: secondSecret, opcode: StdBinOpcode.bitXor, ids: ids)
+	let second = emitBin(module, block: block, a: high, b: state, opcode: StdBinOpcode.bitXor, ids: ids)
+	let lowProduct = emitBin(module, block: block, a: first, b: second, opcode: StdBinOpcode.mul, ids: ids)
+	let highProduct = emitHashMulHigh(module, block: block, left: first, right: second, ids: ids)
+
+	let firstSecret = emitConst(module, block: block, value: HashSoftwareFirstSecret as FullRangeInt, ids: ids)
+	let lowKept = emitBin(module, block: block, a: lowProduct, b: first, opcode: StdBinOpcode.bitXor, ids: ids)
+	let highKept = emitBin(module, block: block, a: highProduct, b: second, opcode: StdBinOpcode.bitXor, ids: ids)
+	let keyed = emitBin(module, block: block, a: lowKept, b: firstSecret, opcode: StdBinOpcode.bitXor, ids: ids)
+	let left = emitBin(module, block: block, a: keyed, b: count, opcode: StdBinOpcode.bitXor, ids: ids)
+	let right = emitBin(module, block: block, a: highKept, b: secondSecret, opcode: StdBinOpcode.bitXor, ids: ids)
+
+	module.setTerminator(block, op: StdOp.ret(emitHashFold(module, block: block, left: left, right: right, ids: ids)))
+end 'emitHashFinish'
+
+function emitHashLoadBehind(module StdModule, block IrBlock, spanEnd ValueId, behind FullRangeInt, loaded StdType, ids ValueMinter) returns ValueId
+	let address = emitBin(module, block: block, a: spanEnd, b: emitConst(module, block: block, value: behind, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let value = ids.mint()
+
+	module.appendOp(block, op: StdOp.loadIndirect(value, addrId: address, offset: 0, valueType: loaded))
+
+	return value
+end 'emitHashLoadBehind'
+
+// Both multiply operands are keyed with the running state, so no input word chosen without the seed can
+// zero one and collapse the lane.
+function emitHashPairStep(module StdModule, block IrBlock, position ValueId, offset FullRangeInt, state ValueId, secret MachineWord, ids ValueMinter) returns ValueId
+	let low = emitLoadField(module, block: block, record: position, offset: offset as ByteOffset, ids: ids)
+	let high = emitLoadField(module, block: block, record: position, offset: (offset + HashSoftwareWordBytes) as ByteOffset, ids: ids)
+	let lowSecret = emitBin(module, block: block, a: low, b: emitConst(module, block: block, value: secret as FullRangeInt, ids: ids), opcode: StdBinOpcode.bitXor, ids: ids)
+	let lowKeyed = emitBin(module, block: block, a: lowSecret, b: state, opcode: StdBinOpcode.bitXor, ids: ids)
+	let highKeyed = emitBin(module, block: block, a: high, b: state, opcode: StdBinOpcode.bitXor, ids: ids)
+
+	return emitHashFold(module, block: block, left: lowKeyed, right: highKeyed, ids: ids)
+end 'emitHashPairStep'
+
+function addI64BlockArg(block IrBlock, ids ValueMinter) returns ValueId
+	let arg = ids.mint()
+	block.blockArgs.push(IrBlockArg.create(arg, argType: StdType.i64))
+
+	return arg
+end 'addI64BlockArg'
+
+function emitHashSoftwareShort(module StdModule, func IrFunction, shortPath IrBlock, data ValueId, count ValueId, state ValueId, ids ValueMinter)
+	let wide = module.addBlock(func, label: b"hswide", heat: BlockHeat.normal)
+	let notWide = module.addBlock(func, label: b"hsnotwide", heat: BlockHeat.normal)
+	let half = module.addBlock(func, label: b"hshalf", heat: BlockHeat.normal)
+	let notHalf = module.addBlock(func, label: b"hsnothalf", heat: BlockHeat.normal)
+	let bytes = module.addBlock(func, label: b"hsbytes", heat: BlockHeat.normal)
+	let empty = module.addBlock(func, label: b"hsempty", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: shortPath, value: count, pred: StdCmpPred.ge, against: HashSoftwareWordBytes, whenTrue: wide, whenFalse: notWide, ids: ids)
+	emitBranchOnCompare(module, block: notWide, value: count, pred: StdCmpPred.ge, against: HashSoftwareHalfWordBytes, whenTrue: half, whenFalse: notHalf, ids: ids)
+	emitBranchOnCompare(module, block: notHalf, value: count, pred: StdCmpPred.gt, against: 0, whenTrue: bytes, whenFalse: empty, ids: ids)
+
+	let wideEnd = emitBin(module, block: wide, a: data, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let wideLow = emitLoadField(module, block: wide, record: data, offset: 0, ids: ids)
+	let wideHigh = emitHashLoadBehind(module, block: wide, spanEnd: wideEnd, behind: HashSoftwareWordBytes, loaded: StdType.i64, ids: ids)
+	emitHashFinish(module, block: wide, low: wideLow, high: wideHigh, state: state, count: count, ids: ids)
+
+	let halfEnd = emitBin(module, block: half, a: data, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let halfHead = ids.mint()
+	module.appendOp(half, op: StdOp.loadIndirect(halfHead, addrId: data, offset: 0, valueType: StdType.u32))
+	let halfTail = emitHashLoadBehind(module, block: half, spanEnd: halfEnd, behind: HashSoftwareHalfWordBytes, loaded: StdType.u32, ids: ids)
+	let halfShifted = emitBin(module, block: half, a: halfTail, b: emitConst(module, block: half, value: HashSoftwareHalfBits, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let halfLow = emitBin(module, block: half, a: halfHead, b: halfShifted, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitHashFinish(module, block: half, low: halfLow, high: emitConst(module, block: half, value: 0, ids: ids), state: state, count: count, ids: ids)
+
+	let bytesEnd = emitBin(module, block: bytes, a: data, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let firstByte = emitLoadByteAt(module, block: bytes, addr: data, ids: ids)
+	let middleOffset = emitBin(module, block: bytes, a: count, b: emitConst(module, block: bytes, value: 1, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let middleByte = emitLoadByteIndexed(module, block: bytes, base: data, index: middleOffset, ids: ids)
+	let lastByte = emitHashLoadBehind(module, block: bytes, spanEnd: bytesEnd, behind: 1, loaded: StdType.u8, ids: ids)
+	let middleShifted = emitBin(module, block: bytes, a: middleByte, b: emitConst(module, block: bytes, value: HashSoftwareSecondByteShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let lastShifted = emitBin(module, block: bytes, a: lastByte, b: emitConst(module, block: bytes, value: HashSoftwareThirdByteShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let firstTwo = emitBin(module, block: bytes, a: firstByte, b: middleShifted, opcode: StdBinOpcode.bitOr, ids: ids)
+	let bytesLow = emitBin(module, block: bytes, a: firstTwo, b: lastShifted, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitHashFinish(module, block: bytes, low: bytesLow, high: emitConst(module, block: bytes, value: 0, ids: ids), state: state, count: count, ids: ids)
+
+	emitHashFinish(module, block: empty, low: emitConst(module, block: empty, value: 0, ids: ids), high: emitConst(module, block: empty, value: 0, ids: ids), state: state, count: count, ids: ids)
+end 'emitHashSoftwareShort'
+
+function emitHashSoftwareLong(module StdModule, func IrFunction, longPath IrBlock, data ValueId, count ValueId, state ValueId, ids ValueMinter)
+	let strideEntry = module.addBlock(func, label: b"hsstrideentry", heat: BlockHeat.normal)
+	let pairEntry = module.addBlock(func, label: b"hspairentry", heat: BlockHeat.normal)
+	let strideHead = module.addBlock(func, label: b"hsstridehead", heat: BlockHeat.normal)
+	let strideBody = module.addBlock(func, label: b"hsstridebody", heat: BlockHeat.normal)
+	let strideDone = module.addBlock(func, label: b"hsstridedone", heat: BlockHeat.normal)
+	let pairHead = module.addBlock(func, label: b"hspairhead", heat: BlockHeat.normal)
+	let pairBody = module.addBlock(func, label: b"hspairbody", heat: BlockHeat.normal)
+	let pairDone = module.addBlock(func, label: b"hspairdone", heat: BlockHeat.normal)
+
+	emitBranchOnCompare(module, block: longPath, value: count, pred: StdCmpPred.gt, against: HashSoftwareStrideBytes, whenTrue: strideEntry, whenFalse: pairEntry, ids: ids)
+	emitBranchCarrying(module, from: strideEntry, to: strideHead, values: fiveArgs(data, second: count, third: state, fourth: state, fifth: state))
+	emitBranchCarrying(module, from: pairEntry, to: pairHead, values: threeArgs(data, second: count, third: state))
+
+	let stridePosition = addI64BlockArg(strideHead, ids: ids)
+	let strideRemaining = addI64BlockArg(strideHead, ids: ids)
+	let strideFirst = addI64BlockArg(strideHead, ids: ids)
+	let strideSecond = addI64BlockArg(strideHead, ids: ids)
+	let strideThird = addI64BlockArg(strideHead, ids: ids)
+	emitBranchOnCompare(module, block: strideHead, value: strideRemaining, pred: StdCmpPred.gt, against: HashSoftwareStrideBytes, whenTrue: strideBody, whenFalse: strideDone, ids: ids)
+
+	let nextFirst = emitHashPairStep(module, block: strideBody, position: stridePosition, offset: 0, state: strideFirst, secret: HashSoftwareSecondSecret, ids: ids)
+	let nextSecond = emitHashPairStep(module, block: strideBody, position: stridePosition, offset: HashSoftwareStrideSecondOffset, state: strideSecond, secret: HashSoftwareThirdSecret, ids: ids)
+	let nextThird = emitHashPairStep(module, block: strideBody, position: stridePosition, offset: HashSoftwareStrideThirdOffset, state: strideThird, secret: HashSoftwareFourthSecret, ids: ids)
+	let strideBytes = emitConst(module, block: strideBody, value: HashSoftwareStrideBytes, ids: ids)
+	let nextPosition = emitBin(module, block: strideBody, a: stridePosition, b: strideBytes, opcode: StdBinOpcode.add, ids: ids)
+	let nextRemaining = emitBin(module, block: strideBody, a: strideRemaining, b: strideBytes, opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchCarrying(module, from: strideBody, to: strideHead, values: fiveArgs(nextPosition, second: nextRemaining, third: nextFirst, fourth: nextSecond, fifth: nextThird))
+
+	let firstTwo = emitBin(module, block: strideDone, a: strideFirst, b: strideSecond, opcode: StdBinOpcode.bitXor, ids: ids)
+	let merged = emitBin(module, block: strideDone, a: firstTwo, b: strideThird, opcode: StdBinOpcode.bitXor, ids: ids)
+	emitBranchCarrying(module, from: strideDone, to: pairHead, values: threeArgs(stridePosition, second: strideRemaining, third: merged))
+
+	let pairPosition = addI64BlockArg(pairHead, ids: ids)
+	let pairRemaining = addI64BlockArg(pairHead, ids: ids)
+	let pairState = addI64BlockArg(pairHead, ids: ids)
+	emitBranchOnCompare(module, block: pairHead, value: pairRemaining, pred: StdCmpPred.gt, against: HashSoftwarePairBytes, whenTrue: pairBody, whenFalse: pairDone, ids: ids)
+
+	let nextState = emitHashPairStep(module, block: pairBody, position: pairPosition, offset: 0, state: pairState, secret: HashSoftwareSecondSecret, ids: ids)
+	let pairBytes = emitConst(module, block: pairBody, value: HashSoftwarePairBytes, ids: ids)
+	let advanced = emitBin(module, block: pairBody, a: pairPosition, b: pairBytes, opcode: StdBinOpcode.add, ids: ids)
+	let remaining = emitBin(module, block: pairBody, a: pairRemaining, b: pairBytes, opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchCarrying(module, from: pairBody, to: pairHead, values: threeArgs(advanced, second: remaining, third: nextState))
+
+	let spanEnd = emitBin(module, block: pairDone, a: data, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let low = emitHashLoadBehind(module, block: pairDone, spanEnd: spanEnd, behind: HashSoftwarePairBytes, loaded: StdType.i64, ids: ids)
+	let high = emitHashLoadBehind(module, block: pairDone, spanEnd: spanEnd, behind: HashSoftwareWordBytes, loaded: StdType.i64, ids: ids)
+	emitHashFinish(module, block: pairDone, low: low, high: high, state: pairState, count: count, ids: ids)
+end 'emitHashSoftwareLong'
+
+function buildHashSoftware(module StdModule)
+	let func = IrFunction.createFromStd(HashSoftwareName, returnType: StdReturnType.value(StdType.i64), paramCount: HashSoftwareParams, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(HashSoftwareParams)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let shortPath = module.addBlock(func, label: b"hsshort", heat: BlockHeat.normal)
+	let longPath = module.addBlock(func, label: b"hslong", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: HashSoftwareParams)
+	let data = 0
+	let count = 1
+	let seed = 2
+
+	let state = emitHashSoftwareState(module, block: entry, seed: seed, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: count, pred: StdCmpPred.gt, against: HashSoftwarePairBytes, whenTrue: longPath, whenFalse: shortPath, ids: ids)
+
+	emitHashSoftwareShort(module, func: func, shortPath: shortPath, data: data, count: count, state: state, ids: ids)
+	emitHashSoftwareLong(module, func: func, longPath: longPath, data: data, count: count, state: state, ids: ids)
+
+	module.functions.push(func)
+end 'buildHashSoftware'

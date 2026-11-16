@@ -3282,7 +3282,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2073: <fragment>:3:30: `__ManagedFile` static 'readAll' — the type has exactly these ten: `openRead`, `openWrite`, `openWriteExecutable`, `openCreateNew`, `exists`, `delete`, `rename`, `stat`, `statField` and `statFree`
+error E2073: <fragment>:3:30: `__ManagedFile` static 'readAll' — the type has exactly these eleven: `openRead`, `openWrite`, `openWriteExecutable`, `openCreateNew`, `exists`, `delete`, `rename`, `renameNew`, `stat`, `statField` and `statFree`
 ```
 
 <!-- test: async-await.error.qualified-spawn-container-alias-static -->

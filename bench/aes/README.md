@@ -13,11 +13,10 @@ It is an INSTRUMENT: it exits 0 whatever the ratio is. Non-zero means the measur
 
 ```
 bench/aes/
-  aes.maxon            the Maxon program
-  go/main.go           the Go program (crypto/aes, crypto/cipher)
-  go/clock_windows.go  the Go timing clock on Windows: QueryPerformanceCounter
-  go/clock_other.go    the Go timing clock elsewhere, wasip1 included: time.Since
-  go/go.mod            the Go module (maxon.dev/bench/aes), which needs Go 1.27 or newer
+  aes.maxon            the Maxon program: its fixtures and workloads; the shared half is bench/common/BenchProgram.maxon
+  go/main.go           the Go program (crypto/aes, crypto/cipher); the shared half is bench/common/go
+  go/go.mod            the Go module (maxon.dev/bench/aes), which needs Go 1.27 or newer, and replaces
+                       maxon.dev/bench/common with ../../common/go
   out/                 builds, ref compilers and profiles (gitignored)
 tests/examples/bench-aes.maxtest
                        builds aes.maxon and checks every line but the time against Go crypto/aes's
@@ -70,13 +69,13 @@ workload bytesPerOp iterations repeats bestNanos digest
 1-based position, modulo 2^24, so two arms that computed different bytes print different lines.
 
 Before the workload lines each program prints one line, `clock resolutionNanos`, the smallest step its timing
-clock makes. The Maxon program reads `Clock.nowNanos()` and measures the smallest step between two distinct
+clock makes (both halves of the program live in `bench/common`, which `bench/common/README.md` describes). The Maxon program reads `Clock.nowNanos()` and measures the smallest step between two distinct
 readings. The Go program times with `QueryPerformanceCounter` on Windows, because `time.Now` there moves in
 0.5 ms steps and biases a short row low; the counter's period is the resolution. Elsewhere it times with
 `time.Since` and measures the smallest step between two distinct readings.
 
 On wasm the Maxon program reads no arguments and runs 5 repeats at divisor 10. ⚠ **These are coupled to
-the harness:** `defaultRepeats` and `wasmDivisor` in `aes.maxon` equal `REPEATS` and `WASM_DIVISOR` in
+the harness:** `defaultRepeats` and `wasmDivisor` in `bench/common/BenchProgram.maxon` equal `REPEATS` and `WASM_DIVISOR` in
 `scripts/bench-aes.py`, which hands them to the Go arms. A mismatch fails the run's agreement check on
 iterations and repeats.
 
@@ -108,11 +107,11 @@ The script needs Python 3 and only the standard library.
 
 - **Go is located** by `scripts/bench_common.py`: `MAXON_GO`, then `go` on `PATH`, then
   `C:\Program Files\Go\bin\go.exe` on Windows or `~/.local/go/bin/go` elsewhere. It builds with
-  `GOTOOLCHAIN=local`. Each Go variant lands in `out/<lane>/go/`, cached by a hash of `go/`'s sources,
+  `GOTOOLCHAIN=local`. Each Go variant lands in `out/<lane>/go/`, cached by a hash of `go/`'s and `bench/common/go`'s sources,
   the `go version` line, the target settings `go env` reports and the build flags.
 - **Maxon is built once per arm** into `out/<lane>/<arm>/`: `slot`, `--ref <sha>` (a compiler built from
   that commit, the way every bench harness builds one), or `--compiler <path> --label <name>`. Each arm
-  compiles its own checkout's `bench/aes/aes.maxon`; a `--ref` arm's copy is read from its commit.
+  compiles its own checkout's `bench/aes/aes.maxon` together with `bench/common/BenchProgram.maxon`; a `--ref` arm compiles what its commit holds: its own `aes.maxon`, and the shared source only if the commit has it.
 - **A ref's compiler is kept as the binary plus the `stdlib/`, `runtime/` and `scriptlib/` directories
   it finds by walking up from itself**, in `out/ref-<sha>/`; the worktree it was built in is deleted as
   soon as it is built. A later run with the same sha reuses it. `--keep-refs N` (default 8) bounds the
@@ -150,5 +149,9 @@ The script needs Python 3 and only the standard library.
   file is only ever appended to, by the tool.
 - **Exit codes:** 0 a completed measurement; 1 a verification failure; 2 a build failure, no Go toolchain
   or no wasmtime; 3 usage. A run on the Mac exits with the Mac job's code.
+
+Rows measured before `bench/common` took over the timing loop and rows measured after are not strictly comparable: the
+Go program now calls `runtime.GC()` before each repeat, outside the timer, and the Maxon program now releases the
+previous repeat's bytes after its clock read, where the old loop released them in the interval it timed.
 
 Measure on an otherwise idle machine: the interleaving cancels drift, and contention stays in the numbers.

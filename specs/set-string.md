@@ -17,7 +17,7 @@ drop does not double-free). The mechanism mirrors `Array with String`: the eleme
 (`__str_decref`) is stored in the set record at creation and read back at each slot-vacating op, so the
 runtime stays key-type-agnostic while owning the keys correctly.
 
-`String.hash()` is djb2 over the bytes and `String.equals` is content equality (`string-conformance`), so a
+`String.hash()` is `Hasher`'s seeded hash of the bytes and `String.equals` is content equality (`string-conformance`), so a
 `String`-keyed set deduplicates by VALUE — two distinct `"a"` allocations are one member. The witness
 dispatch rides the x64 rdata function-pointer relocation, so these tests are x64-only (as the
 `string-conformance` and `set` witness cases are).

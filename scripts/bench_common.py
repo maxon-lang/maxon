@@ -1,10 +1,12 @@
 import argparse
 import csv
+import dataclasses
 import datetime
 import hashlib
 import json
 import os
 import pathlib
+import platform
 import re
 import shutil
 import stat
@@ -12,6 +14,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -72,6 +75,42 @@ STDLIB_DIR_NAME = "stdlib"
 LIBRARY_DIR_NAMES = (STDLIB_DIR_NAME, "runtime", "scriptlib")
 DEFAULT_KEEP_REFS = 8
 PARTIAL_SUFFIX = ".partial"
+CPUINFO_PATH = "/proc/cpuinfo"
+CPUINFO_MODEL_KEY = "model name"
+MACOS_CPU_BRAND_KEY = "machdep.cpu.brand_string"
+GO_MODULE_FILE = "go.mod"
+GO_SOURCE_SUFFIX = ".go"
+GO_PACKAGE = "."
+X64_MACHINES = ("amd64", "x86_64")
+ARM64_MACHINES = ("arm64", "aarch64")
+GO_OUT_DIR_NAME = "go"
+COMMON_DIR = os.path.join(REPO, "bench", "common")
+COMMON_MAXON_SOURCE = os.path.join(COMMON_DIR, "BenchProgram.maxon")
+COMMON_GO_DIR = os.path.join(COMMON_DIR, "go")
+LOG_TEXT_WIDTH = 104
+LOG_SHARED_BULLETS = (
+    "**Rows are appended by the tool, never by hand.** A run without `--note` records nothing; a run with one records unconditionally. "
+    "The note says WHY the number moved - the instrument cannot.",
+    "**This is an instrument, not a gate.** There is nothing to pass; a row that did not move is a datapoint, and a row that moved "
+    "the wrong way is a reading to explain.",
+    "**Rows rot.** Re-measure before planning from one; an A/B is two arms in ONE session, interleaved, never a before/after across "
+    "a source change.",
+)
+OUTPUT_FIELDS = 6
+OUTPUT_LAYOUT = "workload bytesPerOp iterations repeats bestNanos digest"
+CLOCK_LINE = "clock"
+CLOCK_FIELDS = 2
+CLOCK_LAYOUT = "clock resolutionNanos"
+# A timed interval is wrong by under one clock tick, so 1000 ticks bounds the error at 0.1%.
+RESOLVABLE_TICKS = 1000
+KIND_MAXON = "maxon"
+KIND_GO = "go"
+BYTES_PER_MB_PER_NS = 1e3
+NANOS_PER_MICRO = 1e3
+NO_CELL = "-"
+MIN_TABLE_COLUMN_WIDTH = 16
+MIN_RATIO_COLUMN_WIDTH = 18
+WORKLOAD_COLUMN_WIDTH = 18
 
 
 class BuildFailure(Exception):
@@ -246,6 +285,24 @@ def arm_source(planned, out_dir, source):
     return path
 
 
+def ref_holds(planned, relative):
+    """Whether the ref arm's commit has the file at this repository-relative path."""
+    posix = relative.replace(os.sep, "/")
+    return subprocess.run(["git", "-C", REPO, "cat-file", "-e", f"{planned['sha']}:{posix}"], capture_output=True).returncode == 0
+
+
+def arm_companions(planned, out_dir, companions):
+    """The companion sources this arm compiles beside its program. A ref arm compiles what its commit holds, so a
+    companion the commit lacks (a program that predates the shared source it is built with now) is left out."""
+    held = []
+    for companion in companions:
+        relative = repo_relative(companion)
+        if is_ref_arm(planned) and relative is not None and not ref_holds(planned, relative):
+            continue
+        held.append(arm_source(planned, out_dir, companion))
+    return held
+
+
 def write_ref_source(planned, out_dir, relative):
     posix = relative.replace(os.sep, "/")
     blob = subprocess.run(["git", "-C", REPO, "cat-file", "blob", f"{planned['sha']}:{posix}"], capture_output=True)
@@ -294,35 +351,44 @@ def interleave(runnables, name_of, warmup, runs, measure_one):
     return measured
 
 
-def compile_in_arm(compiler, label, arm_dir, source, stem, build_args=(), exe_suffix=EXE):
+def compile_in_arm(compiler, label, arm_dir, source, stem, build_args=(), exe_suffix=EXE, companions=()):
+    """Stage `source` as `<stem>.maxon` and each companion source under its own name, then build them as one program."""
     os.makedirs(arm_dir, exist_ok=True)
     staged_name = stem + ".maxon"
     shutil.copyfile(source, os.path.join(arm_dir, staged_name))
-    r = run([compiler, "build", staged_name] + list(build_args), cwd=arm_dir)
+    companion_names = [os.path.basename(companion) for companion in companions]
+    for companion, name in zip(companions, companion_names):
+        shutil.copyfile(companion, os.path.join(arm_dir, name))
+    r = run([compiler, "build", staged_name] + companion_names + list(build_args), cwd=arm_dir)
     exe = os.path.join(arm_dir, stem + exe_suffix)
     if r.returncode != 0 or not os.path.exists(exe):
         raise BuildFailure(f"{compiler} build failed for {stem} in arm {label} (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
     return exe
 
 
-def build_arm_programs(planned, out_dir, sources, build_args=(), exe_suffix=EXE, arms_dir=None):
+def build_arm_programs(planned, out_dir, sources, build_args=(), exe_suffix=EXE, arms_dir=None, companions=()):
     label = planned["label"]
     compiler = arm_compiler(planned, out_dir)
     programs = {stem: arm_source(planned, out_dir, source) for stem, source in sources.items()}
+    companion_programs = arm_companions(planned, out_dir, companions)
     arm_dir = os.path.join(arms_dir or out_dir, label)
-    executables = {stem: compile_in_arm(compiler, label, arm_dir, program, stem, build_args=build_args, exe_suffix=exe_suffix)
+    executables = {stem: compile_in_arm(compiler, label, arm_dir, program, stem, build_args=build_args, exe_suffix=exe_suffix,
+                                        companions=companion_programs)
                    for stem, program in programs.items()}
     return {"label": label, "dir": arm_dir, "compiler": compiler, "identity": arm_identity(planned, compiler),
-            "programs": programs, "executables": executables}
+            "programs": programs, "companions": companion_programs, "executables": executables}
 
 
-def build_arm(planned, out_dir, source, stem, build_args=(), exe_suffix=EXE, arms_dir=None):
-    built = build_arm_programs(planned, out_dir, {stem: source}, build_args=build_args, exe_suffix=exe_suffix, arms_dir=arms_dir)
+def build_arm(planned, out_dir, source, stem, build_args=(), exe_suffix=EXE, arms_dir=None, companions=()):
+    """Build one program, with the companion sources it is compiled together with; `source_sha256` covers all of them."""
+    built = build_arm_programs(planned, out_dir, {stem: source}, build_args=build_args, exe_suffix=exe_suffix, arms_dir=arms_dir,
+                               companions=companions)
     exe = built["executables"][stem]
     program = built["programs"][stem]
+    digests = [sha256_of(path) for path in [program] + built["companions"]]
     return {"label": built["label"], "dir": built["dir"], "exe": exe, "exe_bytes": os.path.getsize(exe),
             "identity": built["identity"], "compiler": built["compiler"],
-            "source": program, "source_sha256": sha256_of(program)}
+            "source": program, "source_sha256": digests[0] if len(digests) == 1 else hashlib.sha256("".join(digests).encode()).hexdigest()}
 
 
 def describe_sources(source_digests_by_arm):
@@ -365,9 +431,51 @@ def append_log_rows(path, header, rows):
         append_table_row(path, row)
 
 
-def session_context():
+def cpu_model():
+    """The CPU's marketing name where the OS offers one, else what `platform.processor()` says (possibly empty)."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open(CPUINFO_PATH, encoding="utf-8") as fh:
+                for line in fh:
+                    key, _, value = line.partition(":")
+                    if key.strip().lower() == CPUINFO_MODEL_KEY:
+                        return " ".join(value.split())
+        except OSError:
+            pass
+    elif sys.platform == "darwin":
+        answer = run(["sysctl", "-n", MACOS_CPU_BRAND_KEY])
+        if answer.returncode == 0 and answer.stdout.strip():
+            return answer.stdout.strip()
+    return platform.processor()
+
+
+def host_description():
+    """`<OS> <machine>, <CPU model>`: what a row's numbers were measured on."""
+    parts = [f"{platform.system()} {platform.machine()}", cpu_model()]
+    return ", ".join(part for part in parts if part)
+
+
+def session_context(host=None):
     head, dirty = tree_identity(REPO)
-    return {"today": datetime.date.today().isoformat(), "head": head, "dirty": dirty}
+    return {"today": datetime.date.today().isoformat(), "head": head, "dirty": dirty, "host": host or host_description()}
+
+
+def print_session_header(bench_name, context, args, details=()):
+    """The run's first lines: the bench, the date, the checkout, any `details`, the run counts and the host."""
+    head = f"{context['head']}{'*' if context['dirty'] else ''}"
+    detail_text = "".join(f"  {detail}" for detail in details)
+    print(f"{bench_name}  {context['today']}  head {head}{detail_text}  runs={args.runs}  warmup={args.warmup}")
+    print(f"  host: {context['host']}")
+
+
+def note_cell(note):
+    """A note as one log-table cell: a `|` would end the cell, and a line break the row."""
+    return " ".join(note.replace("|", "/").split())
+
+
+def row_prefix(context, lane=None):
+    """The cells every row of a bench log starts with: date, head, tree, [lane], host, runs."""
+    return [context["today"], context["head"], tree_state(context["dirty"])] + ([lane] if lane else []) + [context["host"], str(context["runs"])]
 
 
 def tree_state(dirty):
@@ -748,6 +856,328 @@ def arm_identity(planned, compiler):
         identity["head"] = head
         identity["dirty"] = dirty
     return identity
+
+
+@dataclasses.dataclass(frozen=True)
+class PerOpUnit:
+    label: str
+    nanos: float
+
+
+MICROS_PER_OP = PerOpUnit("us", NANOS_PER_MICRO)
+NANOS_PER_OP = PerOpUnit("ns", 1.0)
+
+
+def go_source_files(go_dir):
+    return [os.path.join(go_dir, name) for name in os.listdir(go_dir)
+            if name == GO_MODULE_FILE or name.endswith(GO_SOURCE_SUFFIX)]
+
+
+def build_go_variants(go, go_dir, go_out, target_env, go_suffix, variant_tags, dependency_dirs=(), target_label=""):
+    """Build the Go program once per variant (a name and its build tags) into `go_out`; (executables by variant, `go version`).
+
+    The stamp hashes the sources of `go_dir` and of every module in `dependency_dirs` (the ones its go.mod replaces), so an
+    edit to a shared package rebuilds the program. `target_label` names the target in a failure."""
+    env = go_build_environment(target_env)
+    version = go_query(go, env, "version")
+    sources = [path for directory in [go_dir] + list(dependency_dirs) for path in go_source_files(directory)]
+    stamp = {"sources": file_digests(sources, REPO), "version": version, "settings": go_target_settings(go, env)}
+    executables = {}
+    for variant, tags in sorted(variant_tags.items()):
+        flags = ["-tags", ",".join(tags)] if tags else []
+        executables[variant] = build_go_cached(go, env, flags, GO_PACKAGE, go_dir,
+                                               os.path.join(go_out, variant + go_suffix), stamp,
+                                               f"the {variant} variant{target_label}")
+    return executables, version
+
+
+def check_go():
+    go = locate_go()
+    print(f"{go}: {go_query(go, go_build_environment(), 'version')}")
+    return EXIT_OK
+
+
+def add_log_arguments(ap, log_relative_path, default_out_dir):
+    ap.add_argument("--note", default="", help=f"append log rows to {log_relative_path} with this note")
+    ap.add_argument("--out-dir", default=default_out_dir)
+    ap.add_argument("--check-go", action="store_true", help="only locate Go and print its version")
+
+
+def guarded_main(body):
+    try:
+        return body()
+    except (UsageFailure, BuildFailure, VerificationFailure) as e:
+        return report_failure(e)
+    except subprocess.TimeoutExpired as e:
+        return report_failure(BuildFailure(f"a step timed out: {e}"))
+
+
+def parse_clock_line(name, line, fields):
+    digits = fields[1]
+
+    if not (digits.isascii() and digits.isdigit()):
+        raise VerificationFailure(f"{name} printed {line!r}, not '{CLOCK_LAYOUT}' with a positive integer")
+
+    resolution = int(digits)
+
+    if resolution < 1:
+        raise VerificationFailure(f"{name} printed {line!r}, whose resolution is not positive")
+
+    return resolution
+
+
+def parse_output(name, stdout):
+    results = {}
+    resolutions = []
+    for line in stdout.replace("\r\n", "\n").splitlines():
+        fields = line.split()
+        if fields and fields[0] == CLOCK_LINE and len(fields) == CLOCK_FIELDS:
+            resolutions.append(parse_clock_line(name, line, fields))
+            continue
+        if len(fields) != OUTPUT_FIELDS:
+            raise VerificationFailure(f"{name} printed {line!r}, not '{OUTPUT_LAYOUT}'")
+        workload, per_op, iterations, repeats, nanos, digest = fields
+        if workload in results:
+            raise VerificationFailure(f"{name} printed {workload} twice")
+        try:
+            results[workload] = {"bytes": int(per_op), "iterations": int(iterations), "repeats": int(repeats),
+                                 "nanos": int(nanos), "digest": digest}
+        except ValueError:
+            raise VerificationFailure(f"{name} printed {line!r}, whose numeric fields are not integers") from None
+    if not results:
+        raise VerificationFailure(f"{name} printed nothing")
+    return results, resolutions
+
+
+def run_once(runnable):
+    """One full run of a runnable ({name, kind, dir, command, optional environment}): its parsed rows and clock lines."""
+    environment = dict(os.environ, **runnable["environment"]) if runnable.get("environment") else None
+    try:
+        result = run(runnable["command"], cwd=runnable["dir"], timeout=RUN_TIMEOUT_S, env=environment)
+    except subprocess.TimeoutExpired:
+        raise VerificationFailure(f"{runnable['name']} timed out after {RUN_TIMEOUT_S} s") from None
+    verify_exit(runnable["name"], "a full run", result, leak_checked=runnable["kind"] == KIND_MAXON)
+    return parse_output(runnable["name"], result.stdout)
+
+
+def runnable(name, kind, directory, command, environment=None, compiler=None):
+    """One process the harness runs and times: `compiler` groups the tier arms of one Maxon compiler, `environment` is added
+    to the process's own."""
+    entry = {"name": name, "kind": kind, "dir": directory, "command": command}
+    if environment:
+        entry["environment"] = environment
+    if compiler:
+        entry["compiler"] = compiler
+    return entry
+
+
+def arm_resolution(name, kind, clock_lines):
+    # A control compiler built before the clock line existed prints none; only a Maxon arm may.
+    if kind == KIND_MAXON and not clock_lines:
+        return None
+
+    if len(clock_lines) != 1:
+        raise VerificationFailure(f"{name} printed {len(clock_lines)} '{CLOCK_LAYOUT}' lines, not one")
+
+    return clock_lines[0]
+
+
+def describe_resolutions(resolutions):
+    return ", ".join(f"{name} {resolution} ns" if resolution is not None else f"{name} built before the clock line existed, not gated"
+                     for name, resolution in resolutions.items())
+
+
+def check_resolution(best, resolutions, order, raise_in):
+    for workload in order:
+        for name, resolution in resolutions.items():
+            if resolution is None or (workload, name) not in best:
+                continue
+
+            floor = RESOLVABLE_TICKS * resolution
+            if best[(workload, name)] < floor:
+                raise VerificationFailure(
+                    f"{name} timed {workload} at {best[(workload, name)]} ns, under {RESOLVABLE_TICKS} times its clock's "
+                    f"{resolution} ns resolution ({floor} ns): the reading cannot resolve it. Raise {workload}'s base iterations "
+                    f"{raise_in}")
+
+
+def check_agreement(seen, runnables, order):
+    """Every arm prints every workload, with one shape. The one exception is a control compiler built before a workload
+    existed: ALL of a Maxon compiler's arms (its `compiler` key, default its own name) may omit it, while another compiler's print it."""
+    expected = {r["name"] for r in runnables}
+    maxon_arms = {r["name"] for r in runnables if r["kind"] == KIND_MAXON}
+    compiler_arms = {}
+    for r in runnables:
+        compiler_arms.setdefault(r.get("compiler", r["name"]), set()).add(r["name"])
+    for workload in order:
+        shapes = seen[workload]
+        if len(shapes) != 1:
+            detail = "; ".join(f"{sorted(names)} printed bytes/iterations/repeats/digest {shape}" for shape, names in sorted(shapes.items()))
+            raise VerificationFailure(f"the arms disagree on {workload}: {detail}")
+        (_, names), = shapes.items()
+        missing = expected - names
+        absent_compilers = [arms for arms in compiler_arms.values() if arms <= missing]
+        control_gap = missing <= maxon_arms and names & maxon_arms and missing == set().union(*absent_compilers, set())
+        if missing and not control_gap:
+            raise VerificationFailure(f"{sorted(missing)} printed no {workload} line")
+
+
+def collect(runnables, runs, warmup, raise_in):
+    """Interleave the runnables, verify them against one another, and return (best nanos by (workload, arm), the shapes seen,
+    the workloads in print order, each arm's clock resolution). `raise_in` ends the sentence a too-short row's refusal starts."""
+    measured = interleave(runnables, lambda r: r["name"], warmup, runs, run_once)
+    best = {}
+    seen = {}
+    order = []
+    resolutions = {}
+    kinds = {r["name"]: r["kind"] for r in runnables}
+    for name, rounds in measured.items():
+        for results, clock_lines in rounds:
+            resolution = arm_resolution(name, kinds[name], clock_lines)
+            if name in resolutions and (resolutions[name] is None) != (resolution is None):
+                raise VerificationFailure(f"{name} printed a '{CLOCK_LAYOUT}' line in some runs and not in others")
+            resolutions[name] = resolution if resolutions.get(name) is None else max(resolutions[name], resolution)
+            for workload, cell in results.items():
+                if workload not in order:
+                    order.append(workload)
+                key = (workload, name)
+                best[key] = min(best.get(key, cell["nanos"]), cell["nanos"])
+                shape = (cell["bytes"], cell["iterations"], cell["repeats"], cell["digest"])
+                seen.setdefault(workload, {}).setdefault(shape, set()).add(name)
+    check_agreement(seen, runnables, order)
+    check_resolution(best, resolutions, order, raise_in)
+    return best, seen, order, resolutions
+
+
+def shape_of(seen, workload):
+    (bytes_per_op, iterations, _, _), = seen[workload]
+    return bytes_per_op, iterations
+
+
+def throughput_cell(best, seen, workload, name, per_op_unit):
+    if (workload, name) not in best:
+        return NO_CELL
+    nanos = best[(workload, name)]
+    bytes_per_op, iterations = shape_of(seen, workload)
+    if nanos <= 0:
+        return NO_CELL
+    per_op = nanos / iterations
+    if bytes_per_op == 0:
+        return f"{per_op / per_op_unit.nanos:.2f} {per_op_unit.label}"
+    return f"{bytes_per_op * BYTES_PER_MB_PER_NS / per_op:.1f} MB/s"
+
+
+def ratio_cell(best, workload, numerator, denominator):
+    if (workload, numerator) not in best:
+        return NO_CELL
+    over = best[(workload, denominator)]
+    if over <= 0:
+        return NO_CELL
+    return f"{best[(workload, numerator)] / over:.2f}"
+
+
+def ratio_tables_per_maxon_arm(maxon_names, go_names):
+    """One ratio table per Maxon arm, a column per Go arm."""
+    return [(f"ratios, {maxon_name} time / Go time", [(f"vs {go_name}", maxon_name, go_name) for go_name in go_names])
+            for maxon_name in maxon_names]
+
+
+def ratio_table_of_pairs(pairs):
+    """One ratio table holding a column per (Maxon arm, Go arm) pair, for arms that are only comparable in pairs."""
+    return [("ratios, Maxon time / the Go time it is paired with", [(f"{maxon_name} vs {go_name}", maxon_name, go_name)
+                                                                     for maxon_name, go_name in pairs])]
+
+
+def print_tables(order, best, seen, names, per_op_unit, ratio_tables):
+    """The throughput table over every arm in `names`, then each ratio table: (title, [(header, numerator, denominator)])."""
+    width = max([MIN_TABLE_COLUMN_WIDTH] + [len(name) + 2 for name in names])
+    print()
+    print(f"  {'workload':<{WORKLOAD_COLUMN_WIDTH}}" + "".join(f"{name:>{width}}" for name in names))
+    for workload in order:
+        print(f"  {workload:<{WORKLOAD_COLUMN_WIDTH}}" + "".join(f"{throughput_cell(best, seen, workload, name, per_op_unit):>{width}}" for name in names))
+    for title, columns in ratio_tables:
+        ratio_width = max([MIN_RATIO_COLUMN_WIDTH] + [len(header) + 2 for header, _, _ in columns])
+        print()
+        print(f"  {title} (below 1.00 Maxon is faster)")
+        print(f"  {'workload':<{WORKLOAD_COLUMN_WIDTH}}" + "".join(f"{header:>{ratio_width}}" for header, _, _ in columns))
+        for workload in order:
+            print(f"  {workload:<{WORKLOAD_COLUMN_WIDTH}}" + "".join(f"{ratio_cell(best, workload, numerator, denominator):>{ratio_width}}"
+                                                                        for _, numerator, denominator in columns))
+
+
+def log_header(title, intro, extra_bullets, notes, columns):
+    """A bench log's first lines: `intro`, the bullets every log shares, then `extra_bullets`, `notes` and the table header."""
+    bullets = LOG_SHARED_BULLETS + tuple(extra_bullets)
+    wrapped = "\n".join(textwrap.fill("- " + bullet, width=LOG_TEXT_WIDTH, subsequent_indent="  ") for bullet in bullets)
+    table = "| " + " | ".join(columns) + " |\n|" + "---|" * len(columns) + "\n"
+    return f"# {title}\n\n{intro}\n\n{wrapped}\n\n{notes}\n\n{table}"
+
+
+def go_release(go_version):
+    """`go1.24.7` from the `go version` line."""
+    found = re.search(r"\bgo\d[\w.+-]*", go_version)
+    return found.group(0) if found else go_version
+
+
+@dataclasses.dataclass(frozen=True)
+class BenchSpec:
+    """What a Go-comparison bench is: its name, its Go program, its Maxon program, the unit of an op without bytes and where to
+    raise a row that is too short."""
+    name: str
+    go_dir: str
+    maxon_source: str
+    maxon_stem: str
+    per_op_unit: PerOpUnit
+    raise_iterations_in: str
+
+
+@dataclasses.dataclass(frozen=True)
+class BuiltPrograms:
+    go_executables: dict
+    go_version: str
+    maxon_arms: list
+
+
+def build_programs(spec, args, reserved_labels, variant_tags, subdir="", go_env=None, go_suffix=EXE, maxon_args=(),
+                   maxon_suffix=EXE, target_label=""):
+    """Plan the arms, lock the output directory, and build the Go program (once per variant, beside the shared Go package) and each
+    Maxon arm (with the shared Maxon source) under `<out dir>/<subdir>`."""
+    out_dir = os.path.abspath(args.out_dir)
+    base = os.path.join(out_dir, subdir) if subdir else out_dir
+    go = locate_go()
+    plan = plan_arms(args, reserved_labels=reserved_labels)
+    open_output_root(out_dir, args.keep_refs, plan)
+    go_executables, go_version = build_go_variants(go, spec.go_dir, os.path.join(base, GO_OUT_DIR_NAME), go_env, go_suffix, variant_tags,
+                                                   dependency_dirs=[COMMON_GO_DIR], target_label=target_label)
+    maxon_arms = [build_arm(planned, out_dir, spec.maxon_source, spec.maxon_stem, build_args=maxon_args, exe_suffix=maxon_suffix,
+                            arms_dir=base, companions=[COMMON_MAXON_SOURCE])
+                  for planned in plan]
+    return BuiltPrograms(go_executables, go_version, maxon_arms)
+
+
+def run_context(host, built, args, **extra):
+    """The row context of a run: the session, the host with the Go version it built with, the run count and `extra`."""
+    return dict(session_context(f"{host}, {go_release(built.go_version)}"), runs=args.runs, **extra)
+
+
+def print_run_header(spec, context, args, built, details=()):
+    print_session_header(spec.name, context, args, details)
+    print(f"  {built.go_version}")
+    print_arm_lines(built.maxon_arms, spec.maxon_stem)
+
+
+def run_and_report(spec, args, runnables, table_names, ratio_tables):
+    """Interleave the runnables, verify them, print the resolutions and the tables; (best nanos, shapes seen, workload order)."""
+    best, seen, order, resolutions = collect(runnables, args.runs, args.warmup, spec.raise_iterations_in)
+    print("  clock resolution: " + describe_resolutions(resolutions))
+    print_tables(order, best, seen, table_names, spec.per_op_unit, ratio_tables)
+    return best, seen, order
+
+
+def print_arm_lines(maxon_arms, stem):
+    for arm in maxon_arms:
+        print(f"  {arm['label']}: {describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
+    print(f"  program: {describe_sources({arm['label']: {stem: arm['source_sha256']} for arm in maxon_arms})}")
 
 
 def profile_arm(arm, program_arguments, hz, report_name):

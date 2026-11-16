@@ -36,6 +36,7 @@ export let HostLastErrorName = b"mrt_host_last_error"
 export let HostReadFileName = b"mrt_host_read_file"
 export let HostWriteFileName = b"mrt_host_write_file"
 export let HostWriteStreamName = b"mrt_host_write_stream"
+
 // A handler and not SIG_IGN: `execve` resets a handled signal to its default but keeps an ignored one,
 // so an ignore would start every child the program runs with SIGPIPE ignored.
 export let SigpipeHandlerName = b"mrt_sigpipe_handler"
@@ -44,6 +45,20 @@ export let HostFileOpenName = b"mrt_host_file_open"
 export let HostFileSizeName = b"mrt_host_file_size"
 export let HostFileDeleteName = b"mrt_host_file_delete"
 export let HostFileRenameName = b"mrt_host_file_rename"
+export let HostFileRenameNewName = b"mrt_host_file_rename_new"
+
+export enum RenameDisposition
+	replaceExisting
+	keepExisting
+end 'RenameDisposition'
+
+export function hostFileRenameChunkName(disposition RenameDisposition) returns immutable ByteArray
+	return match disposition 'disposition'
+		replaceExisting gives HostFileRenameName
+		keepExisting gives HostFileRenameNewName
+	end 'disposition'
+end 'hostFileRenameChunkName'
+
 export let HostDirCreateName = b"mrt_host_dir_create"
 export let HostDirRemoveName = b"mrt_host_dir_remove"
 export let HostFileAttributesName = b"mrt_host_file_attributes"
@@ -127,15 +142,6 @@ export function posixOpensFiles(usage RuntimeUsage) returns bool
 	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesChildPipes or usage.usesManagedSocket
 end 'posixOpensFiles'
 
-// ⭐⭐ **WHO EMITS `StdOp.osEnvRead` — the union both env-read gates on a POSIX lane read.** Two producers
-// and they are independent: `SchedRuntime.emitResolveMaxProcs` reads `MAXON_MAX_PROCS` in every
-// green-thread program, and `TerminalRuntime.buildTerminalStdoutWantsColor` reads `NO_COLOR` and `TERM` in
-// every program that asks whether stdout wants colour, which need not have a scheduler. Gated on `usesGt`
-// alone the chunk is a call to a symbol nothing laid out — MEASURED as `arm64ResolveCallFixups: bl to
-// unknown function 'mrt_host_env_read'` on the first terminal-detecting program built for a POSIX lane.
-export function posixReadsEnvironment(usage RuntimeUsage) returns bool
-	return usage.usesGt or usage.usesTerminalDetection
-end 'posixReadsEnvironment'
 
 // --- The CHILD-PROCESS band ---
 //
@@ -978,7 +984,25 @@ export enum DarwinErrno
 	notASocket = 38
 	timedOut = 60
 	directoryNotEmpty = 66
+	notSupported = 45
 end 'DarwinErrno'
+
+function renameNoReplaceUnsupportedErrno(os Os) returns FullRangeInt
+	return match os 'os'
+		linux gives LinuxErrno.functionNotImplemented.rawValue
+		macos gives DarwinErrno.notSupported.rawValue
+		default panic("renameNoReplaceUnsupportedErrno: {os.name} has no POSIX exclusive rename")
+	end 'os'
+end 'renameNoReplaceUnsupportedErrno'
+
+export function renameNoReplaceFallbackErrnos(os Os) returns FullRangeIntArray
+	let errnos = FullRangeIntArray.create(0)
+
+	errnos.push(renameNoReplaceUnsupportedErrno(os))
+	errnos.push(PosixErrno.invalidArgument.rawValue)
+
+	return errnos
+end 'renameNoReplaceFallbackErrnos'
 
 let DarwinSolSocket = 0xFFFF
 let DarwinSoError = 0x1007

@@ -1,0 +1,235 @@
+let Arm64OpInsFromGprBase = 0x4E001C00
+let Arm64OpUmovDoubleLow = 0x4E083C00
+let Arm64InsertImm5Shift = 16
+let Arm64InsertByteWidth = 1
+let Arm64InsertWordWidth = 4
+let Arm64InsertDoubleWidth = 8
+
+let Arm64AesHashSeedVector = 0
+let Arm64AesHashKeyVector = 1
+let Arm64AesHashZeroVector = 2
+let Arm64AesHashFirstLane = 16
+let Arm64AesHashDataVector = 24
+
+let Arm64AesHashKeys = Arm64Register.x3
+let Arm64AesHashEnd = Arm64Register.x4
+let Arm64AesHashCounter = Arm64Register.x5
+let Arm64AesHashLaneBase = Arm64Register.x6
+
+function arm64AesHashLane(index FullRangeInt) returns MachineWord
+	return (Arm64AesHashFirstLane + index) as MachineWord
+end 'arm64AesHashLane'
+
+function arm64InsertFromGprOpcode(lane FullRangeInt, laneBytes FullRangeInt) returns MachineWord
+	let imm5 = ((lane * laneBytes) shl 1) or laneBytes
+
+	return Arm64OpInsFromGprBase or ((imm5 as MachineWord) shl Arm64InsertImm5Shift)
+end 'arm64InsertFromGprOpcode'
+
+function emitArm64AesHashInsert(asm Arm64RuntimeAsm, vector MachineWord, lane FullRangeInt, laneBytes FullRangeInt, source Arm64Register)
+	emitArm64Rr(asm.code, opcode: arm64InsertFromGprOpcode(lane, laneBytes: laneBytes), rd: vector, rn: arm64RuntimeReg(source))
+end 'emitArm64AesHashInsert'
+
+function emitArm64AesHashKey(asm Arm64RuntimeAsm, key FullRangeInt)
+	emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesHashKeyVector as MachineWord, base: Arm64AesHashKeys, byteOffset: (key * AesBlockBytes) as MachineWord)
+end 'emitArm64AesHashKey'
+
+function emitArm64AesHashRoundOf(asm Arm64RuntimeAsm, state MachineWord)
+	emitArm64Rr(asm.code, opcode: Arm64OpAese, rd: state, rn: Arm64AesHashZeroVector as MachineWord)
+	emitArm64Rr(asm.code, opcode: Arm64OpAesmc, rd: state, rn: state)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: state, rn: state, rm: Arm64AesHashKeyVector as MachineWord)
+end 'emitArm64AesHashRoundOf'
+
+function emitArm64AesHashRound(asm Arm64RuntimeAsm, state MachineWord, key FullRangeInt)
+	emitArm64AesHashKey(asm, key: key)
+	emitArm64AesHashRoundOf(asm, state: state)
+end 'emitArm64AesHashRound'
+
+function emitArm64AesHashRoundAcross(asm Arm64RuntimeAsm, lanes FullRangeInt, key FullRangeInt)
+	emitArm64AesHashKey(asm, key: key)
+
+	for index in 0 upto lanes 'eachLane'
+		emitArm64AesHashRoundOf(asm, state: arm64AesHashLane(index))
+	end 'eachLane'
+end 'emitArm64AesHashRoundAcross'
+
+function emitArm64AesHashRounds(asm Arm64RuntimeAsm, lanes FullRangeInt, rounds AesHashRounds)
+	for key in aesHashRoundKeys(rounds) 'eachKey'
+		emitArm64AesHashRoundAcross(asm, lanes: lanes, key: key)
+	end 'eachKey'
+end 'emitArm64AesHashRounds'
+
+function emitArm64AesHashFold(asm Arm64RuntimeAsm, lanes FullRangeInt)
+	for step in aesHashFoldSteps(lanes) 'eachPair'
+		let accumulator = arm64AesHashLane(step.accumulator)
+
+		emitArm64Rr(asm.code, opcode: Arm64OpAese, rd: accumulator, rn: Arm64AesHashZeroVector as MachineWord)
+		emitArm64Rr(asm.code, opcode: Arm64OpAesmc, rd: accumulator, rn: accumulator)
+		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: accumulator, rn: accumulator, rm: arm64AesHashLane(step.folded))
+	end 'eachPair'
+end 'emitArm64AesHashFold'
+
+function emitArm64AesHashFinish(asm Arm64RuntimeAsm)
+	emitArm64AesHashRounds(asm, lanes: 1, rounds: AesHashRounds.finish)
+end 'emitArm64AesHashFinish'
+
+function emitArm64AesHashLaneLoads(asm Arm64RuntimeAsm, lanes FullRangeInt, startLanes FullRangeInt)
+	let endLanes = lanes - startLanes
+
+	arm64EmitAddRuntimeImm(asm, dest: Arm64AesHashLaneBase, base: Arm64AesHashEnd, imm: aesHashBackOffset(endLanes * AesBlockBytes) as Imm32)
+	emitArm64AesHashKey(asm, key: AesHashSecondKey)
+
+	for index in 0 upto lanes 'eachLane'
+		let lane = arm64AesHashLane(index)
+		let source = aesHashLaneSource(index, lanes: lanes, startLanes: startLanes)
+
+		if source.fromStart 'fromTheStart'
+			emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: lane, base: Arm64Register.x0, byteOffset: source.byteOffset as MachineWord)
+		end 'fromTheStart' else 'fromTheEnd'
+			emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: lane, base: Arm64AesHashLaneBase, byteOffset: (source.byteOffset + endLanes * AesBlockBytes) as MachineWord)
+		end 'fromTheEnd'
+
+		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: lane, rn: lane, rm: Arm64AesHashSeedVector as MachineWord)
+		emitArm64AesHashRoundOf(asm, state: Arm64AesHashSeedVector as MachineWord)
+	end 'eachLane'
+end 'emitArm64AesHashLaneLoads'
+
+function emitArm64AesHashLaneClass(asm Arm64RuntimeAsm, lanes FullRangeInt)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64AesHashEnd, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	emitArm64AesHashLaneLoads(asm, lanes: lanes, startLanes: lanes shr 1)
+	emitArm64AesHashRounds(asm, lanes: lanes, rounds: AesHashRounds.laneClass)
+	emitArm64AesHashFold(asm, lanes: lanes)
+	emitArm64AesHashFinish(asm)
+end 'emitArm64AesHashLaneClass'
+
+function emitArm64AesHashLongClass(asm Arm64RuntimeAsm)
+	let loop = asm.newLabel()
+
+	arm64EmitAddRuntimeReg(asm, dest: Arm64AesHashEnd, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	emitArm64AesHashLaneLoads(asm, lanes: AesHashOctetLanes, startLanes: 0)
+
+	arm64EmitAddRuntimeImm(asm, dest: Arm64AesHashCounter, base: Arm64Register.x1, imm: -1)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64AesHashCounter), rn: arm64RuntimeReg(Arm64AesHashCounter), sh: AesHashOctetShift)
+
+	asm.placeLabel(loop)
+	emitArm64AesHashRoundAcross(asm, lanes: AesHashOctetLanes, key: AesHashFirstKey)
+
+	for index in 0 upto AesHashOctetLanes 'eachLane'
+		let lane = arm64AesHashLane(index)
+
+		emitArm64VectorTransfer(asm, transfer: Arm64VectorTransfer.load, vector: Arm64AesHashDataVector as MachineWord, base: Arm64Register.x0, byteOffset: (index * AesBlockBytes) as MachineWord)
+		emitArm64Rr(asm.code, opcode: Arm64OpAese, rd: lane, rn: Arm64AesHashZeroVector as MachineWord)
+		emitArm64Rr(asm.code, opcode: Arm64OpAesmc, rd: lane, rn: lane)
+		emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: lane, rn: lane, rm: Arm64AesHashDataVector as MachineWord)
+	end 'eachLane'
+
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: AesHashOctetBytes)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64AesHashCounter, base: Arm64AesHashCounter, imm: -1)
+	arm64EmitCbnzTo(asm, reg: Arm64AesHashCounter, label: loop)
+
+	emitArm64AesHashRounds(asm, lanes: AesHashOctetLanes, rounds: AesHashRounds.wholeInput)
+	emitArm64AesHashFold(asm, lanes: AesHashOctetLanes)
+	emitArm64AesHashFinish(asm)
+end 'emitArm64AesHashLongClass'
+
+function emitArm64AesHashTailClass(asm Arm64RuntimeAsm, done BlockId)
+	let gathered = asm.newLabel()
+	let bytes = asm.newLabel()
+	let quarters = asm.newLabel()
+	let lane = arm64AesHashLane(0)
+
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: lane, rn: lane, rm: lane)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: gathered)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: AesHashQuarterTailBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: bytes)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: AesHashHalfTailBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: quarters)
+
+	arm64EmitAddRuntimeReg(asm, dest: Arm64AesHashEnd, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x7, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x8, base: Arm64AesHashEnd, imm: -AesHashHalfTailBytes)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x8, base: Arm64Register.x8, byteOffset: 0)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 0, laneBytes: Arm64InsertDoubleWidth, source: Arm64Register.x7)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 1, laneBytes: Arm64InsertDoubleWidth, source: Arm64Register.x8)
+	arm64EmitBranchTo(asm, label: gathered)
+
+	asm.placeLabel(quarters)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64AesHashEnd, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x7, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x8, base: Arm64AesHashEnd, imm: -AesHashQuarterTailBytes)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x8, base: Arm64Register.x8, byteOffset: 0)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 0, laneBytes: Arm64InsertWordWidth, source: Arm64Register.x7)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 1, laneBytes: Arm64InsertWordWidth, source: Arm64Register.x8)
+	arm64EmitBranchTo(asm, label: gathered)
+
+	asm.placeLabel(bytes)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64AesHashEnd, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x7, base: Arm64Register.x0)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x8), rn: arm64RuntimeReg(Arm64Register.x1), sh: 1)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x8, lhs: Arm64Register.x0, rhs: Arm64Register.x8)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x8, base: Arm64Register.x8)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64AesHashEnd, imm: -1)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x9, base: Arm64Register.x9)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 0, laneBytes: Arm64InsertByteWidth, source: Arm64Register.x7)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 1, laneBytes: Arm64InsertByteWidth, source: Arm64Register.x8)
+	emitArm64AesHashInsert(asm, vector: lane, lane: 2, laneBytes: Arm64InsertByteWidth, source: Arm64Register.x9)
+
+	asm.placeLabel(gathered)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: lane, rn: lane, rm: Arm64AesHashSeedVector as MachineWord)
+	emitArm64AesHashRounds(asm, lanes: 1, rounds: AesHashRounds.wholeInput)
+	arm64EmitBranchTo(asm, label: done)
+end 'emitArm64AesHashTailClass'
+
+function buildArm64AesHashChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let asm = Arm64RuntimeAsm.beginRawFunction()
+	let tail = asm.newLabel()
+	let pair = asm.newLabel()
+	let quad = asm.newLabel()
+	let octet = asm.newLabel()
+	let done = asm.newLabel()
+	let keysLabel = registerStringBlob(globalData, bytes: aesHashKeyBytes())
+
+	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(Arm64AesHashKeys), label: keysLabel.toByteArray(), adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+
+	let zero = Arm64AesHashZeroVector as MachineWord
+	let seedVector = Arm64AesHashSeedVector as MachineWord
+
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: zero, rn: zero, rm: zero)
+	emitArm64AesHashInsert(asm, vector: seedVector, lane: 0, laneBytes: Arm64InsertDoubleWidth, source: Arm64Register.x2)
+	emitArm64AesHashInsert(asm, vector: seedVector, lane: 1, laneBytes: Arm64InsertDoubleWidth, source: Arm64Register.x1)
+	emitArm64AesHashKey(asm, key: AesHashSeedKey)
+	emitArm64Rrr(asm.code, opcode: Arm64OpEorVec16b, rd: seedVector, rn: seedVector, rm: Arm64AesHashKeyVector as MachineWord)
+	emitArm64AesHashRound(asm, state: seedVector, key: AesHashFirstKey)
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: AesHashTailBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: tail)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: AesHashPairBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: pair)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: AesHashQuadBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: quad)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: AesHashOctetBytes)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: octet)
+
+	emitArm64AesHashLongClass(asm)
+	arm64EmitBranchTo(asm, label: done)
+
+	asm.placeLabel(tail)
+	emitArm64AesHashTailClass(asm, done: done)
+
+	asm.placeLabel(pair)
+	emitArm64AesHashLaneClass(asm, lanes: AesHashPairLanes)
+	arm64EmitBranchTo(asm, label: done)
+
+	asm.placeLabel(quad)
+	emitArm64AesHashLaneClass(asm, lanes: AesHashQuadLanes)
+	arm64EmitBranchTo(asm, label: done)
+
+	asm.placeLabel(octet)
+	emitArm64AesHashLaneClass(asm, lanes: AesHashOctetLanes)
+
+	asm.placeLabel(done)
+	emitArm64Rr(asm.code, opcode: Arm64OpUmovDoubleLow, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64AesHashLane(0))
+	arm64EmitRet(asm.code)
+
+	return asm.finishChunk(cryptoChunkName(CryptoRoutine.aesHash))
+end 'buildArm64AesHashChunk'

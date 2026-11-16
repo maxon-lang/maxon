@@ -92,6 +92,7 @@ export let ErrorFileNotFound = 2 as FullRangeInt
 export let ErrorPathNotFound = 3 as FullRangeInt
 export let ErrorAccessDenied = 5 as FullRangeInt
 export let ErrorFileExists = 80 as FullRangeInt
+let ErrorAlreadyExists = 183 as FullRangeInt
 export let ErrorSharingViolation = 32 as FullRangeInt
 
 // `ERROR_TOO_MANY_OPEN_FILES` — what a spawn publishes when every subprocess slot is live, a
@@ -262,6 +263,7 @@ export let ManagedFileWriteName = b"__mf_write"
 export let ManagedFileExistsName = b"__mf_exists"
 export let ManagedFileDeleteName = b"__mf_delete"
 export let ManagedFileRenameName = b"__mf_rename"
+export let ManagedFileRenameNewName = b"__mf_rename_new"
 export let ManagedFileStatName = b"__mf_stat"
 export let ManagedFileStatFieldName = b"__mf_stat_field"
 export let ManagedFileStatFreeName = b"__mf_stat_free"
@@ -282,7 +284,7 @@ function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns bool
 	//   • `__mf_stat_field` / `__mf_stat_free` — stdlib-only INVARIANT sites. A null buffer or an index past
 	//     the six fields is a caller bug, not a runtime condition, so they ABORT (see `RuntimeAbort`) rather
 	//     than hand back an error a caller would have to pretend to handle.
-	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileOpenWriteExecutableName) or callee.equals(ManagedFileOpenCreateNewName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileReadAppendingName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
+	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileOpenWriteExecutableName) or callee.equals(ManagedFileOpenCreateNewName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileReadAppendingName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileRenameNewName) or callee.equals(ManagedFileStatName)
 end 'isThrowingManagedFileRuntimeCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE** — this family's `managedDirectorySourceMethodName`, and read through
@@ -353,6 +355,10 @@ function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMe
 	if callee.equals(ManagedFileRenameName) 'rename'
 		return RuntimeCalleeSourceMethod.found(ManagedFileRenameMethod)
 	end 'rename'
+
+	if callee.equals(ManagedFileRenameNewName) 'renameNew'
+		return RuntimeCalleeSourceMethod.found(ManagedFileRenameNewMethod)
+	end 'renameNew'
 
 	if callee.equals(ManagedFileStatName) 'stat'
 		return RuntimeCalleeSourceMethod.found(ManagedFileStatMethod)
@@ -1019,6 +1025,7 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 	match mode 'op'
 		delete then module.appendOp(afterSecond, op: StdOp.osFileDelete(verdict, pathPtrId: firstPath))
 		rename then module.appendOp(afterSecond, op: StdOp.osFileRename(verdict, oldPathPtrId: firstPath, newPathPtrId: secondPath))
+		renameNew then module.appendOp(afterSecond, op: StdOp.osFileRenameNew(verdict, oldPathPtrId: firstPath, newPathPtrId: secondPath))
 	end 'op'
 
 	let err = ids.mint()
@@ -1031,7 +1038,13 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 
 	emitBranchOnCompare(module, block: afterSecond, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: failed, whenFalse: ok, ids: ids)
 
-	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
+	if mode == ManagedFilePathOpMode.renameNew 'win32AlreadyExists'
+		let notAlreadyExists = emitThrowOnCode(module, func: func, block: failed, err: err, code: ErrorAlreadyExists, flag: ManagedFileAlreadyExistsFlag, ids: ids)
+		emitFileErrnoClassifiedThrow(module, func: func, block: notAlreadyExists, err: err, fallbackFlag: fallbackFlag, ids: ids)
+	end 'win32AlreadyExists' else 'sharedClassification'
+		emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
+	end 'sharedClassification'
+
 	emitVoidOkReturn(module, block: ok, ids: ids)
 
 	module.functions.push(func)
@@ -1041,12 +1054,14 @@ end 'buildManagedFilePathOperation'
 enum ManagedFilePathOpMode
 	delete
 	rename
+	renameNew
 end 'ManagedFilePathOpMode'
 
 function managedFilePathOpTakesTwoPaths(mode ManagedFilePathOpMode) returns bool
 	return match mode 'arity'
 		delete gives false
-		rename gives true
+		rename or
+		renameNew gives true
 	end 'arity'
 end 'managedFilePathOpTakesTwoPaths'
 
@@ -1311,6 +1326,7 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage, 
 	// ⚠ `rename`'s catch-all is `deleteFailed`, not a variant of its own: the enum has no `renameFailed` to
 	// reach for. See the ordinals at the top of this file.
 	buildManagedFilePathOperation(module, name: ManagedFileRenameName, mode: ManagedFilePathOpMode.rename, fallbackFlag: ManagedFileDeleteFailedFlag)
+	buildManagedFilePathOperation(module, name: ManagedFileRenameNewName, mode: ManagedFilePathOpMode.renameNew, fallbackFlag: ManagedFileDeleteFailedFlag)
 	buildManagedFileStat(module)
 	buildManagedFileStatField(module)
 	buildManagedFileStatFree(module)

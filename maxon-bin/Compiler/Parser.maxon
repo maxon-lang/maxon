@@ -7279,6 +7279,7 @@ enum CompilerOwnedStatic
 	fileExists
 	fileDelete
 	fileRename
+	fileRenameNew
 	fileStat
 	fileStatField
 	fileStatFree
@@ -7305,7 +7306,7 @@ end 'CompilerOwnedStaticLookup'
 
 typealias CompilerOwnedStaticArray = Array with CompilerOwnedStatic
 
-let CountWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+let CountWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven"]
 
 function compilerOwnedStaticSpelling(kind CompilerOwnedStatic) returns immutable ByteArray
 	return match kind 'kind'
@@ -7316,6 +7317,7 @@ function compilerOwnedStaticSpelling(kind CompilerOwnedStatic) returns immutable
 		fileExists gives ManagedFileExistsMethod
 		fileDelete gives ManagedFileDeleteMethod
 		fileRename gives ManagedFileRenameMethod
+		fileRenameNew gives ManagedFileRenameNewMethod
 		fileStat gives ManagedFileStatMethod
 		fileStatField gives ManagedFileStatFieldMethod
 		fileStatFree gives ManagedFileStatFreeMethod
@@ -7338,7 +7340,7 @@ end 'compilerOwnedStaticSpelling'
 
 function compilerOwnedStaticsOf(surface HandleSurface) returns CompilerOwnedStaticArray
 	return match surface 'surface'
-		file gives [CompilerOwnedStatic.fileOpenRead, CompilerOwnedStatic.fileOpenWrite, CompilerOwnedStatic.fileOpenWriteExecutable, CompilerOwnedStatic.fileOpenCreateNew, CompilerOwnedStatic.fileExists, CompilerOwnedStatic.fileDelete, CompilerOwnedStatic.fileRename, CompilerOwnedStatic.fileStat, CompilerOwnedStatic.fileStatField, CompilerOwnedStatic.fileStatFree]
+		file gives [CompilerOwnedStatic.fileOpenRead, CompilerOwnedStatic.fileOpenWrite, CompilerOwnedStatic.fileOpenWriteExecutable, CompilerOwnedStatic.fileOpenCreateNew, CompilerOwnedStatic.fileExists, CompilerOwnedStatic.fileDelete, CompilerOwnedStatic.fileRename, CompilerOwnedStatic.fileRenameNew, CompilerOwnedStatic.fileStat, CompilerOwnedStatic.fileStatField, CompilerOwnedStatic.fileStatFree]
 		directory gives [CompilerOwnedStatic.directoryOpenSearch, CompilerOwnedStatic.directoryExists, CompilerOwnedStatic.directoryCreate, CompilerOwnedStatic.directoryDelete, CompilerOwnedStatic.directoryCurrentPath, CompilerOwnedStatic.directoryResolve]
 		socket gives [CompilerOwnedStatic.socketTcpConnect, CompilerOwnedStatic.socketBindListener]
 		pages gives [CompilerOwnedStatic.pagesReserve]
@@ -7976,6 +7978,18 @@ let SchedMaxActiveWorkersArity = 0
 
 let BuiltinsCpuHasAesName = b"__Builtins.cpuHasAes"
 let CpuHasAesArity = 0
+let BuiltinsCpuHasShaName = b"__Builtins.cpuHasSha"
+let CpuHasShaArity = 0
+let BuiltinsHashSeedName = b"__Builtins.hashSeed"
+let HashSeedArity = 0
+let BuiltinsElementsHashAsStorageName = b"__Builtins.elementsHashAsStorage"
+let ElementsHashAsStorageArity = 0
+let ElementsHashAsStorageNeedsHashableConstraint = "'__Builtins.elementsHashAsStorage' reads the witness table of the enclosing type's `where … is Hashable` constraint, and the function calling it carries none — call it from an instance method of a type or extension constrained to a Hashable element"
+let ElementsHashAsStorageNamesNoParameter = "'__Builtins.elementsHashAsStorage' takes no type parameter, so it reads the one `where … is Hashable` constraint the enclosing type or extension carries, and the function calling it carries several — call it from a type or extension constrained to exactly one Hashable type parameter"
+let BuiltinsHashArrayStorageName = b"__Builtins.hashArrayStorage"
+let HashArrayStorageArity = 1
+let HashValueAliasName = b"HashValue"
+let HashDigestAliasName = b"HashDigest"
 
 // ⭐⭐ **`__Builtins.enterBackgroundPriority()` — THE ONLY INTRINSIC THAT CHANGES THE PROCESS RATHER THAN
 // REPORTING ON IT.** Everything in the band above asks a question; this one answers a question it first

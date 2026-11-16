@@ -22,13 +22,14 @@ type TestProcessScratch
 		return Self{outside: outside, inProject: inProject}
 	end 'create'
 
-	function environment(tracksDescendants bool, serial ElementIndex) returns Environment
+	function environment(tracksDescendants bool, serial ElementIndex, pins HashPins) returns Environment
 		let overrides = EnvMap.create()
+		pins.addTo(overrides)
 		overrides.upsert(TestScratch.outsideCheckoutVariable, value: self.outside.toString())
 		overrides.upsert(TestScratch.insideProjectVariable, value: self.inProject.toString())
 
 		if tracksDescendants 'armed'
-			overrides.upsert(String.from(DescendantsEnvName), value: descendantTrackingValue(serial))
+			overrides.upsert(harnessEnvName(HarnessEnvVar.descendants), value: descendantTrackingValue(serial))
 		end 'armed'
 
 		return Environment.inheritUpdating(overrides)

@@ -1555,7 +1555,10 @@ type Cell implements Hashable, Equatable
 	end 'create'
 
 	function hash() returns HashValue
-		return (row * 31 + col) and 0xFFFFFFFF
+		let hasher = Hasher.create()
+		hasher.combine(row.hash() as HashDigest)
+		hasher.combine(col.hash() as HashDigest)
+		return hasher.finalize()
 	end 'hash'
 
 	function equals(other Self) returns bool
@@ -1577,21 +1580,32 @@ end 'main'
 Payload-free enums are `Hashable` and `Equatable` automatically; unions are not (see
 [Unions](#comparing-union-values)).
 
-For a digest over bytes, the standard library's `Hasher` is an incremental 64-bit FNV-1a fold that
-returns a `HashDigest` (`bits(64)`):
+`String.hash()`, `Character.hash()` and `Array.hash()` are folds of the standard library's
+[`Hasher`](STDLIB_REFERENCE.md#hasher), and a type's own `hash()` folds its fields with one, as `Cell`'s does.
+Every process draws its own seed at startup, so a hash value is a property of one process: it differs between
+runs, and a `Map`'s or `Set`'s iteration order with it. A digest the program keeps is a
+[`KeyedHasher`](STDLIB_REFERENCE.md#keyedhasher) fold from a `HashSeed` of its own, and a value that must be
+the same in every process is a SHA-256 digest (`sha256`).
 
 ```maxon
 function main() returns ExitCode
-	let hasher = Hasher.create()
-	hasher.combineBytes("abc".toByteArray())
-	print("{hasher.finalize():016x}\n")     // e71fa2190541574b
+	let seed = HashSeed.random()
+	let a = KeyedHasher.create(seed)
+	a.combineBytes("ab".toByteArray())
+	a.combineBytes("c".toByteArray())
+
+	let b = KeyedHasher.create(seed)
+	b.combineBytes("abc".toByteArray())
+
+	let again = KeyedHasher.combinedBytes(KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: "ab".toByteArray()), bytes: "c".toByteArray())
+	print("{a.finalize() == b.finalize()} {a.finalize() == again}\n")     // false true
 	return 0
 end 'main'
 ```
 
-The fold carries no length tag — combining `"ab"` then `"c"` equals combining `"abc"` — so combine each
-part's length yourself when the boundaries matter. `Hasher.empty()` and `Hasher.combinedBytes(state, bytes:)`
-are the same fold as pure functions.
+Each step's state seeds the next, so the steps are delimited: `"ab"` then `"c"` reaches a digest apart from
+`"abc"`. `KeyedHasher.empty(seed)` and `KeyedHasher.combinedBytes(state, bytes:)` are the same fold as pure
+functions.
 
 ### Parsable
 

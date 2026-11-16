@@ -61,6 +61,7 @@ public enum FileRenameError implements Error
 	notFound
 	accessDenied
 	busy
+	alreadyExists
 
 	public function failure() returns FileFailure
 		return match self 'cause'
@@ -68,6 +69,7 @@ public enum FileRenameError implements Error
 			notFound gives FileFailure.notFound
 			accessDenied gives FileFailure.accessDenied
 			busy gives FileFailure.busy
+			alreadyExists gives FileFailure.alreadyExists
 		end 'cause'
 	end 'failure'
 end 'FileRenameError'
@@ -275,6 +277,14 @@ public type File
 		end 'failed'
 	end 'rename'
 
+	/// Rename (move) a file to a destination that must not exist. The check and the move are one step, so
+	/// of two processes renaming onto one path exactly one wins; the other gets `alreadyExists`.
+	public static function renameNew(from FilePath, to FilePath) throws FileRenameError
+		try __ManagedFile.renameNew(from.path.addressableBytes(), to.path.addressableBytes()) otherwise (e) 'failed'
+			throw renameFailureOf(e)
+		end 'failed'
+	end 'renameNew'
+
 	/// Get file metadata
 	public static function info(path FilePath) returns FileInfo throws FileInfoError
 		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise (e) 'statFailed'
@@ -357,7 +367,7 @@ function renameFailureOf(cause __ManagedFileError) returns FileRenameError
 		notFound gives FileRenameError.notFound
 		accessDenied gives FileRenameError.accessDenied
 		busy gives FileRenameError.busy
-		alreadyExists or
+		alreadyExists gives FileRenameError.alreadyExists
 		failed gives FileRenameError.failed
 	end 'failure'
 end 'renameFailureOf'

@@ -23,7 +23,7 @@ self-compiles `maxon-bin/AGENTS.md` describes.
 |---|---|---|
 | `Clock.maxon` | `__clock_now_unix_s`, `__clock_now_unix_ns`, `__clock_now_filetime`, `__uptime_ms` | `__Builtins.currentUnixTimeSeconds`, `currentUnixTimeNanos`, `profileNowFileTime`, `tickCountMs` |
 | `CpuParallel.maxon` | `__cpu_count`, `__sched_max_active_workers`, `__sched_processor_count` | `__Builtins.cpuCount`, `schedMaxActiveWorkers`, `schedProcessorCount` |
-| `CpuFeatures.maxon` | `__cpufeat_aes_usable` | `__Builtins.cpuHasAes` |
+| `CpuFeatures.maxon` | `__cpufeat_aes_usable`, `__cpufeat_sha_usable` | `__Builtins.cpuHasAes`, `cpuHasSha` |
 | `FaultProbe.maxon` | `maxon_force_segfault` | `__Builtins.forceSegfault` |
 | `ParallelBoundary.maxon` | `__parallel_boundary` | `__Builtins.parallelBoundary` |
 | `Process.maxon` | `__proc_pid`, `__proc_bg_priority`, `__proc_alive`, `__proc_end_descendants_text` | `__Builtins.currentProcessId`, `enterBackgroundPriority`, `processIsAlive`, `processEndDescendants` (the scheduler bring-up arms tracking through the `osDescendants` op itself) |

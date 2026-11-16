@@ -1353,7 +1353,7 @@ before it is used up and `PressureIndex.makeRoom` has to re-space.
 
 Getting three into one gap takes exactly this shape. A gap takes both the store anchored
 after an op's def (`insertStoreAfter`: anchorPos + 1) and every reload anchored before the
-NEXT op (`bodyPositionOfUse`: that op's own position, which is the same number). So an add
+NEXT op (`opUseReloadPosition`: that op's own position, which is the same number). So an add
 reading two already-spilled values, sitting immediately after an add whose own result is
 spilled, puts a store and two reloads in one gap. It takes TWO pressure humps to arrange:
 every reload of a peak's victims lands AFTER that peak and every store at a def BEFORE it,
@@ -1629,4 +1629,82 @@ end 'main'
 ```
 ```stdout
 320001773564
+```
+
+<!-- test: a-constant-read-only-by-a-jump-table-is-rematerialized-before-it -->
+`opcodeValue` inlined into `combine` with the constant `Opcode.second` lowers, on x64, to a jump table alone in an
+otherwise empty block: the table's index is a constant live across the `registerAt` calls, and its only reader in
+that block is the terminator. The second accumulator `mix` raises the loop's pressure past the callee-saved
+registers, so the splitter rematerializes that constant for the terminator's use, and the re-created constant must
+land at the end of the empty body, ahead of the jump table that reads it.
+```maxon
+typealias Tally = int(0 to 1000000000)
+typealias Slot = int(0 to 7)
+
+enum Opcode
+	first
+	second
+	third
+	fourth
+	fifth
+end 'Opcode'
+
+enum Register
+	zero
+	one
+	two
+	three
+	four
+	five
+	six
+	seven
+end 'Register'
+
+function opcodeValue(op Opcode) returns Tally
+	return match op 'op'
+		first gives 219
+		second gives 220
+		third gives 221
+		fourth gives 222
+		fifth gives 223
+	end 'op'
+end 'opcodeValue'
+
+function registerAt(slot Slot) returns Register
+	return try Register.fromRawValue(slot) otherwise panic("not a register")
+end 'registerAt'
+
+function combine(sum Tally, op Opcode, left Register, right Register, extra Tally) returns Tally
+	return (sum + opcodeValue(op) * (left.rawValue as Tally) + (right.rawValue as Tally) + extra) mod 1000003
+end 'combine'
+
+function fold(lanes Tally, extra Tally) returns Tally
+	var total = 0 as Tally
+	var mix = 1 as Tally
+	var width = lanes
+
+	while width > 1 'halving'
+		let half = width shr 1
+
+		for index in 0 upto half 'eachPair'
+			total = combine(total, op: Opcode.second, left: registerAt((index mod 8) as Slot), right: registerAt(((index + half) mod 8) as Slot), extra: extra)
+			mix = (mix * 31 + total) mod 1000003
+		end 'eachPair'
+
+		width = half
+	end 'halving'
+
+	return total + mix
+end 'fold'
+
+function main() returns ExitCode
+	print("{fold(8, extra: 7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+866165
 ```

@@ -1,0 +1,31 @@
+let SpecTestDrawsAFreshHashSeedCaseDirName = "spec-test-draws-a-fresh-hash-seed"
+let DrawnCaseName = "drawn"
+let ReproducingSeed = "0123456789abcdef"
+
+test 'two spec-test runs draw two hash seeds, and a run launched with a seed pinned reports that one'
+	requireHeldOutsideCheckout(SpecTestDrawsAFreshHashSeedCaseDirName, check: SpecTestDrawsAFreshHashSeed.create())
+end 'two spec-test runs draw two hash seeds, and a run launched with a seed pinned reports that one'
+
+type SpecTestDrawsAFreshHashSeed implements OutsideCheckoutCase
+	static function create() returns SpecTestDrawsAFreshHashSeed
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cases = HashReportCaseArray.create(0)
+		cases.push(HashReportCase.create(DrawnCaseName, seed: HashPinUnset, tier: HashPinUnset))
+
+		let specDir = stagedHashReportSpec(dir, cases: cases)
+
+		let first = try hashSpecFailureOf(runHashReportSpec(dir, specDir: specDir, seed: HashPinUnset, tier: HashPinUnset), caseName: DrawnCaseName)
+		let second = try hashSpecFailureOf(runHashReportSpec(dir, specDir: specDir, seed: HashPinUnset, tier: HashPinUnset), caseName: DrawnCaseName)
+
+		try Expect.notEqual(second.pins.seed, expected: first.pins.seed, message: "two spec-test runs, neither pinning a seed, both name the seed {first.pins.seed}: a run draws its own, so a failure named by one run is not the failure of the next.")
+		try Expect.equal(second.pins.tier, expected: first.pins.tier, message: "two spec-test runs on one host name two tiers: {first.pins.tier} and {second.pins.tier}.")
+
+		let reproduced = try hashSpecFailureOf(runHashReportSpec(dir, specDir: specDir, seed: ReproducingSeed, tier: HashPinUnset), caseName: DrawnCaseName)
+
+		try Expect.equal(reproduced.pins.seed, expected: ReproducingSeed, message: "a spec-test run launched with {HashSeedVariable}={ReproducingSeed} reports the seed {reproduced.pins.seed}, so a failure cannot be reproduced by running the suite again with the seed it named.")
+		try Expect.equal(reproduced.pins.tier, expected: first.pins.tier, message: "a spec-test run launched with a seed and no tier is handed the host's tier {first.pins.tier}, and its failure names the tier {reproduced.pins.tier}.")
+	end 'requireHeldIn'
+end 'SpecTestDrawsAFreshHashSeed'

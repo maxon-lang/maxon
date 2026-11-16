@@ -123,7 +123,7 @@ export type LibraryCacheWriter
 	export function sealed() returns immutable ByteArray
 		let image = LibraryCacheMagic.toByteArray() as isolated ByteArray
 		let body = swap self.buffer with ByteArray.create(0)
-		let bodyDigest = mixBytes(Hasher.empty(), bytes: body) as CacheWord
+		let bodyDigest = digestOfBytes(body) as CacheWord
 
 		modify image 'fill'
 			image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
@@ -185,7 +185,7 @@ export type LibraryCacheReader
 		let carried = try headerWordAt(image, start: magicCount + HeaderWordByteCount)
 		let payload = try image.slice(headerCount, endIndex: image.count()) otherwise throw LibraryCacheDamage.truncated
 
-		if (mixBytes(Hasher.empty(), bytes: payload) as CacheWord) != carried 'corrupt'
+		if (digestOfBytes(payload) as CacheWord) != carried 'corrupt'
 			throw LibraryCacheDamage.checksumMismatch
 		end 'corrupt'
 

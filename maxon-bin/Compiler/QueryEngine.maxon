@@ -18,7 +18,7 @@
 // if it changed a DECLARATION; see `parseMemoKey`). A new or changed file is
 // upserted with its fresh hash — no shared revision counter is touched.
 function fileChanged(project Project, path FilePath, content String)
-	let hash = mixBytes(Hasher.empty(), bytes: content.toByteArray())
+	let hash = digestOfBytes(content.toByteArray())
 
 	if let existing = try project.db.sourceFiles.get(path) 'exists'
 		if existing.contentHash == hash 'unchanged'
@@ -120,7 +120,7 @@ end 'forgetOneSourceFile'
 // an entry for exactly the files it did not change and gets its own for the one it did.
 //
 // ⚠ **IT EXTENDS THE TRUST ALREADY PLACED IN THE CONTENT HASH FROM ONE FILE TO ALL OF THEM.** Every
-// per-file memo in `QueryDatabase` treats a 64-bit FNV-1a match as "these are the same bytes",
+// per-file memo in `QueryDatabase` treats a 64-bit content-hash match as "these are the same bytes",
 // under a PATH key; here a collision could be between any two admitted files. The admission list is
 // `stdlib/`'s files (see `HashDigestSet`), which bounds the exposure to a set that is small, fixed
 // and not chosen by user input.
@@ -160,6 +160,10 @@ function buildKeyOf(project Project) returns BuildKey
 	let flagged = (((project.target.cpu.ordinal * Os.allCases.count()) + project.target.os.ordinal) * FlagRadix) + flagDigit
 	return ((flagged * FlagRadix) + orderDigit) as BuildKey
 end 'buildKeyOf'
+
+function buildKeyDigestOf(project Project) returns HashDigest
+	return KeyedHasher.combined(startDigest(), value: buildKeyOf(project) as HashDigest)
+end 'buildKeyDigestOf'
 
 // What the `#if` filter is evaluated against for this project — the same facts `buildKeyOf` packs.
 function conditionFactsOf(project Project) returns ConditionFacts
@@ -387,25 +391,21 @@ end 'sourceEntryOf'
 // wrong — a wrong answer served out of a cache, visible only on an incremental rebuild.
 //
 // The two halves are mixed rather than compared separately so validity stays what it has always
-// been: ONE stamped hash, ONE equality test (see this file's header). `Hasher.combined` is FNV's
-// own step, so the composite is as collision-resistant as either half.
-// The third half's two values. Arbitrary DISTINCT constants rather than 0 and 1 because
-// `Hasher.combined` is FNV's own step and feeding it 0 is feeding it nothing: two files whose other halves differ by exactly one
-// would then collide across the split.
+// been: ONE stamped hash, ONE equality test (see this file's header). `KeyedHasher.combined` is the
+// hash's own step, so the composite is as collision-resistant as either half.
 let BodiesBuiltKeySalt = 0x9E3779B97F4A7C15 as HashDigest
 let BodiesSkippedKeySalt = 0xC2B2AE3D27D4EB4F as HashDigest
 
-// The fourth half's two values, distinct from each other and from the pair above for that same reason.
 let CoverageInstrumentedKeySalt = 0xD6E8FEB86659FD93 as HashDigest
 let CoveragePlainKeySalt = 0xA0761D6478BD642F as HashDigest
 
 function parseMemoKey(contentHash HashDigest, signatureHash HashDigest, buildsBodies bool, coverage bool, editorFacts bool, overridesDigest HashDigest, authoredPath FilePath) returns HashDigest
-	let inputs = Hasher.combined(Hasher.combined(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
+	let inputs = KeyedHasher.combined(KeyedHasher.combined(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
 
-	let withCoverage = Hasher.combined(inputs, value: CoverageInstrumentedKeySalt if coverage else CoveragePlainKeySalt)
+	let withCoverage = KeyedHasher.combined(inputs, value: CoverageInstrumentedKeySalt if coverage else CoveragePlainKeySalt)
 
 	// A parse memoized without editor facts would answer the edited document's check with none.
-	let withOverrides = Hasher.combined(mixFlag(withCoverage, set: editorFacts), value: overridesDigest)
+	let withOverrides = KeyedHasher.combined(mixFlag(withCoverage, set: editorFacts), value: overridesDigest)
 
 	return mixBytes(withOverrides, bytes: authoredPath.toString().toByteArray())
 end 'parseMemoKey'
@@ -426,11 +426,11 @@ let FlagSetKeySalt = 0xE7037ED1A0B428DB as HashDigest
 let FlagClearKeySalt = 0x8EBC6AF09C88C6E3 as HashDigest
 
 function mixFlag(state HashDigest, set bool) returns HashDigest
-	return Hasher.combined(state, value: FlagSetKeySalt if set else FlagClearKeySalt)
+	return KeyedHasher.combined(state, value: FlagSetKeySalt if set else FlagClearKeySalt)
 end 'mixFlag'
 
 function sharedParseVariant(project Project, job ParseJob) returns HashDigest
-	var variant = mixBytes(buildKeyOf(project) as HashDigest, bytes: job.path.toString().toByteArray())
+	var variant = mixBytes(buildKeyDigestOf(project), bytes: job.path.toString().toByteArray())
 	variant = mixBytes(variant, bytes: job.namespace.toByteArray())
 	variant = mixFlag(variant, set: job.buildsBodies)
 	variant = mixFlag(variant, set: job.instrumentsCoverage)
@@ -448,7 +448,7 @@ function sharedParsePlanOf(project Project, job ParseJob, contentHash HashDigest
 		return SharedParsePlan.unshared
 	end 'notShareable'
 
-	let key = Hasher.combined(Hasher.combined(Hasher.combined(signatures.libraryHash, value: overrides.digest), value: liveness), value: signatures.contestedAliasesDigest)
+	let key = KeyedHasher.combined(KeyedHasher.combined(KeyedHasher.combined(signatures.libraryHash, value: overrides.digest), value: liveness), value: signatures.contestedAliasesDigest)
 
 	let variant = sharedParseVariant(project, job: job)
 	project.db.sharedParseVariantsUsed.insert(variant)
@@ -731,7 +731,7 @@ function compositeSourceHash(project Project) returns HashDigest
 		return project.db.compositeHash
 	end 'memoized'
 
-	var h = Hasher.empty()
+	var h = startDigest()
 
 	for path in project.db.sourcePaths 'each'
 		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
@@ -740,8 +740,8 @@ function compositeSourceHash(project Project) returns HashDigest
 		// sequence, not of the contents alone. A rename moves no content, so a fold over contents alone
 		// recomputes to the same value, the signature-index memo reads valid, and the index keeps
 		// answering out of the file that is gone.
-		h = Hasher.combinedBytes(h, bytes: path.toString().toByteArray())
-		h = Hasher.combined(h, value: entry.contentHash)
+		h = KeyedHasher.combinedBytes(h, bytes: path.toString().toByteArray())
+		h = KeyedHasher.combined(h, value: entry.contentHash)
 	end 'each'
 
 	project.db.compositeHash = h
@@ -774,7 +774,7 @@ end 'signaturesCacheValid'
 
 // The sources, and the generic types a fold of them found a parse instantiating — the index's two inputs.
 function signatureMemoKey(project Project) returns HashDigest
-	return Hasher.combined(Hasher.combined(compositeSourceHash(project), value: project.db.instantiatedByAParse.digest), value: project.db.genericInstances.filed.digest)
+	return KeyedHasher.combined(KeyedHasher.combined(compositeSourceHash(project), value: project.db.instantiatedByAParse.digest), value: project.db.genericInstances.filed.digest)
 end 'signatureMemoKey'
 
 // True iff the merged-module memo is present and still keyed on the current

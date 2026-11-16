@@ -119,7 +119,7 @@ rules about ADDING OR CHANGING a stdlib module.
   CONFORMANCE IMPL SYMBOLS (`String.hash`, `Character.hash`, …) which a user declaration of the same
   name would not collide with but silently **REPLACE**: `undefinedImplNames` would then decline to install
   the builtin. Unrefused, both would be silent and undiagnosed: a `Box with String` whose
-  `.itemHash()` of `""` answers the user's body instead of djb2's `5381`, and a `Set with String`
+  `.itemHash()` of `""` answers the user's body instead of `String.hash`'s, and a `Set with String`
   that stores `"alice"` **twice** because the user's `equals` answers `false`.
   ⚠ **For every OTHER builtin it is the maintainer's responsibility** — the compiler has no general
   builtin-type-redeclaration diagnostic, and enforcing one is a language matter rather than a loader
@@ -902,12 +902,12 @@ cont
 ```
 
 <!-- test: stdlib-loading.hash-string-from-stdlib -->
-`hashString` is djb2 over the whole string — the hottest byte-walk in the stdlib, and the one
-`Map with (String, V)` will call on every insert. `"a"` is `5381 * 33 + 97`.
+`hashString` is the body of `String.hash` — the byte walk `Map with (String, V)` calls on every insert —
+so the stdlib function called by name answers what the method answers on the same text.
 ```maxon
 function main() returns ExitCode
-	print("{hashString("a")}\n")
-	print("{hashString("")}\n")
+	print("{hashString("a") == "a".hash()}\n")
+	print("{hashString("") == "".hash()}\n")
 	return 0
 end 'main'
 ```
@@ -915,8 +915,8 @@ end 'main'
 0
 ```
 ```stdout
-177670
-5381
+true
+true
 ```
 
 <!-- test: stdlib-loading.unicode-is-whitespace-from-stdlib -->

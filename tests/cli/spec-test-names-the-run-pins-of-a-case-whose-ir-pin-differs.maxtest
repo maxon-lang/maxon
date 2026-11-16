@@ -1,0 +1,41 @@
+let SpecTestNamesTheRunPinsIrCaseDirName = "spec-test-names-the-run-pins-of-an-ir-pin-failure"
+let UnpinnedQuietCaseName = "unpinned-quiet"
+let PinnedQuietCaseName = "pinned-quiet"
+let QuietCasePinnedSeed = "fedcba9876543210"
+let IrPinFailureReason = "pin differs from the Target IR the compiler rendered"
+
+test 'a case that pins a hash seed, runs and passes, and fails its Target IR pin reports the run pair, as an unpinned case does'
+	requireHeldOutsideCheckout(SpecTestNamesTheRunPinsIrCaseDirName, check: SpecTestNamesTheRunPinsOfAnIrPinFailure.create())
+end 'a case that pins a hash seed, runs and passes, and fails its Target IR pin reports the run pair, as an unpinned case does'
+
+type SpecTestNamesTheRunPinsOfAnIrPinFailure implements OutsideCheckoutCase
+	static function create() returns SpecTestNamesTheRunPinsOfAnIrPinFailure
+		return Self{}
+	end 'create'
+
+	function requireIrPinFailure(report HashFailureReport) throws TestFailure
+		try Expect.contains(joined(report.block, separator: LineFeed), needle: IrPinFailureReason, message: "{report.which} is not the Target IR pin failure this case exists to pin: it does not say `{IrPinFailureReason}`.")
+	end 'requireIrPinFailure'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cases = HashReportCaseArray.create(0)
+		cases.push(HashReportCase.passingAgainstAWrongIrPin(UnpinnedQuietCaseName, seed: HashPinUnset, tier: HashPinUnset))
+		cases.push(HashReportCase.passingAgainstAWrongIrPin(PinnedQuietCaseName, seed: QuietCasePinnedSeed, tier: HashTierSoftware))
+
+		let specDir = stagedHashReportSpec(dir, cases: cases)
+		let said = runHashReportSpec(dir, specDir: specDir, seed: HashPinUnset, tier: HashPinUnset)
+
+		let unpinnedReport = try hashFailureReportOf(said, caseName: UnpinnedQuietCaseName)
+		let pinnedReport = try hashFailureReportOf(said, caseName: PinnedQuietCaseName)
+
+		try requireIrPinFailure(unpinnedReport)
+		try requireIrPinFailure(pinnedReport)
+
+		let unpinned = unpinnedReport.pins
+		let pinned = pinnedReport.pins
+
+		try Expect.equal(pinned.seed, expected: unpinned.seed, message: "`{PinnedQuietCaseName}` pins {HashSeedVariable}={QuietCasePinnedSeed}, its program ran and passed, and the Target IR pin failed after it, so its failure names the seed of the run, {unpinned.seed}, and not {pinned.seed}.")
+		try Expect.equal(pinned.tier, expected: unpinned.tier, message: "`{PinnedQuietCaseName}` pins {HashTierVariable}={HashTierSoftware}, its program ran and passed, and the Target IR pin failed after it, so its failure names the tier of the run, {unpinned.tier}, and not {pinned.tier}.")
+		try Expect.notEqual(pinned.seed, expected: QuietCasePinnedSeed, message: "a failure decided after the program passed names the program's own seed pin.")
+	end 'requireHeldIn'
+end 'SpecTestNamesTheRunPinsOfAnIrPinFailure'

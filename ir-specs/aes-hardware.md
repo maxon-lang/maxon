@@ -48,13 +48,14 @@ mrt_aes_encrypt_block
 ```TargetIr:x64-windows
 data {
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_console_probe_stdin@64 = i8 0
+  __mrt_console_probe_stdout@65 = i8 0
+  __mrt_console_probe_stderr@66 = i8 0
+  __mrt_program_started@67 = i8 0
 }
 
 func @main {
@@ -307,10 +308,11 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_cpu_aes_usable@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -811,10 +813,11 @@ data {
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @main {
@@ -1094,13 +1097,14 @@ Aes.decryptBlockInto
 ```TargetIr:x64-windows
 data {
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_console_probe_stdin@64 = i8 0
+  __mrt_console_probe_stdout@65 = i8 0
+  __mrt_console_probe_stderr@66 = i8 0
+  __mrt_program_started@67 = i8 0
 }
 
 func @main {
@@ -1532,10 +1536,11 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_cpu_aes_usable@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -2407,10 +2412,11 @@ data {
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @main {
@@ -2873,13 +2879,14 @@ Aes.encryptBlockInto
 ```TargetIr:x64-windows
 data {
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_console_probe_stdin@64 = i8 0
+  __mrt_console_probe_stdout@65 = i8 0
+  __mrt_console_probe_stderr@66 = i8 0
+  __mrt_program_started@67 = i8 0
 }
 
 func @main {
@@ -3128,10 +3135,11 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_cpu_aes_usable@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -4389,10 +4397,11 @@ data {
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @main {
@@ -5433,13 +5442,14 @@ mrt_aes_ctr_blocks_4
 ```TargetIr:x64-windows
 data {
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_console_probe_stdin@64 = i8 0
+  __mrt_console_probe_stdout@65 = i8 0
+  __mrt_console_probe_stderr@66 = i8 0
+  __mrt_program_started@67 = i8 0
 }
 
 func @main {
@@ -5885,10 +5895,11 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_cpu_aes_usable@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -6778,10 +6789,11 @@ data {
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @main {
@@ -7274,13 +7286,14 @@ mrt_aes_gcm_finish
 ```TargetIr:x64-windows
 data {
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
-  __mrt_program_started@59 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_console_probe_stdin@64 = i8 0
+  __mrt_console_probe_stdout@65 = i8 0
+  __mrt_console_probe_stderr@66 = i8 0
+  __mrt_program_started@67 = i8 0
 }
 
 func @main {
@@ -8719,10 +8732,11 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_cpu_aes_usable@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -11279,10 +11293,11 @@ data {
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
   __mrt_cpu_aes_usable@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @main {
@@ -12391,5 +12406,979 @@ chunk @mrt_aes_gcm_finish {
     0070: 10 1e 33 6e 13 e2 f7 0e 31 1e 33 6e 31 42 11 6e
     0080: 10 1e 31 6e 10 0a 20 4e 10 1e 21 6e 50 00 80 3d
     0090: e0 03 1f aa c0 03 5f d6
+}
+```
+
+<!-- test: aes-hardware.a-counted-read-held-across-a-cpu-feature-probe-is-not-retained -->
+<!-- tier: stdlib -->
+A CPU-feature probe releases nothing, so a string read from an array its caller still holds stays borrowed across a call
+that tests `__Builtins.cpuHasSha()`: `main`, which inlines `pick` and `touch`, takes no reference to it around the probe.
+```maxon
+typealias StringArray = Array with String
+typealias Count = int(0 to 1000000)
+
+function touch() returns Count
+	if __Builtins.cpuHasSha() 'sha'
+		return 1
+	end 'sha'
+
+	return 0
+end 'touch'
+
+function pick(arr StringArray) returns String
+	let s = try arr.get(0) otherwise ""
+	let gone = touch()
+
+	if gone == 7 'seven'
+		return "{s} seven"
+	end 'seven'
+
+	return "{s} other"
+end 'pick'
+
+function main() returns ExitCode
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let s = pick(arr)
+	print("[{s}] {arr.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42 other] 1
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_cpu_aes_usable@16 = i64 0
+  __mrt_cpu_sha_usable@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 152
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "hello world this is a long string for heap allocation "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 r13, 42
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRegReg rax, r12, r13
+    x64.storeSlotReg slot11, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot14, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rbx, slot14
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot11
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_push
+  __il_body#6:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#21
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#22:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#21:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rbx, [rip + __str_rec_7]  ; ""
+    x64.jmp __il_body#18
+  tryok:
+    x64.movRegReg rbx, r8
+  __il_body#18:
+    x64.callDirect __cpufeat_sha_usable
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ifcont
+  ifcont:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_9]  ; " other"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot13, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot10, rax
+    x64.leaRegRegReg rax, rbx, rax
+    x64.storeSlotReg slot8, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.loadRegSlot rax, slot10
+    x64.loadRegSlot rdx, slot13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rax, rbx, rax
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.loadRegSlot rax, slot8
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_cont#5:
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; "["
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot12, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.storeSlotReg slot9, rax
+    x64.loadRegBaseDisp.word64 r13, [r14 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "] "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRdata rax, [rip + __str_rec_13]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r12, r8, 56
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body#4:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#3:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+  exitdrop:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+}
+```
+```TargetIr:x64-windows
+data {
+  __mrt_cpu_aes_usable@24 = i64 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_console_probe_stdin@64 = i8 0
+  __mrt_console_probe_stdout@65 = i8 0
+  __mrt_console_probe_stderr@66 = i8 0
+  __mrt_program_started@67 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 152
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "hello world this is a long string for heap allocation "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 r13, 42
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRegReg rax, r12, r13
+    x64.storeSlotReg slot11, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot14, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rbx, slot14
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot11
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_push
+  __il_body#6:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#21
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#22:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#21:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rbx, [rip + __str_rec_7]  ; ""
+    x64.jmp __il_body#18
+  tryok:
+    x64.movRegReg rbx, r8
+  __il_body#18:
+    x64.callDirect __cpufeat_sha_usable
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ifcont
+  ifcont:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_9]  ; " other"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot13, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot10, rax
+    x64.leaRegRegReg rax, rbx, rax
+    x64.storeSlotReg slot8, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.loadRegSlot rax, slot10
+    x64.loadRegSlot rdx, slot13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rax, rbx, rax
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.loadRegSlot rax, slot8
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_cont#5:
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; "["
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot12, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.storeSlotReg slot9, rax
+    x64.loadRegBaseDisp.word64 r13, [r14 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "] "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRdata rax, [rip + __str_rec_13]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r12, r8, 56
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body#4:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#3:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+  exitdrop:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+  exitterminal:
+    x64.movRegReg r8, rbx
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_cpu_aes_usable@24 = i64 0
+  __mrt_cpu_sha_usable@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot14, x28
+    arm64.storeSlotReg slot13, x27
+    arm64.storeSlotReg slot12, x26
+    arm64.storeSlotReg slot11, x25
+    arm64.storeSlotReg slot10, x24
+    arm64.storeSlotReg slot9, x23
+    arm64.storeSlotReg slot8, x22
+    arm64.storeSlotReg slot7, x21
+    arm64.storeSlotReg slot6, x20
+    arm64.storeSlotReg slot5, x19
+    arm64.leaRdata x0, __str_rec_10  ; "hello world this is a long string for heap allocation "
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.movImm x21, 42
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x21, x0
+    arm64.add x23, x20, x21
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x25, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x19, x21
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_push
+  __il_body#6:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#21
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  critsplit#22:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#21:
+    arm64.movRegReg x9, x2
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x20, __str_rec_7  ; ""
+    arm64.b __il_body#18
+  tryok:
+    arm64.movRegReg x20, x0
+  __il_body#18:
+    arm64.bl __cpufeat_sha_usable
+    arm64.cbnz x0, ifcont
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
+    arm64.leaRdata x0, __str_rec_9  ; " other"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x20, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.storeSlotReg slot1, x25
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x26, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+  __il_cont#5:
+    arm64.leaRdata x0, __str_rec_11  ; "["
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x25 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x25 + 8]
+    arm64.leaRdata x0, __str_rec_12  ; "] "
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_13  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot4, x0
+    arm64.add x1, x21, x23
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x19
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot2, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot3, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x20, x20, x23
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x20, x20, x25
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x20, x19
+    arm64.loadRegSlot x2, slot4
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot4
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+  __il_body#4:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __write_stdout
+  __il_cont#3:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __str_decref
+  exitdrop:
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
+    arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+}
+```
+```TargetIr:arm64-macos
+data {
+  __mrt_cpu_sha_usable@0 = i64 1
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot14, x28
+    arm64.storeSlotReg slot13, x27
+    arm64.storeSlotReg slot12, x26
+    arm64.storeSlotReg slot11, x25
+    arm64.storeSlotReg slot10, x24
+    arm64.storeSlotReg slot9, x23
+    arm64.storeSlotReg slot8, x22
+    arm64.storeSlotReg slot7, x21
+    arm64.storeSlotReg slot6, x20
+    arm64.storeSlotReg slot5, x19
+    arm64.leaRdata x0, __str_rec_10  ; "hello world this is a long string for heap allocation "
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.movImm x21, 42
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x21, x0
+    arm64.add x23, x20, x21
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x25, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x19, x21
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_push
+  __il_body#6:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#21
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  critsplit#22:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#21:
+    arm64.movRegReg x9, x2
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x20, __str_rec_7  ; ""
+    arm64.b __il_body#18
+  tryok:
+    arm64.movRegReg x20, x0
+  __il_body#18:
+    arm64.bl __cpufeat_sha_usable
+    arm64.cbnz x0, ifcont
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
+    arm64.leaRdata x0, __str_rec_9  ; " other"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x20, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.storeSlotReg slot1, x25
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x26, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+  __il_cont#5:
+    arm64.leaRdata x0, __str_rec_11  ; "["
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x25 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x25 + 8]
+    arm64.leaRdata x0, __str_rec_12  ; "] "
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_13  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot4, x0
+    arm64.add x1, x21, x23
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x19
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot2, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot3, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x20, x20, x23
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x20, x20, x25
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x20, x19
+    arm64.loadRegSlot x2, slot4
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot4
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+  __il_body#4:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __write_stdout
+  __il_cont#3:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __str_decref
+  exitdrop:
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+  exitterminal:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
+    arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
 }
 ```

@@ -4227,7 +4227,7 @@ func @main {
     x64.callDirect __release_type_param
   __il_cont#28:
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_ArrayIterator_T63315404e8d3fd14
+    x64.callDirect __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#27:
     x64.movRegImm32 rax, 0
     x64.movRegReg r12, r14
@@ -4520,7 +4520,7 @@ func @main {
     x64.callDirect __release_type_param
   __il_cont#28:
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_ArrayIterator_T63315404e8d3fd14
+    x64.callDirect __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#27:
     x64.movRegImm32 rax, 0
     x64.movRegReg r12, r14
@@ -4813,7 +4813,7 @@ func @main {
     arm64.bl __release_type_param
   __il_cont#28:
     arm64.movRegReg x0, x21
-    arm64.bl __destruct_ArrayIterator_T63315404e8d3fd14
+    arm64.bl __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#27:
     arm64.movImm x0, 0
     arm64.movRegReg x20, x22
@@ -5116,7 +5116,7 @@ func @main {
     arm64.bl __release_type_param
   __il_cont#28:
     arm64.movRegReg x0, x21
-    arm64.bl __destruct_ArrayIterator_T63315404e8d3fd14
+    arm64.bl __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#27:
     arm64.movImm x0, 0
     arm64.movRegReg x20, x22
@@ -5465,7 +5465,7 @@ func @xorKeyStream {
     x64.callDirect __release_type_param
   __il_cont#42:
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_ArrayIterator_T63315404e8d3fd14
+    x64.callDirect __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#41:
     x64.movRegImm32 rax, 0
     x64.movRegReg r12, r14
@@ -5975,7 +5975,7 @@ func @xorKeyStream {
     x64.callDirect __release_type_param
   __il_cont#42:
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_ArrayIterator_T63315404e8d3fd14
+    x64.callDirect __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#41:
     x64.movRegImm32 rax, 0
     x64.movRegReg r12, r14
@@ -6483,7 +6483,7 @@ func @xorKeyStream {
     arm64.bl __release_type_param
   __il_cont#42:
     arm64.movRegReg x0, x23
-    arm64.bl __destruct_ArrayIterator_T63315404e8d3fd14
+    arm64.bl __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#41:
     arm64.movImm x0, 0
     arm64.movRegReg x22, x24
@@ -7001,7 +7001,7 @@ func @xorKeyStream {
     arm64.bl __release_type_param
   __il_cont#42:
     arm64.movRegReg x0, x23
-    arm64.bl __destruct_ArrayIterator_T63315404e8d3fd14
+    arm64.bl __destruct_ArrayIterator_T6c9acf8446e4d331
   exitterminal#41:
     arm64.movImm x0, 0
     arm64.movRegReg x22, x24
@@ -7932,7 +7932,7 @@ func @WithIterIterator.current {
     x64.callDirect __retain_type_param
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.movRegReg rax, r8
     x64.movRegReg r8, r13
     x64.movRegReg r10, rax
@@ -8394,7 +8394,7 @@ func @WithIterIterator.current {
     x64.callDirect __retain_type_param
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callMem [r12 + 40]
+    x64.callMem [r12 + 48]
     x64.movRegReg rax, r8
     x64.movRegReg r8, r13
     x64.movRegReg r10, rax
@@ -8851,7 +8851,7 @@ func @WithIterIterator.current {
     arm64.bl __retain_type_param
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
     arm64.blr x16
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21
@@ -9311,7 +9311,7 @@ func @WithIterIterator.current {
     arm64.bl __retain_type_param
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
     arm64.blr x16
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21

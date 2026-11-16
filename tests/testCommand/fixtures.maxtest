@@ -169,6 +169,27 @@ end 'no corpus directory holds a source that is not a test'
 // RUNNING ONE CASE
 // ============================================================================================
 
+let PinnedHashSeedVariable = "MAXON_HASH_SEED"
+let PinnedHashTierVariable = "MAXON_HASH_TIER"
+let PinnedHashSeed = "0123456789abcdef"
+let PinnedHashTier = "software"
+
+let RecordExpectationsVariable = "MAXON_RECORD_FIXTURE_EXPECTATIONS"
+
+function recordsExpectations() returns bool
+	let asked = try Process.environmentVariable(RecordExpectationsVariable) otherwise return false
+
+	return not asked.isEmpty()
+end 'recordsExpectations'
+
+function pinnedHashEnvironment() returns Environment
+	let overrides = EnvMap.create()
+	overrides.upsert(PinnedHashSeedVariable, value: PinnedHashSeed)
+	overrides.upsert(PinnedHashTierVariable, value: PinnedHashTier)
+
+	return Environment.inheritUpdating(overrides)
+end 'pinnedHashEnvironment'
+
 function runFixture(caseName String, extraArguments StringArray = StringArray.create(0)) returns CollectedOutput
 	let caseDir = fixtureDir("{FixturesDir}/{caseName}")
 	let argv = fixtureArgv(caseDir, caseName: caseName)
@@ -177,19 +198,19 @@ function runFixture(caseName String, extraArguments StringArray = StringArray.cr
 		argv.push(extra)
 	end 'eachExtra'
 
-	return spawnCompiler(argv, staged: Directory.currentPath(), what: "the '{caseName}' case")
+	return spawnCompiler(argv, staged: Directory.currentPath(), what: "the '{caseName}' case", environment: pinnedHashEnvironment())
 end 'runFixture'
 
 function runTestCommandOn(subject FilePath, caseName String) returns CollectedOutput
-	return spawnCompiler(testCommandArgv([subject.toString()]), staged: Directory.currentPath(), what: "the '{caseName}' case")
+	return spawnCompiler(testCommandArgv([subject.toString()]), staged: Directory.currentPath(), what: "the '{caseName}' case", environment: pinnedHashEnvironment())
 end 'runTestCommandOn'
 
 function runTestCommandOnTarget(target String, subject FilePath, caseName String) returns CollectedOutput
-	return spawnCompiler(testCommandArgv([target, subject.toString()]), staged: Directory.currentPath(), what: "the '{caseName}' case")
+	return spawnCompiler(testCommandArgv([target, subject.toString()]), staged: Directory.currentPath(), what: "the '{caseName}' case", environment: pinnedHashEnvironment())
 end 'runTestCommandOnTarget'
 
 function runTestCommandWordIn(project FilePath, word String, caseName String) returns CollectedOutput
-	return spawnCompiler(testCommandArgv([word]), staged: project, what: "the '{caseName}' case")
+	return spawnCompiler(testCommandArgv([word]), staged: project, what: "the '{caseName}' case", environment: pinnedHashEnvironment())
 end 'runTestCommandWordIn'
 
 function runManifestBuildIn(project FilePath, caseName String) returns CollectedOutput
@@ -232,8 +253,13 @@ function checkFixtureRun(run CollectedOutput, caseName String) throws TestFailur
 	let expectedExit = expectedExitCodeIn(caseDir, caseName: caseName)
 	let observedExit = run.exitCode()
 	try Expect.equal(observedExit, expected: expectedExit as ExitInt, message: "'{caseName}' exited differently from its {ExpectedExitFileName}. The exit code is the half of this report a SCRIPT reads, and the half that decides whether a red run stops anything. It printed: {run.stdout}")
-	let expectedStdout = requiredFixtureText(caseDir, fileName: ExpectedStdoutFileName, caseName: caseName, holds: "the exact stdout this case's run must print")
 	let observedStdout = run.stdout
+
+	if recordsExpectations() 'recording'
+		try File.writeText(caseDir.join(ExpectedStdoutFileName), content: observedStdout) otherwise panic("fixtures.test: could not record {ExpectedStdoutFileName} for the '{caseName}' case.")
+	end 'recording'
+
+	let expectedStdout = requiredFixtureText(caseDir, fileName: ExpectedStdoutFileName, caseName: caseName, holds: "the exact stdout this case's run must print")
 	try Expect.equal(observedStdout, expected: expectedStdout)
 end 'checkFixtureRun'
 

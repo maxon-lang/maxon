@@ -328,6 +328,10 @@ function main() returns ExitCode
 		return refusedCommandLineExit(args.command)
 	end 'emptyWord'
 
+	if commandDigestsLibraryContent(args.command) 'seedsTheDigests'
+		installLibraryDigestSeed()
+	end 'seedsTheDigests'
+
 	return match args.command 'cmd'
 		build gives runBuild(args)
 		cache gives runCache(args)
@@ -357,6 +361,37 @@ function main() returns ExitCode
 		unknown gives noCommandGiven(args)
 	end 'cmd'
 end 'main'
+
+function commandDigestsLibraryContent(command MaxonCommand) returns bool
+	return match command 'whichCommand'
+		build or
+		checkScriptlib or
+		checkStdlib or
+		coverage or
+		dapServer or
+		debug or
+		execute or
+		lint or
+		lspServer or
+		mcpServer or
+		profile or
+		run or
+		scaleTest or
+		specTest or
+		stageLibraryTier or
+		test or
+		verifyRecheck or
+		verifyWarmRebuild gives true
+		cache or
+		fmt or
+		help or
+		init or
+		monitor or
+		upgrade or
+		version or
+		unknown gives false
+	end 'whichCommand'
+end 'commandDigestsLibraryContent'
 
 let SolePositionalIndex = 0 as ElementIndex
 let FirstWordCount = 1 as ElementIndex
@@ -2404,7 +2439,7 @@ function optionReference(option HelpOption) returns OptionReference
 		batch gives OptionReference.create("{BatchFlagPrefix}{BatchOnValue}|{BatchOffValue}", description: "{BatchOnValue} (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly; {BatchOffValue} compiles and runs every case on its own. The summary line says how many run cases ran batched, in how many programs, and how many ran alone.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(BatchFlagPrefix)])
 		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(NetworkFlag)])
 		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(WorkersFlagPrefix)])
-		shard gives OptionReference.create("{ShardFlagPrefix}<k>/<n>", description: "Run only the k-th of n shards of the suite, 1 <= k <= n <= {MaxShardNumber}. A spec file belongs to the shard (H mod n) + 1, where H is the 64-bit FNV-1a digest of the spec's name, so the n shards partition the suite, the split does not depend on the order a directory lists its files, and every host computes the same one. {FilterFlagPrefix} patterns are judged against the whole directory before it is sharded: a pattern that selects cases only in other shards does not refuse the run, and a shard left with no selected case prints the empty report and exits 0.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(ShardFlagPrefix)])
+		shard gives OptionReference.create("{ShardFlagPrefix}<k>/<n>", description: "Run only the k-th of n shards of the suite, 1 <= k <= n <= {MaxShardNumber}. A spec file belongs to the shard (H mod n) + 1, where H is the first 64 bits of the SHA-256 digest of the spec's name, so the n shards partition the suite, the split does not depend on the order a directory lists its files, and every host computes the same one. {FilterFlagPrefix} patterns are judged against the whole directory before it is sharded: a pattern that selects cases only in other shards does not refuse the run, and a shard left with no selected case prints the empty report and exits 0.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(ShardFlagPrefix)])
 		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RungsFlagPrefix)])
 		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RepeatFlagPrefix)])
 		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(NoteFlagPrefix)])

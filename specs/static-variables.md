@@ -490,7 +490,8 @@ error E3209: <fragment>:27:3: a return does not fit the declared result: the ret
 <!-- test: static-struct-literal-interface-field-holding-a-string-literal -->
 A `String` literal widened into a `Hashable` field at module scope: the record is the literal's clone, and
 its witness table names the standard library's own `String.hash`, which a program reaching no other
-`Hashable` position must still build.
+`Hashable` position must still build. The answer is compared with `hashString`, the function that body
+calls, so no second door to `String.hash` enters the program.
 ```maxon
 type Holder
 	export let key as Hashable
@@ -504,12 +505,12 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.get()
-	print("{h.key.hash()}\n")
+	print("{h.key.hash() == hashString("ab1cd")}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-252765120
+true
 ```
 
 <!-- test: error.static-struct-literal-interface-field-non-conformer -->

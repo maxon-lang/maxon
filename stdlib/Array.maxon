@@ -603,22 +603,22 @@ public extension Array
 	end 'sortUnstableBy'
 end 'Array'
 
-// The compiler's native `__managed_hash` (`ManagedMemoryRuntime.buildArrayHash`) computes this same
-// fold, and the two must agree for every array both can hash.
-let ArrayHashSeed = 5381
-let ArrayHashMultiplier = 33
-let ArrayHashMask = 0xFFFFFFFF
-
+// The compiler's native `__managed_hash` and `__managed_hash_float` compute these same two folds, chosen
+// by the `ProgramSignatures.conformerHashesAsStorage` that `elementsHashAsStorage` reads; they must agree.
 // Conditional conformance: Array implements Hashable and Equatable when Element does
 public extension Array implements Hashable, Equatable where Element is Hashable and Equatable
 	public function hash() returns HashValue
-		var h = ArrayHashSeed as FullRangeInt
+		if __Builtins.elementsHashAsStorage() 'asStorage'
+			return __Builtins.hashArrayStorage(self)
+		end 'asStorage'
+
+		var state = processFoldStart()
 
 		for item in self 'eachElement'
-			h = (h * ArrayHashMultiplier + (item.hash() as FullRangeInt)) and ArrayHashMask
+			state = KeyedHasher.combined(state, value: item.hash() as HashDigest)
 		end 'eachElement'
 
-		return h as HashValue
+		return hashValueOfDigest(state)
 	end 'hash'
 
 	public function equals(other Self) returns bool

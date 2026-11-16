@@ -1271,9 +1271,9 @@ function main() returns ExitCode
 	print("{take(u64.max - 1)}\n")
 	print("{take(u64.max xor 1)}\n")
 	print("{take((u64.max as Count) / 1)}\n")
-	print("{take((0xcbf29ce484222325 as Count) * 1)}\n")
+	print("{take((0xA5A5A5A5A5A5A5A5 as Count) * 1)}\n")
 	print("{take((0x8000000000000000 as Count) or 1)}\n")
-	print("{take((0xcbf29ce484222325 as Count) xor 5)}\n")
+	print("{take((0xA5A5A5A5A5A5A5A5 as Count) xor 5)}\n")
 	return 0
 end 'main'
 ```
@@ -1284,9 +1284,9 @@ end 'main'
 18446744073709551614
 18446744073709551614
 18446744073709551615
-14695981039346656037
+11936128518282651045
 9223372036854775809
-14695981039346656032
+11936128518282651040
 ```
 
 <!-- test: folded-unsigned-constants-reach-an-unsigned-quantity-binding -->
@@ -1298,9 +1298,9 @@ function main() returns ExitCode
 	let a = (u64.max - 1) as Count
 	let b = (u64.max xor 1) as Count
 	let c = (u64.max as Count) / 1
-	let d = (0xcbf29ce484222325 as Count) * 1
+	let d = (0xA5A5A5A5A5A5A5A5 as Count) * 1
 	let e = (0x8000000000000000 as Count) or 1
-	let h = (0xcbf29ce484222325 as Count) xor 5
+	let h = (0xA5A5A5A5A5A5A5A5 as Count) xor 5
 	print("{a} {b} {c}\n")
 	print("{d} {e} {h}\n")
 	return 0
@@ -1311,7 +1311,7 @@ end 'main'
 ```
 ```stdout
 18446744073709551614 18446744073709551614 18446744073709551615
-14695981039346656037 9223372036854775809 14695981039346656032
+11936128518282651045 9223372036854775809 11936128518282651040
 ```
 
 <!-- test: folded-unsigned-constants-reach-an-unsigned-quantity-field -->
@@ -1331,9 +1331,9 @@ type Tally
 		let t = Self{a: u64.max - 1, b: 0, c: 0, d: 0, e: 0, h: 0}
 		t.b = u64.max xor 1
 		t.c = (u64.max as Count) / 1
-		t.d = (0xcbf29ce484222325 as Count) * 1
+		t.d = (0xA5A5A5A5A5A5A5A5 as Count) * 1
 		t.e = (0x8000000000000000 as Count) or 1
-		t.h = (0xcbf29ce484222325 as Count) xor 5
+		t.h = (0xA5A5A5A5A5A5A5A5 as Count) xor 5
 		return t
 	end 'create'
 end 'Tally'
@@ -1350,7 +1350,7 @@ end 'main'
 ```
 ```stdout
 18446744073709551614 18446744073709551614 18446744073709551615
-14695981039346656037 9223372036854775809 14695981039346656032
+11936128518282651045 9223372036854775809 11936128518282651040
 ```
 
 <!-- test: unsigned-division-over-a-top-bit-variable-reaches-an-unsigned-quantity-parameter -->

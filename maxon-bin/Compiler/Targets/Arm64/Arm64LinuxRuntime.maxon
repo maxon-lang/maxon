@@ -135,6 +135,8 @@ let Arm64LinuxSyscallGetcwd = 17
 let Arm64LinuxSyscallMkdirat = 34
 let Arm64LinuxSyscallUnlinkat = 35
 let Arm64LinuxSyscallRenameat = 38
+let Arm64LinuxSyscallLinkat = 37
+let Arm64LinuxSyscallRenameat2 = 276
 
 // The named section's sizing call — the open only NAMES and `ftruncate` SIZES, which is the two-call shape
 // `CreateFileMappingW` does in one. VERIFIED by invoking 46 on an aarch64 guest against a `/dev/shm` file
@@ -968,29 +970,66 @@ end 'buildArm64LinuxPathOpChunk'
 // `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed for
 // a rename that succeeded. The three syscalls in the durability step therefore go through `arm64EmitSyscall`
 // directly rather than through `arm64LinuxEmitStashIfFailed`.
-function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome, globalData GlobalDataTable) returns FunctionCodeChunk
+function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome, globalData GlobalDataTable, disposition RenameDisposition) returns FunctionCodeChunk
 	let SlotNewPath = 0
 	let SlotDirFd = 1
 	let SlotPrefixPage = 2
-	let asm = Arm64RuntimeAsm.beginFunction(3)
+	let SlotOldPath = 3
+	let asm = Arm64RuntimeAsm.beginFunction(4)
 
+	let linkFallback = asm.newLabel()
+	let refused = asm.newLabel()
 	let renamed = asm.newLabel()
 	let mapped = asm.newLabel()
 	let unmap = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOldPath)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x3, src: Arm64Register.x1)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x2)
-	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRenameat)
+
+	match disposition 'attempt'
+		replaceExisting then arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRenameat)
+		keepExisting then arm64LinuxEmitRenameNoReplace(asm, linkFallback: linkFallback)
+	end 'attempt'
+
 	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: renamed)
 
+	asm.placeLabel(refused)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
+
+	if disposition == RenameDisposition.keepExisting 'linkThenUnlink'
+		asm.placeLabel(linkFallback)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOldPath)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotNewPath)
+		arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+		arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x2)
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxLinkFlags)
+		arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallLinkat)
+		arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
+
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOldPath)
+		arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxUnlinkFileFlags)
+		arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallUnlinkat)
+		arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: renamed)
+
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
+		arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+		arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxUnlinkFileFlags)
+		arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallUnlinkat)
+		arm64EmitBranchTo(asm, label: refused)
+	end 'linkThenUnlink'
 
 	asm.placeLabel(renamed)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
@@ -1033,8 +1072,18 @@ function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome, globalData Glo
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)
-	return asm.finishFunction(HostFileRenameName)
+	return asm.finishFunction(hostFileRenameChunkName(disposition))
 end 'buildArm64LinuxFileRenameChunk'
+
+function arm64LinuxEmitRenameNoReplace(asm Arm64RuntimeAsm, linkFallback BlockId)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxRenameNoReplace)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRenameat2)
+
+	for errno in renameNoReplaceFallbackErrnos(Os.linux) 'eachFallbackErrno'
+		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - errno) as Imm32)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: linkFallback)
+	end 'eachFallbackErrno'
+end 'arm64LinuxEmitRenameNoReplace'
 
 // ==========================================================================
 // mrt_host_file_attributes, mrt_host_entry_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
@@ -3339,7 +3388,8 @@ function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage Runt
 	if usage.usesManagedFile 'managedFile'
 		chunks.push(buildArm64LinuxFileSizeChunk(errnoHome))
 		chunks.push(buildArm64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags, errnoHome: errnoHome))
-		chunks.push(buildArm64LinuxFileRenameChunk(errnoHome, globalData: globalData))
+		chunks.push(buildArm64LinuxFileRenameChunk(errnoHome, globalData: globalData, disposition: RenameDisposition.replaceExisting))
+		chunks.push(buildArm64LinuxFileRenameChunk(errnoHome, globalData: globalData, disposition: RenameDisposition.keepExisting))
 	end 'managedFile'
 
 	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's

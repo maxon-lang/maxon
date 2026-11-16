@@ -38,7 +38,7 @@ type LibraryStart
 end 'LibraryStart'
 
 function libraryBaselineKey(project Project, partition ProgramPartition) returns HashDigest throws CompileError
-	var key = mixBytes(buildKeyOf(project) as HashDigest, bytes: project.stdlibDir.toString().toByteArray())
+	var key = mixBytes(buildKeyDigestOf(project), bytes: project.stdlibDir.toString().toByteArray())
 	key = mixBytes(key, bytes: project.runtimeDir.toString().toByteArray())
 	key = try keyWithLibraryPaths(project, key: key, paths: partition.runtimePaths)
 
@@ -50,7 +50,7 @@ function keyWithLibraryPaths(project Project, key HashDigest, paths MaxonSourceP
 
 	for path in paths 'eachPath'
 		folded = mixBytes(folded, bytes: path.toString().toByteArray())
-		folded = Hasher.combined(folded, value: (try sourceEntryOf(project, path: path)).contentHash)
+		folded = KeyedHasher.combined(folded, value: (try sourceEntryOf(project, path: path)).contentHash)
 	end 'eachPath'
 
 	return folded

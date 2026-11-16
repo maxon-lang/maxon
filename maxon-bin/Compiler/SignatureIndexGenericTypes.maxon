@@ -5867,9 +5867,9 @@ extension ProgramSignatures
 	// parse and the key that memo is validated against has to move with it.
 	function mixDeclaration(state HashDigest, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames NameRoster, paramTypes MaxonTypeArray, paramSpellings NameRoster, paramDefaults ParamPositionMask, selfCapability ParamCapability, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability) returns HashDigest
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
-		let tiered = mixDeclaringTier(mixSurface(Hasher.combined(named, value: SignatureDiscriminator.returnShapeSurface), surface: declaredSurface), visibility: visibility, declFilePath: declFilePath)
-		let received = mixOpaqueParams(Hasher.combined(tiered, value: SignatureDiscriminator.receiverShapePresent if takesReceiver else SignatureDiscriminator.receiverShapeAbsent), opaqueParams: opaqueParams)
-		let spelled = Hasher.combined(mixCapabilities(Hasher.combined(received, value: SignatureDiscriminator.declShapeHeaderSpelling), params: paramCapabilities, result: returnCapability), value: selfCapability.ordinal as HashDigest)
+		let tiered = mixDeclaringTier(mixSurface(KeyedHasher.combined(named, value: SignatureDiscriminator.returnShapeSurface), surface: declaredSurface), visibility: visibility, declFilePath: declFilePath)
+		let received = mixOpaqueParams(KeyedHasher.combined(tiered, value: SignatureDiscriminator.receiverShapePresent if takesReceiver else SignatureDiscriminator.receiverShapeAbsent), opaqueParams: opaqueParams)
+		let spelled = KeyedHasher.combined(mixCapabilities(KeyedHasher.combined(received, value: SignatureDiscriminator.declShapeHeaderSpelling), params: paramCapabilities, result: returnCapability), value: selfCapability.ordinal as HashDigest)
 		return self.mixDeclaredParams(spelled, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults)
 	end 'mixDeclaration'
 
@@ -5878,14 +5878,14 @@ extension ProgramSignatures
 			return state
 		end 'declaresNoParameter'
 
-		var mixed = Hasher.combined(state, value: SignatureDiscriminator.declShapeDeclaredParams)
+		var mixed = KeyedHasher.combined(state, value: SignatureDiscriminator.declShapeDeclaredParams)
 
 		for i in 0 upto paramNames.count() 'eachParameter'
 			let paramName = try paramNames.get(i) otherwise panic("mixDeclaredParams: paramNames.get OOB at {i} despite i < count")
 			let paramType = try paramTypes.get(i) otherwise panic("mixDeclaredParams: paramTypes.get OOB at {i} — the sweep pushes a parameter's name and type in lockstep")
 			let brand = try paramSpellings.get(i) otherwise panic("mixDeclaredParams: paramSpellings.get OOB at {i} — the sweep pushes a parameter's spelling beside its type")
 			let defaultBit = SignatureDiscriminator.defaultBitSet if maskHasParam(paramDefaults, param: i as ParamCount) else SignatureDiscriminator.defaultBitClear
-			mixed = Hasher.combined(self.mixType(mixBytes(mixBytes(mixed, bytes: paramName), bytes: brand), t: paramType), value: defaultBit)
+			mixed = KeyedHasher.combined(self.mixType(mixBytes(mixBytes(mixed, bytes: paramName), bytes: brand), t: paramType), value: defaultBit)
 		end 'eachParameter'
 
 		return mixed
@@ -5900,7 +5900,7 @@ extension ProgramSignatures
 			return state
 		end 'takesNoBareTypeParameter'
 
-		var mixed = Hasher.combined(state, value: SignatureDiscriminator.declShapeOpaqueParams)
+		var mixed = KeyedHasher.combined(state, value: SignatureDiscriminator.declShapeOpaqueParams)
 
 		for i in 0 upto opaqueParams.paramNames.count() 'eachSlot'
 			let paramName = try opaqueParams.paramNames.get(i) otherwise panic("mixOpaqueParams: paramNames.get OOB at {i} despite i < count")
@@ -5908,48 +5908,48 @@ extension ProgramSignatures
 			// A concrete slot hashes as `typeParamCount`, which no `uses` position equals, so it cannot collide
 			// with a type-parameter slot.
 			let slotDigest = (try opaqueParams.positionAt(i as ParamCount) otherwise opaqueParams.typeParamCount) as HashDigest
-			mixed = Hasher.combined(mixBytes(mixed, bytes: paramName), value: slotDigest)
+			mixed = KeyedHasher.combined(mixBytes(mixed, bytes: paramName), value: slotDigest)
 		end 'eachSlot'
 
-		return Hasher.combined(mixed, value: opaqueParams.typeParamCount as HashDigest)
+		return KeyedHasher.combined(mixed, value: opaqueParams.typeParamCount as HashDigest)
 	end 'mixOpaqueParams'
 
 	function mixReturnType(state HashDigest, returnType MaxonReturnType) returns HashDigest
 		return match returnType 'r'
-			void gives Hasher.combined(state, value: SignatureDiscriminator.returnShapeVoid)
-			value(inner) gives self.mixType(Hasher.combined(state, value: SignatureDiscriminator.returnShapeValue), t: inner)
+			void gives KeyedHasher.combined(state, value: SignatureDiscriminator.returnShapeVoid)
+			value(inner) gives self.mixType(KeyedHasher.combined(state, value: SignatureDiscriminator.returnShapeValue), t: inner)
 		end 'r'
 	end 'mixReturnType'
 
 	function mixType(state HashDigest, t MaxonType) returns HashDigest
 		return match t 'r'
-			boolean gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeBoolean)
-			integer gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeInteger)
-			float gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeFloat)
-			named(id) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeNamed), bytes: self.nameOfId(id))
-			exitCode gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeExitCode)
+			boolean gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeBoolean)
+			integer gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeInteger)
+			float gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeFloat)
+			named(id) gives mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeNamed), bytes: self.nameOfId(id))
+			exitCode gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeExitCode)
 
 			// `Parser.parseTypeReference` produces only `named` and the three primitive keywords, so
 			// a SCANNED signature can never carry `unresolved` — TypeResolution is what mints those,
 			// and it runs long after this. The arm exists because the match is exhaustive, and it
 			// hashes rather than panicking so that a future producer of `unresolved` signatures is a
 			// cache-key question, not a crash.
-			unresolved gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeUnresolved)
+			unresolved gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeUnresolved)
 
 			// A struct reference, which a scanned signature very much CAN carry: `static function
 			// create(…) returns Self` inside `type Point` is recorded as `structRef(Point)` by
 			// `Parser.parseTypeReference`, so every declared factory in the program hashes through
 			// here. Its own shape (see `typeShapeStructRef`) and then its NAME — never its id, for
 			// `mixDeclaration`'s reason.
-			structRef(id) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeStructRef), bytes: self.nameOfId(id))
+			structRef(id) gives mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeStructRef), bytes: self.nameOfId(id))
 
 			// A `String` — its own shape, and no name to mix (a builtin carries none). A
 			// signature declaring `returns String` hashes distinctly from every other return type.
-			string gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeString)
+			string gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeString)
 
 			// A FUNCTION value — its own shape, then its governing NAME (never its id, for
 			// `mixDeclaration`'s reason).
-			function(id) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeFunction), bytes: self.nameOfId(id))
+			function(id) gives mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeFunction), bytes: self.nameOfId(id))
 
 			// A TYPE-PARAMETER reference — its own shape, then its TOKEN. ⚠ **THE ONE ARM THAT MIXES
 			// AN `id` RATHER THAN A NAME, AND FOR A GOOD REASON.** `mixDeclaration`'s
@@ -5959,22 +5959,22 @@ extension ProgramSignatures
 			// the declaring type or the parameter is renamed, which is exactly when a reader's memo must
 			// move. It also finally hashes `uses A, B`'s `returns A` apart from ANOTHER type's `returns X`,
 			// where the position hashed them alike.
-			typeParameter(id) gives Hasher.combined(Hasher.combined(state, value: SignatureDiscriminator.typeShapeTypeParameter), value: id as HashDigest)
+			typeParameter(id) gives KeyedHasher.combined(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeTypeParameter), value: id as HashDigest)
 
 			// A GENERIC INSTANCE — its own shape, then its base NAME (never its id) and each ARG's
 			// shape (recursed), so `Box with Integer` and `Box with Bool` hash apart. `mixGenericInstance`
 			// reads the `(baseId, args)` payload out of THIS index's own registry.
-			genericInstance(id) gives self.mixGenericInstance(Hasher.combined(state, value: SignatureDiscriminator.typeShapeGenericInstance), id: id)
+			genericInstance(id) gives self.mixGenericInstance(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeGenericInstance), id: id)
 
 			// A `Character` — its own shape, and no name to mix. It hashes DISTINCTLY from
 			// `string`: the two share a record but not a type (see `typeShapeCharacter`).
-			character gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeCharacter)
+			character gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeCharacter)
 
 			// An EXISTENTIAL — its own shape, then the INTERFACE's name (never its id, for `mixDeclaration`'s
 			// reason). A signature declaring `returns Producer` must hash apart from one declaring
 			// `returns Consumer`: the two pick different witness slots at every dispatch of the result.
-			interfaceRef(id) gives mixBytes(Hasher.combined(state, value: SignatureDiscriminator.typeShapeInterfaceRef), bytes: self.nameOfId(id))
-			cstring gives Hasher.combined(state, value: SignatureDiscriminator.typeShapeCstring)
+			interfaceRef(id) gives mixBytes(KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeInterfaceRef), bytes: self.nameOfId(id))
+			cstring gives KeyedHasher.combined(state, value: SignatureDiscriminator.typeShapeCstring)
 		end 'r'
 	end 'mixType'
 
@@ -6399,7 +6399,7 @@ extension ProgramSignatures
 		// Which methods carry the hidden descriptor and count parameters is decided by scanning BODIES, so an edit
 		// that leaves every declaration alone can still change the ABI a caller's parse emits against.
 		self.hash = self.mixBodyScanFacts(self.hash, excluding: noExcludedNames, instances: self.genericInstancesDigest)
-		self.hash = self.mixTypeNameTable(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeTypeNameTable), upTo: self.typeNames.count())
+		self.hash = self.mixTypeNameTable(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeTypeNameTable), upTo: self.typeNames.count())
 
 		self.attributeHashEventsTo(HashEventSource.whole)
 		self.hash = self.mixBodyScanFacts(self.hash, excluding: self.everyAuthorNameDigests(), instances: self.libraryTemplateInstancesDigest())
@@ -6483,7 +6483,7 @@ extension ProgramSignatures
 	end 'everyAuthorNameDigests'
 
 	function digestOfTheContestedAliases() returns HashDigest
-		var members = Hasher.empty()
+		var members = startDigest()
 		var counted = 0 as Count
 
 		for form in self.settledDeclarations().authorAliasForms 'eachAuthorAliasForm'
@@ -6493,21 +6493,21 @@ extension ProgramSignatures
 			end 'theLibraryDeclaresItToo'
 		end 'eachAuthorAliasForm'
 
-		return Hasher.combined(members, value: counted as HashDigest)
+		return KeyedHasher.combined(members, value: counted as HashDigest)
 	end 'digestOfTheContestedAliases'
 
 	function mixBodyScanFacts(state HashDigest, excluding HashDigestSet, instances HashDigest) returns HashDigest
-		var out = mixNameSet(Hasher.combined(state, value: DeclShapeFixedElementCountNeeds), names: self.settledDeclarations().fixedElementCountNeeds, excluding: excluding)
-		out = Hasher.combined(Hasher.combined(out, value: DeclShapeInstantiatedByAParse), value: self.instantiatedDigestExcluding(excluding))
-		return Hasher.combined(self.mixGenericTemplates(Hasher.combined(out, value: DeclShapeGenericInstances), excluding: excluding), value: instances)
+		var out = mixNameSet(KeyedHasher.combined(state, value: DeclShapeFixedElementCountNeeds), names: self.settledDeclarations().fixedElementCountNeeds, excluding: excluding)
+		out = KeyedHasher.combined(KeyedHasher.combined(out, value: DeclShapeInstantiatedByAParse), value: self.instantiatedDigestExcluding(excluding))
+		return KeyedHasher.combined(self.mixGenericTemplates(KeyedHasher.combined(out, value: DeclShapeGenericInstances), excluding: excluding), value: instances)
 	end 'mixBodyScanFacts'
 
 	function libraryTemplateInstancesDigest() returns HashDigest
-		var members = Hasher.empty()
+		var members = startDigest()
 
 		for (name, instance) in self.settledDeclarations().genericInstancesByName 'eachInstance'
 			if self.declaredByTheSharedCorpusAt(declaringFileOfSite(instance.siteKey)) 'anInstanceOfALibraryTemplate'
-				members = members xor mixBytes(Hasher.empty(), bytes: name)
+				members = members xor digestOfBytes(name)
 			end 'anInstanceOfALibraryTemplate'
 		end 'eachInstance'
 
@@ -6882,23 +6882,24 @@ extension ProgramSignatures
 	end 'templateOfInstance'
 
 	function mixGenericTemplates(state HashDigest, excluding HashDigestSet) returns HashDigest
-		var mixed = state
+		var members = startDigest()
 
 		for (key, templates) in self.settledDeclarations().genericTemplates 'eachKey'
 			if nameIsExcluded(key, excluded: excluding) 'anExcludedFunction'
 				continue
 			end 'anExcludedFunction'
 
+			var mixed = digestOfBytes(key)
+
 			for template in templates 'eachTemplate'
-				mixed = mixBytes(Hasher.combined(mixed, value: DeclShapeGenericTemplate), bytes: self.genericInstanceNameOf(template, arguments: GenericFunctionArgumentArray.create(0)))
-				mixed = mixBytes(mixed, bytes: key)
+				mixed = mixBytes(KeyedHasher.combined(mixed, value: DeclShapeGenericTemplate), bytes: self.genericInstanceNameOf(template, arguments: GenericFunctionArgumentArray.create(0)))
 
 				for slot in template.paramSlots 'eachSlot'
-					mixed = Hasher.combined(mixed, value: slot.ordinal as HashDigest)
+					mixed = KeyedHasher.combined(mixed, value: slot.ordinal as HashDigest)
 				end 'eachSlot'
 
 				for index in template.paramTypeParams 'eachIndex'
-					mixed = Hasher.combined(mixed, value: index as HashDigest)
+					mixed = KeyedHasher.combined(mixed, value: index as HashDigest)
 				end 'eachIndex'
 
 				for name in template.paramNames 'eachName'
@@ -6906,12 +6907,14 @@ extension ProgramSignatures
 				end 'eachName'
 
 				for constraint in template.constraints 'eachConstraint'
-					mixed = mixBytes(Hasher.combined(mixed, value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
+					mixed = mixBytes(KeyedHasher.combined(mixed, value: constraint.typeParamIndex as HashDigest), bytes: constraint.interfaceName)
 				end 'eachConstraint'
 			end 'eachTemplate'
+
+			members = members xor mixed
 		end 'eachKey'
 
-		return mixed
+		return KeyedHasher.combined(state, value: members)
 	end 'mixGenericTemplates'
 
 	// The generic types this merged index holds a row of that its settle did not count as instantiated — what a fold

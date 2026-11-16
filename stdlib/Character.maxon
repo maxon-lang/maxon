@@ -125,17 +125,8 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 		return Ordering.equalTo
 	end 'compare'
 
-	// Hashable conformance (djb2 hash algorithm)
 	public function hash() returns HashValue
-		var h = 5381 as FullRangeInt
-		let len = managed.length()
-
-		for i in 0 upto len 'hash_loop'
-			let b = try managed.byteAt(i) otherwise panic("Character.hash: byteAt OOB — i < len invariant")
-			h = h * 33 + (b as FullRangeInt)
-		end 'hash_loop'
-
-		return (h and 0xFFFFFFFF) as HashValue
+		return hashValueOfDigest(__Builtins.hashBytes(self, 0, managed.length(), processFoldStart()))
 	end 'hash'
 
 	// Stringable conformance - convert Character to String

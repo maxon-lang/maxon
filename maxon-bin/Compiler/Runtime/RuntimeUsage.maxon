@@ -461,6 +461,10 @@ export type RuntimeUsage
 
 	export var usesHardwareAes as bool
 
+	export var usesHardwareSha as bool
+
+	export var usesHash as bool
+
 	// The program asks how much CPU TIME its own thread has consumed (`__Builtins.threadCpuTicks` ⇒
 	// `__thread_cpu_ticks`). Its own bit rather than `usesWallClock`'s: the two share a file and a shape but
 	// reach different Win32 imports, so a program that reads the calendar must not import
@@ -546,7 +550,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, typeParamEntries: TypeParamEntrySet.create(), usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesIncrefSticky: false, usesMmIsNull: false, usesRetain: false, usesRetainSticky: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, typeParamEntries: TypeParamEntrySet.create(), usesHardwareSha: false, usesHash: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesIncrefSticky: false, usesMmIsNull: false, usesRetain: false, usesRetainSticky: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -559,7 +563,7 @@ end 'RuntimeUsage'
 //
 // The set never contains a USER function — an unreached user body still speaks for the program — so the
 // answer for every library-free program is unchanged.
-export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
+export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, funcSignatures FuncSignatureMap, arrayHashMethod ByteArray, parksOnIo bool) returns RuntimeUsage
 	let usage = RuntimeUsage.create()
 	usage.parksOnIo = parksOnIo
 
@@ -567,6 +571,10 @@ export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, 
 		if libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
+
+		if func.name.equals(arrayHashMethod) 'arrayHashIsInTheProgram'
+			recordHashUsage(usage)
+		end 'arrayHashIsInTheProgram'
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("scanRuntimeUsage: blockRef from func.blockRefs not in module.blocks")
@@ -1000,6 +1008,16 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
 	end 'hardwareAes'
+
+	if isHardwareShaRuntimeCallee(callee) 'hardwareSha'
+		usage.usesHardwareSha = true
+		usage.usesHeap = true
+		usage.usesManagedMemory = true
+	end 'hardwareSha'
+
+	if isHashRuntimeCallee(callee) 'hash'
+		recordHashUsage(usage)
+	end 'hash'
 
 	// ⭐⭐ **THE SCHEDULER-STATE QUERIES TAKE THE SCHEDULER, WHICH IS THE OPPOSITE OF THE WORKER MARK ABOVE —
 	// and the difference is what the questions actually need.** `__sched_max_active_workers` is a `.data` load

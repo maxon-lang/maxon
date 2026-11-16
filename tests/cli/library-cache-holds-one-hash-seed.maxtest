@@ -1,0 +1,37 @@
+let LibraryCacheHoldsOneHashSeedCaseDirName = "library-cache-one-hash-seed"
+let LibraryCacheHashSeedBytes = 8
+
+test 'two builds on one fresh library cache leave one hash seed, and the second build hits'
+	requireHeldOutsideCheckout(LibraryCacheHoldsOneHashSeedCaseDirName, check: LibraryCacheHoldsOneHashSeed.create())
+end 'two builds on one fresh library cache leave one hash seed, and the second build hits'
+
+type LibraryCacheHoldsOneHashSeed implements OutsideCheckoutCase
+	static function create() returns LibraryCacheHoldsOneHashSeed
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let cold = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: StringArray.create(0)), which: "the first build under an empty cache root")
+		try Expect.greaterThan(cold.written, than: 0, message: "the first build under an empty cache root wrote nothing to the library cache. It wrote: {cold.line}")
+
+		let coldSeeds = seedFilesIn(libraryCacheDirIn(dir))
+		try Expect.equal(coldSeeds.count(), expected: 1, message: "the first build left {coldSeeds.count()} '{HashSeedFileName}' files under {libraryCacheDirIn(dir).toString()}, where the cache's digests need exactly one seed. It wrote: {cold.line}")
+
+		let coldSeed = try coldSeeds.get(0) otherwise panic("the count was checked to be one")
+		let coldSeedBytes = fileBytes(coldSeed)
+		try Expect.equal(coldSeedBytes.count(), expected: LibraryCacheHashSeedBytes, message: "the hash seed {coldSeed.toString()} holds {coldSeedBytes.count()} bytes, and a seed is {LibraryCacheHashSeedBytes}.")
+
+		let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: StringArray.create(0)), which: "the second build under the same cache root")
+		try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the second build did not load the library baseline the first build wrote, so the two processes did not agree on the cache's seed. It wrote: {warm.line}")
+		try Expect.equal(warm.rejected, expected: 0, message: "the second build rejected entries the first build had just written. It wrote: {warm.line}")
+		try Expect.equal(warm.written, expected: 0, message: "the second build wrote library cache entries the first build had already written. It wrote: {warm.line}")
+
+		let warmSeeds = seedFilesIn(libraryCacheDirIn(dir))
+		try Expect.equal(warmSeeds.count(), expected: 1, message: "the second build left {warmSeeds.count()} '{HashSeedFileName}' files, where the first build's one seed should be the only one.")
+
+		let warmSeed = try warmSeeds.get(0) otherwise panic("the count was checked to be one")
+		try Expect.isTrue(fileBytes(warmSeed).equals(coldSeedBytes), message: "the second build replaced the hash seed the first build wrote, so every digest the first build stored is keyed by a seed nobody holds any longer.")
+	end 'requireHeldIn'
+end 'LibraryCacheHoldsOneHashSeed'

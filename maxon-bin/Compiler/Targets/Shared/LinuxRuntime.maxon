@@ -57,6 +57,10 @@ export let LinuxOpenResolveFlags = LinuxOpenPathOnly or LinuxOpenCloseOnExec
 // `unlinkat`'s flag word: 0 means "remove a FILE". This op is `DeleteFileW`, which refuses a directory.
 export let LinuxUnlinkFileFlags = 0
 
+export let LinuxRenameNoReplace = 1
+
+export let LinuxLinkFlags = 0
+
 export let LinuxGetRandomFlags = 0
 
 // The random-fill chunk's answer when `getrandom` fills zero bytes, which a retry would spin on
@@ -106,7 +110,7 @@ export let LinuxShmUnlinkName = b"mrt_linux_shm_unlink"
 // ⚠ Both Linux lanes ask it and neither owns it: the question is about `RuntimeUsage` and names no
 // instruction set.
 export function linuxReadsEnvironment(usage RuntimeUsage) returns bool
-	return posixReadsEnvironment(usage) or usage.usesDebugStream or usage.usesSharedMemory
+	return environmentIsReadByName(usage) or usage.usesDebugStream or usage.usesSharedMemory
 end 'linuxReadsEnvironment'
 
 // The errno numbers Linux and Darwin number differently; Darwin's are `DarwinErrno`. One table
@@ -117,6 +121,8 @@ export enum LinuxErrno
 	nameTooLong = 36
 
 	directoryNotEmpty = 39
+
+	functionNotImplemented = 38
 
 	// `EAGAIN` (one number with `EWOULDBLOCK` on Linux) and `EINPROGRESS` are not failures: they send
 	// a green thread to the poller.
@@ -224,6 +230,7 @@ export let LinuxHwcapAtomicsShift = 8 as ShiftCount
 let LinuxHwcapAes = 0x8
 let LinuxHwcapPmull = 0x10
 export let LinuxHwcapHardwareAes = LinuxHwcapAes or LinuxHwcapPmull
+export let LinuxHwcapHardwareSha = 0x40
 
 // The auxiliary vector follows `envp`'s NULL terminator: 16-byte (type, value) pairs ending at type 0.
 export let LinuxAuxVectorEnd = 0

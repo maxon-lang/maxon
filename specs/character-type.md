@@ -170,6 +170,44 @@ end 'main'
 4
 ```
 
+<!-- test: character-hash-is-the-hasher-fold-of-its-utf8 -->
+### A Character hashes as its UTF-8 bytes
+
+`c.hash()` is the `finalize()` of a `Hasher.create()` that folds its UTF-8 bytes with `combineBytes`, the hash a
+`String` of the same bytes answers: one hash for text, whether it is held as a `String` or a `Character`. A
+1-, 2-, 3- and 4-byte character, and a grapheme cluster of several codepoints.
+
+```maxon
+function folded(c Character) returns HashValue
+	let hasher = Hasher.create()
+	hasher.combineBytes(c.toString().toByteArray())
+	return hasher.finalize()
+end 'folded'
+
+function report(c Character)
+	print("{c.byteLength()} bytes: {c.hash() == folded(c)} as its string: {c.hash() == c.toString().hash()}\n")
+end 'report'
+
+function main() returns ExitCode
+	report('a')
+	report('é')
+	report('€')
+	report('🎉')
+	report('👨‍👩‍👧‍👦')
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 bytes: true as its string: true
+2 bytes: true as its string: true
+3 bytes: true as its string: true
+4 bytes: true as its string: true
+25 bytes: true as its string: true
+```
+
 <!-- test: character-to-string -->
 ### Character to String Conversion
 

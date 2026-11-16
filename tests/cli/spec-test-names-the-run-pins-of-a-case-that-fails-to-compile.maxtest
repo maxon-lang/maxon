@@ -1,0 +1,32 @@
+let SpecTestNamesTheRunPinsCaseDirName = "spec-test-names-the-run-pins-of-a-compile-failure"
+let UnpinnedUncompilableCaseName = "unpinned-uncompilable"
+let PinnedUncompilableCaseName = "pinned-uncompilable"
+let UncompilableCasePinnedSeed = "fedcba9876543210"
+
+test 'a case that pins a hash seed and fails to compile reports the run pair, as an unpinned case does'
+	requireHeldOutsideCheckout(SpecTestNamesTheRunPinsCaseDirName, check: SpecTestNamesTheRunPinsOfACompileFailure.create())
+end 'a case that pins a hash seed and fails to compile reports the run pair, as an unpinned case does'
+
+type SpecTestNamesTheRunPinsOfACompileFailure implements OutsideCheckoutCase
+	static function create() returns SpecTestNamesTheRunPinsOfACompileFailure
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let cases = HashReportCaseArray.create(0)
+		cases.push(HashReportCase.uncompilable(UnpinnedUncompilableCaseName, seed: HashPinUnset, tier: HashPinUnset))
+		cases.push(HashReportCase.uncompilable(PinnedUncompilableCaseName, seed: UncompilableCasePinnedSeed, tier: HashTierSoftware))
+
+		let specDir = stagedHashReportSpec(dir, cases: cases)
+		let said = runHashReportSpec(dir, specDir: specDir, seed: HashPinUnset, tier: HashPinUnset)
+
+		let unpinnedReport = try hashFailureReportOf(said, caseName: UnpinnedUncompilableCaseName)
+		let pinnedReport = try hashFailureReportOf(said, caseName: PinnedUncompilableCaseName)
+		let unpinned = unpinnedReport.pins
+		let pinned = pinnedReport.pins
+
+		try Expect.equal(pinned.seed, expected: unpinned.seed, message: "`{PinnedUncompilableCaseName}` pins {HashSeedVariable}={UncompilableCasePinnedSeed} but its program never ran, so its failure names the seed the compiler ran under, {unpinned.seed}, and not {pinned.seed}.")
+		try Expect.equal(pinned.tier, expected: unpinned.tier, message: "`{PinnedUncompilableCaseName}` pins {HashTierVariable}={HashTierSoftware} but its program never ran, so its failure names the tier the compiler ran under, {unpinned.tier}, and not {pinned.tier}.")
+		try Expect.notEqual(pinned.seed, expected: UncompilableCasePinnedSeed, message: "a case whose program never ran names its own seed pin.")
+	end 'requireHeldIn'
+end 'SpecTestNamesTheRunPinsOfACompileFailure'

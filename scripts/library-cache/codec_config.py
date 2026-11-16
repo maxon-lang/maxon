@@ -38,7 +38,7 @@ SKIPPED_FIELDS = {
     ("SettledDeclarations", "settledRegionClosures"): "RegionClosureMap.create()",
     ("SettledDeclarations", "settledLinearTypes"): "DeepCloneAnswerMap.create()",
     ("ProgramSignatures", "sharedSettled"): "freeze SettledDeclarations.unused()",
-    ("ProgramSignatures", "contestedAliasesDigest"): "Hasher.empty()",
+    ("ProgramSignatures", "contestedAliasesDigest"): "startDigest()",
     ("SettledDeclarations", "genericInstanceNameMarker"): "genericInstanceNameMarker()",
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
     ("VarInfo", "isEnrolled"): "false",
