@@ -25,6 +25,20 @@ work is about. Read as much as the answer needs; do not rule or plan on a summar
 **You change nothing**: no code, no issue, no wiki page, no message. The orchestrator records, assigns
 and relays what you return.
 
+## Fix the class, not the instance
+
+**Examine every issue for its structural cause before you rule or plan.** A bug is usually one
+instance of a missing single point of truth: a decision made in several places that can disagree, a rule
+each door applies on its own, or a property no one place owns. Ask:
+- Where else is this same decision made?
+- Is there one place where it should be made, so that no caller can get it wrong, including callers added
+  later?
+
+When there is, the plan fixes the class at that one point: one predicate, one constructor, one table.
+It folds in the issue's siblings, open or not yet found. It does not patch the instance and file the rest
+as more per-site bugs. Name the structural cause in what you return, and list the open issues it
+absorbs. A fix that must stay local, because the class is truly one instance, says why.
+
 ## What you return
 
 Your final message is all the orchestrator sees. It holds one or both of these, as the work needs, or a

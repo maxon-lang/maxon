@@ -142,6 +142,10 @@ support; LSP, VS Code or MCP behaviour.
 
 Apply these standards when writing or reviewing any code:
 
+- **Fix the class, not the instance.** Before fixing a defect, ask where else the same decision is made,
+  and whether one place should make it so that no caller can get it wrong. If one place should, fix it
+  there (one predicate, one constructor, one table) and route every caller through it. A per-site patch
+  that leaves the sibling sites to fail the same way is not a fix.
 - **Eliminate duplicated code** — refactor shared logic into helper methods. This includes
   pre-existing duplication.
 - **No silent unhandled cases** — `match`/`if` chains that don't cover all cases must throw on the

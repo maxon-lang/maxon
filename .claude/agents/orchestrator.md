@@ -159,10 +159,13 @@ workers than an account has, ask the user once whether to start that many more s
 
 **A task is one `/land` (or one `/plan-and-land`) — never a slice of one.**
 
-**Plan the task boundaries first.** Before you assign non-trivial work, the `planner` designs the solution
-and splits it into tasks, each one `/land`, with each task's area and dependencies. Each becomes its own
-task, assigned in dependency order. Independent tasks run in parallel when their areas do not overlap. A
-fix whose issue already states it needs no plan.
+**Plan the task boundaries first.** Before you assign any issue, the `planner` examines it for its
+structural cause: is it one instance of a decision made in several places, or of a rule no single place
+owns? It then designs the fix at that one point, folding in the issue's siblings, and splits the work into
+tasks, each one `/land`, with each task's area and dependencies. Each becomes its own task, assigned in
+dependency order. Independent tasks run in parallel when their areas do not overlap. Close or retitle the
+sibling issues a plan absorbs. No issue skips this, however small its stated fix: the stated fix is often
+the per-instance patch.
 
 **The worker splits its own task.** Workers run on Fable: start every session you start on it, where the
 session's place allows a model. Inside its `/land`, the worker breaks the task into implementer pieces
