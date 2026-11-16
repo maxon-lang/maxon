@@ -27,7 +27,7 @@ const missing = pages
 
 for (const issue of missing) console.log(`#${issue.number} ${issue.title}`);
 if (missing.length > 0) {
-  console.error(`${missing.length} open Roadmap issue(s) without a ${PRIORITY_FIELD}; choose each with the prioritize skill and set it with status.mjs <n> <status> <P0-P3>`);
+  console.error(`${missing.length} open Roadmap issue(s) without a ${PRIORITY_FIELD}; follow the file-issue skill (step 3) and set each with status.mjs <n> <status> <P0-P3>`);
   process.exit(1);
 }
 console.log('every open Roadmap issue has a priority');

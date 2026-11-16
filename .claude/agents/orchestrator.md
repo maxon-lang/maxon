@@ -133,10 +133,10 @@ still gets the step-4 `PING`; idle is not the same as gone.
 
 | message | what you do |
 |---|---|
-| `READY` | the session is free. Assign it the next task if the budget allows one more worker on its account, else reply `PAUSE` |
+| `READY` | the session is free: follow the `assign-task` skill (it replies `PAUSE` when the account has no room) |
 | `REQUEST` | the user started this worker on something directly. No overlap with an open `task` or a ruling → open a `task` for it and reply `ASSIGN`. Overlap → reply `STOP` naming the owner, and ask the user which goes ahead |
 | `QUESTION` | the `planner` rules; record it in its `design` issue, reply `RULING` with the issue number |
-| `FOUND` | an unrelated defect. File it with `node .claude/roadmap/file.mjs --title … --body-file … --label bug --label accepted --priority P<k>` (`/land` §10, "Recording"), unless an open issue already records it — then add the sighting as a comment — and reply with the issue number. Do not assign it to the finder mid-task |
+| `FOUND` | an unrelated defect: follow the `file-issue` skill (it checks for an existing issue and a class, chooses the priority, and files through `file.mjs`), and reply with the issue number. Do not assign it to the finder mid-task |
 | `PROGRESS` | update the `task` issue only when its owner, area or state changed |
 | `DONE` | land it (below), close the `task` naming the sha; the public issue it fixed is closed by the commit's `Fixes #<n>` — check, and close it yourself with the sha if not. Then treat it as `READY`, or, for a session being retired, reply `RETIRE` |
 | `ARCHIVING` | the session archives itself: `fleet.mjs retire --id <id> --archived yes`. A retired session that does not send it gets `fleet.mjs retire --id <id> --task <n>`, which posts the finished marker the panel shows until the user presses its "Reap" button |
@@ -185,66 +185,19 @@ workers than an account has, ask the user once whether to start that many more s
 
 ## Assigning
 
-**A task is one `/land` (or one `/plan-and-land`) — never a slice of one.**
-
-**Plan the task boundaries first.** Before you assign any issue, the `planner` examines it for its
-structural cause: is it one instance of a decision made in several places, or of a rule no single place
-owns? It then designs the fix at that one point, folding in the issue's siblings, and splits the work into
-tasks, each one `/land`, with each task's area and dependencies. Each becomes its own task, assigned in
-dependency order. Independent tasks run in parallel when their areas do not overlap. Close or retitle the
-sibling issues a plan absorbs. No issue skips this, however small its stated fix: the stated fix is often
-the per-instance patch.
+**Every assignment follows the `assign-task` skill** (`/assign-task <worker>`): whether the worker's
+account may take work, which issue (priority, dependencies, areas, host), the `planner`'s structural
+review, claiming the public issue, the fleet task's fields and the `ASSIGN` message.
 
 **The worker splits its own task.** Workers run on Fable: start every session you start on it, where the
 session's place allows a model. Inside its `/land`, the worker breaks the task into implementer pieces
 and picks each piece's model (AGENTS.md, "Orchestration"). You do not choose models below the task.
 
-**The host breaks ties; it never makes work wait.** Give the next task to whichever worker is free.
-- The only hard rule: a task that needs an operating system (a Windows-only or macOS-only defect) goes
-  to a worker on it.
-- When several workers are free at once, the heavier task goes to a desktop machine, which is faster
-  than a cloud VM.
-- Nothing a landing waits on goes to a host that may go offline.
-`status` shows each worker's machine (a cloud session shows as a VM). The fleet issue lists the hosts;
-never name them in this repository.
+**Every open Roadmap issue has a priority** (`P0`–`P3`, the project's `Priority` field), set when it is
+filed. File every issue, and give a priority to any found without one, with the `file-issue` skill. The
+tools refuse an issue without a priority, and a hook in this checkout refuses a raw `gh issue create` on
+the public repository, so every filing goes through `file.mjs`.
 
-Open a `task` issue in the fleet repository for each task (`gh issue create -R <fleet repository>
---label task`), its body holding the fields below, then send `ASSIGN` carrying the same:
-
-1. the task issue number and a one-line goal;
-2. the process: `/land <goal>`, or `/plan-and-land <problem>` when the task's own approach still needs a
-   worker's survey;
-3. **the area**: the passes, directories or files it will change, as tightly as you can state them;
-4. every Roadmap ruling it touches, quoted with its issue number;
-5. what it must not touch, naming the tasks that own neighbouring areas;
-6. the testing line, verbatim: "Test only what your change touches: `--filter`ed specs while you work,
-   the §8 gates once at the end. The full suite, the wasm lane and the tree corpora are CI's. A hook
-   refuses an unfiltered run."
-
-Agents drift toward extra testing on long tasks. When a `PROGRESS` reports full-suite runs, repeated gate
-runs on an unchanged tree, or gates before the change is finished, reply with the testing line.
-
-**Every open Roadmap issue has a priority**, the project's `Priority` field:
-- `P0` now: a red CI lane, a soundness hole, wrong output from compiled code, a compiler crash on valid input;
-- `P1` next: it blocks other planned work, it is the next step of an accepted design's queue, or it is a scaling regression;
-- `P2` normal: an ordinary bug, a wrong refusal, a misleading diagnostic, a settled enhancement;
-- `P3` later: cleanup, duplication, docs drift, tooling, or unmeasured performance work.
-
-An issue gets its priority when it goes on the Roadmap, and the tools refuse one without:
-- `file.mjs` refuses an accepted bug or design without `--priority`;
-- `status.mjs` refuses to set the status of a Roadmap issue that has none;
-- wake step 5 catches the rest.
-
-Choose the priority with the `prioritize` skill, which holds the judgment and worked examples, and send a borderline one to the `planner`. A hook in this checkout refuses a raw `gh issue create` on the public repository, so every filing goes through `file.mjs`.
-
-**Two open tasks never share an area.** When the only open work overlaps an active task, it waits. Take
-work by priority (`P0` first), and within one priority prefer work that unblocks other tasks, then the
-next milestone's open issues, then the oldest. Nothing on the Backlog is assigned. **Claim the public
-issue before you send `ASSIGN`**: assign it to the maintainer and set it `In progress`
-(`node .claude/roadmap/status.mjs <n> "In progress"`; that script also takes the issue off the
-Backlog). An accepted bug lands on the Roadmap by itself (the project's auto-add); other accepted issues
-land on the Backlog, and putting one on the Roadmap is the user's decision. The board then shows what
-is being implemented — and never assign one that someone else already holds. A task returned to open
-sets its issue back to `Ready` and unassigns it; the fix's `Fixes #<n>` closes it, and the board marks
-a closed issue `Done`. Planned work with no
-issue gets an `enhancement` issue first when a contributor might start it too.
+An accepted bug lands on the Roadmap by itself (the project's auto-add). Other accepted issues land on the
+Backlog, and putting one on the Roadmap is the user's decision. Planned work with no issue gets an
+`enhancement` issue first when a contributor might start it too.
