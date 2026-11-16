@@ -1,6 +1,6 @@
 ---
 name: compiler-workflow
-description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, resolving a CI fault's rip on a local build, landing a commit the pinned seed refuses with its own seed through `scripts/pin-seed.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
+description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, resolving a CI fault's rip on a local build, landing a commit the pinned seed refuses with its own seed through `land.yml`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
 ---
 
 # Compiler workflow — instruments and host lanes
@@ -208,22 +208,29 @@ faults on the first load.
 ## Landing a commit with its own seed
 
 The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins. A commit it refuses
-(E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002) is pushed with a seed frozen
-from it, after the landing gates and the commit, from the main checkout:
+(E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002) lands with a seed frozen
+from it by `land.yml`, never by `git push` and never by a seed frozen on this machine.
+
+The commit goes on top of a bootstrap chain: commit first the intermediate tree that the pinned seed builds
+— the compiler change, before any source uses what it adds — so that its compiler builds your commit. Check
+each step locally as CI will: `scripts/land.sh chain origin/main HEAD` builds the chain from the pinned seed,
+two stages per commit, in `temp/land-branch/`, and names the commit no step could build. Then, from the main
+checkout:
 
 ```
-./maxon-bin/.maxon/maxon run build        # the slot must be built from HEAD; freeze-seed.sh refuses a stale one
-scripts/pin-seed.sh [--prove=<lane>]...   # freeze, prove, publish, pin and push
+scripts/land.sh submit --rehearsal   # every step, the publish included; retracted at the end
+scripts/land.sh submit               # land it: main receives your commit, squashed, and its pin
 ```
 
-`scripts/freeze-seed.sh` makes four builds, serial, at below-normal priority, about a minute each, into
-`temp/seed/dist/`. The host's lane is always proved in `temp/seed/prove-<lane>`; x64-linux is proved
-through WSL as in the section above, and arm64-macos on the Mac through `scripts/mac-host.sh` (the script
-pushes the seed tag first, so `clone` can reach the commit, and installs the archive with `--seed-from`).
-An unreachable lane is skipped with a notice, and CI's lane on the pushed pin proves it.
-`docs/RELEASING.md` owns the procedure, the retraction on a failure and which lanes to name.
+`submit` pushes `HEAD` to `land/<first 12 of HEAD>`, dispatches `land.yml` there and follows the run. A
+session that can push only its own branch pushes the chain there instead, with the trailer `Land: main`
+(or `Land: rehearsal`) on its head. CI freezes the seed from the chain's last compiler, proves it on every
+native lane's own runner, publishes it with the ref `<seed-tag>-chain`, and pushes the commit and its pin
+in one push. After a land from the main checkout, `git fetch origin main && git reset --keep origin/main`
+replaces the local chain with what landed. `docs/RELEASING.md` owns the procedure and the retraction on a
+failure.
 
-⭐ **Run `pin-seed.sh` WITHOUT ASKING (user ruling)** whenever the seed refuses a commit you are landing:
+⭐ **Land it WITHOUT ASKING (user ruling)** whenever the seed refuses a commit you are landing:
 publishing the seed and pushing its pin is standing-authorized, like the `git push` it replaces. Never
 stop for approval and never leave the seed for the user to publish.
 

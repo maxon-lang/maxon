@@ -149,7 +149,7 @@ with `node .claude/fleet/fleet.mjs land --task <n> --branch <branch>`:
 - a cloud session cannot force-push, so when it must replace its branch with a rebased commit, delete the remote branch and have it push again under the same name;
 - every commit is correct on its own: two commits may be pushed back to back for a cost ladder, never for correctness.
 
-**A commit the pinned seed refuses** lands only through `scripts/pin-seed.sh`, run by a session that can publish releases and push main (a desktop session the user approves). While it runs, every other worker holds its pushes, and you push nothing to main, because each move under it costs a rebase and a re-proof. Send `GO` when its `DONE` arrives.
+**A commit the pinned seed refuses** lands only through `land.yml`, from a bootstrap chain on any session's branch (`docs/RELEASING.md`). While a chain land is in flight (`scripts/land.sh in-flight`), every other worker holds its pushes, and you push nothing to main, because each move under it costs that land its run. Send `GO` when its `DONE` arrives.
 
 **Retiring.** Do not reuse the long-running sessions the user has retired for new tasks. Retire a session with `fleet.mjs retire` (above): it deletes the heartbeat and closes the mailbox, and posts the finished marker unless the session archived itself.
 

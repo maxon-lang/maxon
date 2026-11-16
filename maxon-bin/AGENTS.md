@@ -41,8 +41,9 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   ⛔ **A TREE THAT DECLARES WHAT THE PINNED SEED DOES NOT KNOW IS REFUSED BY THE SEED** — E2015 on a
   `__Managed*` entry this tree adds, or E3004 on a `__Builtins` intrinsic the stdlib calls, which no
   re-fetch can cure. The cure is a new seed frozen from the refused commit, which lands with it through
-  `scripts/pin-seed.sh` instead of `git push`; `docs/RELEASING.md` owns the procedure. Run it without
-  asking: publishing the seed and pushing its pin are standing-authorized (user ruling).
+  `land.yml` instead of `git push`, from a bootstrap chain of commits the pinned seed can build its way
+  through; `docs/RELEASING.md` owns the procedure. Land it without asking: publishing the seed and pushing
+  its pin are standing-authorized (user ruling).
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```
   ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon

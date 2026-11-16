@@ -2,7 +2,7 @@
 #
 # Freeze this tree's compiler as a bootstrap seed: build it for the four native targets, package each
 # like a release archive, and write SHA256SUMS and the release notes. It publishes nothing and does not
-# move the pin: `scripts/pin-seed.sh` runs it, then proves, publishes and pins what it wrote.
+# move the pin: `land.yml` runs it (`scripts/land.sh freeze`), then proves, publishes and pins what it wrote.
 #
 # ⭐ A SEED IS A COMPILER THAT ACCEPTS THE TREE IT BUILDS. `scripts/fetch-seed.sh` downloads the tag
 # `scripts/seed-tag` names, and `scripts/build-from-seed.sh` builds the tree with it.

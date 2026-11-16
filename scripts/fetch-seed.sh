@@ -3,7 +3,7 @@
 # Place the pinned seed compiler at `.bootstrap/maxon`, the compiler that builds this tree when the slot is empty.
 #
 # ⭐ THE SEED IS THE RELEASE `scripts/seed-tag` NAMES. It is a compiler frozen by
-# `scripts/freeze-seed.sh` and published as a `seed-*` pre-release by `scripts/pin-seed.sh`, and it
+# `scripts/freeze-seed.sh` and published as a `seed-*` pre-release by `land.yml`, and it
 # stays the seed until a commit moves the pin: a new release does not change what builds this tree.
 # The pin is read from the checkout, so a commit and the seed that builds it travel together.
 #
@@ -30,7 +30,7 @@
 #                                                # a relative PATH is from the caller's directory
 #   scripts/fetch-seed.sh TAG --from=DIR         # from DIR's archives and SHA256SUMS, as
 #                                                # freeze-seed.sh writes them to temp/seed/dist,
-#                                                # before TAG is published, as pin-seed.sh's
+#                                                # before TAG is published, as land.yml's
 #                                                # proofs do
 #
 # A missing or empty `scripts/seed-tag` is always a failure. Needs an authenticated `gh`, except

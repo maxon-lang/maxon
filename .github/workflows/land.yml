@@ -1,0 +1,194 @@
+# Land a branch on `main`. `scripts/land.sh` holds every step; `docs/RELEASING.md` owns the procedure.
+
+name: land
+
+on:
+  push:
+    branches: ['**', '!main']
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: main lands the branch; rehearsal runs every step, publishes nothing that survives, and never pushes main
+        required: true
+        type: choice
+        options: [rehearsal, main]
+        default: rehearsal
+
+concurrency:
+  group: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, format('{0}Land:', fromJSON('"\n"')))) && 'land-main' || format('land-skip-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, format('{0}Land:', fromJSON('"\n"')))
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      kind: ${{ steps.plan.outputs.kind }}
+      base: ${{ steps.plan.outputs.base }}
+      head: ${{ steps.plan.outputs.head }}
+      native: ${{ steps.plan.outputs.native }}
+      chain: ${{ steps.plan.outputs.chain }}
+      committed: ${{ steps.plan.outputs.committed }}
+      date: ${{ steps.plan.outputs.date }}
+      landed: ${{ steps.plan.outputs.landed }}
+      tag: ${{ steps.plan.outputs.tag }}
+      pin: ${{ steps.plan.outputs.pin }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Classify the branch by the pinned seed's verdict
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAND_EVENT: ${{ github.event_name }}
+          LAND_MODE: ${{ inputs.mode }}
+        run: ./scripts/land.sh plan "$GITHUB_SHA"
+
+  credential:
+    needs: plan
+    if: needs.plan.outputs.mode == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the landing App's secrets
+        env:
+          LAND_APP_ID: ${{ secrets.LAND_APP_ID }}
+          LAND_APP_PRIVATE_KEY: ${{ secrets.LAND_APP_PRIVATE_KEY }}
+        run: |
+          [ -n "$LAND_APP_ID" ] && [ -n "$LAND_APP_PRIVATE_KEY" ] \
+            || { echo "::error::the repository secrets LAND_APP_ID and LAND_APP_PRIVATE_KEY are not set — docs/RELEASING.md, \"Repository secrets\""; exit 1; }
+
+      - &mint-token
+        name: Mint the token that pushes main
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.LAND_APP_ID }}
+          private-key: ${{ secrets.LAND_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
+
+  chain:
+    needs: plan
+    if: needs.plan.outputs.kind == 'chain'
+    runs-on: ubuntu-latest
+    env: &plan-env
+      LAND_KIND: ${{ needs.plan.outputs.kind }}
+      LAND_BASE: ${{ needs.plan.outputs.base }}
+      LAND_HEAD: ${{ needs.plan.outputs.head }}
+      LAND_CHAIN: ${{ needs.plan.outputs.chain }}
+      LAND_COMMITTED: ${{ needs.plan.outputs.committed }}
+      LAND_DATE: ${{ needs.plan.outputs.date }}
+      LAND_LANDED: ${{ needs.plan.outputs.landed }}
+      LAND_TAG: ${{ needs.plan.outputs.tag }}
+      LAND_PIN: ${{ needs.plan.outputs.pin }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Build the bootstrap chain and freeze the seed from its last compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/land.sh freeze
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: seed
+          path: temp/seed/dist
+          retention-days: 1
+          if-no-files-found: error
+
+  prove:
+    needs: [plan, chain]
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.plan.outputs.native) }}
+    runs-on: ${{ matrix.runner }}
+    env: *plan-env
+    steps:
+      - name: Let git check out paths past 260 characters
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.head }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: seed
+          path: temp/seed/dist
+
+      - name: Build the tree with the frozen seed
+        run: ./scripts/land.sh prove "${{ matrix.target }}"
+
+  publish:
+    needs: [plan, credential, prove]
+    if: >-
+      needs.plan.outputs.kind == 'chain' && !cancelled() && needs.prove.result == 'success'
+      && (needs.plan.outputs.mode == 'rehearsal' || needs.credential.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env: *plan-env
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: seed
+          path: temp/seed/dist
+
+      - name: Publish the seed, its tag and its chain ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/land.sh publish
+
+  land:
+    needs: [plan, credential, publish]
+    if: >-
+      needs.plan.outputs.mode == 'main' && !cancelled() && needs.credential.result == 'success'
+      && (needs.plan.outputs.kind == 'ordinary' || (needs.plan.outputs.kind == 'chain' && needs.publish.result == 'success'))
+    runs-on: ubuntu-latest
+    env: *plan-env
+    steps:
+      - *mint-token
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Push main
+        run: ./scripts/land.sh land
+
+  retract:
+    needs: [plan, chain, prove, credential, publish, land]
+    if: >-
+      always() && needs.plan.result == 'success' && needs.plan.outputs.kind == 'chain'
+      && (needs.plan.outputs.mode == 'rehearsal' || needs.land.result != 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env: *plan-env
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Retract what this run published, unless main holds its pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/land.sh retract

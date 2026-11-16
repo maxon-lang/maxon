@@ -70,10 +70,7 @@ seed_release_create() {
 }
 
 seed_release_delete() {
-	local tag="$1"
-
-	gh api --method DELETE "$SeedRepoApi/releases/$SeedReleaseId" --silent || return 1
-	gh api --method DELETE "$SeedRepoApi/git/refs/tags/$tag" --silent
+	gh api --method DELETE "$SeedRepoApi/releases/$SeedReleaseId" --silent
 }
 
 seed_release_download() {

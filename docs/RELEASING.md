@@ -31,62 +31,109 @@ none of which has another compiler to reach for. A tree that uses something the 
 a `__Managed*` entry (E2015), a `__Builtins` intrinsic (E3004), a language form, a rule that widens a tier
 (E3092, under a seed whose `build` runs the [lint rules](CLI_REFERENCE.md#maxon-lint)) — fails the seed's
 first build, and nothing later on `main` can fix that: the compiler that accepts
-the tree is the one the seed does not contain yet. Whoever lands such a commit has that compiler, the slot
-built from `HEAD`, so the commit and the seed frozen from it are published and pinned together.
+the tree is the one the seed does not contain yet. So the commit and a seed frozen from it are published and
+pinned together, by [`land.yml`](../.github/workflows/land.yml), before `main` moves. `main` never holds a
+commit its pinned seed refuses.
 
 **The seed chain is how a refusal is found:** `scripts/build-from-seed.sh` in a clean clone with the pinned
 seed. Any failure there is a refusal, except E6002, which is a slot the build could not replace: its
 message names what stood in the way.
 
-**A refused commit is pushed by `scripts/pin-seed.sh`.** It runs in the main checkout,
-after the landing gates and the commit, and freezes `HEAD`:
+#### The bootstrap chain
+
+The pinned seed refuses the change, so the compiler that accepts it is built from an intermediate tree the
+seed does accept — the compiler that knows a new intrinsic, say, before any source calls it. That tree is a
+commit. **A seed-pinning branch is a bootstrap chain: commits on `origin/main` whose first commit the pinned
+seed builds, and each later commit is built by the compiler of the one before it** (two stages each, as
+`build-from-seed.sh` builds). The last commit is the change. A change that needs several intermediate trees
+has several commits.
+
+Only the change reaches `main`, as one commit `S`: the last commit's tree, author, author date and message,
+on `origin/main`, with a `Bootstrap-Chain: <sha>` trailer per chain commit in order. The intermediate
+commits never reach `main`, which stays linear. The ref `refs/tags/<seed-tag>-chain`, on the chain's last
+commit, keeps the chain reachable; it is published with the seed, never moved, and named in the seed's
+`NOTES.md` with the chain's commits.
+
+**To rebuild a seed's compiler from its chain:** fetch the ref
+(`git fetch origin tag <seed-tag>-chain`), then
 
 ```bash
-scripts/pin-seed.sh [--date=YYYY-MM-DD] [--prove=<lane>]...
+scripts/land.sh chain <S>^ <seed-tag>-chain
 ```
 
-1. **Preconditions.** `origin/main` is an ancestor of `HEAD`, `scripts/seed-tag` has no uncommitted change,
-   and the tag `seed-<date>-<first 12 hex digits of HEAD>` exists neither as a tag nor as a release.
-2. **Freeze.** `scripts/freeze-seed.sh` builds `maxon-bin` for every native target in
-   `maxon-bin/targets.tsv` with the slot compiler (`maxon run build --target=<t> --output=<stage>/maxon`, the
-   way `release.sh --package --target=` cross-builds), and packages each as `maxon-<tag>-<target>` (in the
-   table's `archive` format, the binary alone) with `SHA256SUMS` and the notes in `temp/seed/dist/`. It
-   refuses an uncommitted change under `maxon-bin/`, `stdlib/` or `runtime/`, and a slot older than any of
-   their sources.
-3. **Prove, before anything is published.** The host's lane is always proved: a throwaway clone of `HEAD` at
-   `temp/seed/prove-<lane>` runs `scripts/fetch-seed.sh <tag> <lane> --from=../dist`, then one self-compile
-   of `maxon-bin` with the frozen seed: a seed has to build the tree and nothing more. Each `--prove=<lane>`
-   that is reachable is proved the same way: x64-linux through WSL from Windows; arm64-macos on the shared
-   Mac through `scripts/mac-host.sh`, with the seed tag pushed first so the Mac can clone the commit, and
-   the local archive installed there; any lane natively on its own host. An unreachable lane is skipped with
-   a notice; the Mac probe is a connect test bounded to a few seconds.
-4. **Publish.** The tag is pushed, the pre-release is created on it through GitHub's REST API (`gh api`; no
-   step needs GraphQL), and every target is fetched back from it against its `SHA256SUMS`.
-5. **Pin.** The tag is committed to `scripts/seed-tag` as the user, and `git push origin HEAD:main` sends the
-   frozen commit and the pin together. CI runs once, on the pin, with the new seed, so `main` is never red in
-   between, and its four lanes are the proof of every lane not proved locally.
+walks the chain from the seed `<S>^` pins, exactly as the workflow did, and prints the path of the compiler
+built from the last commit. It works in `temp/land-branch/`, its `tree/` a git worktree: remove it when done with `git worktree remove --force temp/land-branch/tree && rm -rf temp/land-branch`.
 
-⚠ **A failure after anything left the machine retracts it.** A rejected push, a failed proof after the tag
-was pushed, or a failed publish deletes the tag and the release, which nothing pins, and undoes the pin
-commit. Rebase onto `origin/main`, re-run the landing gates and re-run the script.
+#### Landing a branch — `land.yml`
 
-#### Which lanes to prove
+A run starts on a push to any branch but `main` whose head commit carries the git trailer `Land: main` or
+`Land: rehearsal`, or on a dispatch of `land.yml` on a branch with the input `mode`. Both take write access
+to the repository. Another `Land:` value, or two `Land:` trailers, is an error. The steps are
+[`scripts/land.sh`](../scripts/land.sh) subcommands, one per job.
 
-The landing agent decides; there is no automatic rule. Name `--prove=<lane>` when the change since the pinned
-seed's commit alters code that only that lane compiles or runs:
+1. **plan** classifies the branch by the pinned seed's verdict on its head tree and its commits since
+   `origin/main`:
 
-- anything under `maxon-bin/Compiler/Targets/` for its architecture (`X64/`, `Arm64/`) or its OS (`Windows/`,
-  `Linux/`, `Macos/`);
-- lines inside an `#if os(...)` or `arch(...)` block in `stdlib/`, `runtime/` or `maxon-bin/` that selects
-  that lane but not every lane;
-- its object writer (PE, ELF or Mach-O), its emitted runtime tier, or its calling convention or syscall
-  layer.
+   | Commits | Pinned seed | Result |
+   |---|---|---|
+   | 0 | — | nothing to land |
+   | not a fast-forward of `origin/main` | — | rebase and push again |
+   | 1 | builds it | **ordinary**: `main` is fast-forwarded to that commit, unchanged |
+   | more than 1 | builds the head | error: an ordinary land is one commit |
+   | 1 | refuses it | error: the seed's diagnostic, and the fix — commit the intermediate tree before it |
+   | more than 1 | refuses the head | **chain** |
 
-Shared code is covered by the host's proof and CI. When in doubt, name the lane: an unreachable one costs
-only a notice.
+   A branch that changes `scripts/seed-tag` or holds a merge commit is refused. For a chain it records the
+   tag `seed-<date>-<first 12 hex digits of S>` and refuses one that exists as a tag or a release.
+2. **credential** (`main` only) mints the landing App's token and drops it, so a missing or
+   under-permissioned App fails before anything is published.
+3. **chain** walks the chain, checks out `S` and runs `scripts/freeze-seed.sh`, which builds `maxon-bin`
+   for every native target in `maxon-bin/targets.tsv` with the chain's last compiler and packages each as
+   `maxon-<tag>-<target>` (in the table's `archive` format, the binary alone) with `SHA256SUMS` and
+   `NOTES.md`.
+4. **prove** runs on every native lane's own runner: `scripts/fetch-seed.sh <tag> <lane> --from=<dist>`, then
+   one self-compile of `maxon-bin` with the frozen seed. A seed has to build the tree and nothing more.
+5. **publish** re-checks that `origin/main` is still `S`'s parent, pushes the tag on `S` and the chain ref,
+   creates the pre-release through GitHub's REST API, and fetches every target back against its
+   `SHA256SUMS`.
+6. **land** (`main` only) pushes the ordinary commit, or `S` and the pin commit — the tag in
+   `scripts/seed-tag` — to `main` in one push. CI runs on the pin with the new seed.
+7. **retract** runs after a failure, a cancellation, and every rehearsal. It deletes the release, the tag
+   and the chain ref this run created — each checked against this run's commits — unless `main` holds the
+   pin, and deletes nothing when `main` cannot be read. Re-running the job is safe.
+
+`S` and the pin commit are committed by `github-actions[bot]` at the time **plan** recorded, so every job
+recomputes the same commits from the plan's outputs. Every land run shares one concurrency group, and
+runs never overlap: a run left pending is replaced by a newer one — any branch push whose message has a line starting `Land:` joins the group — and a replaced run did not land —
+push again. The workflow never rebases. **chain**, **prove**, **publish** and **land**, and every step of the chain walk, first
+checks that `origin/main` is still `S`'s parent, so a run that lost the race stops within minutes:
+`origin/main moved past <base> — nothing published; rebase and push again`. **publish**'s check, made just
+before anything is published, is the one that decides.
+
+⚠ **A chain land in flight holds `main`, by convention.** `scripts/land.sh in-flight` prints the branch and
+run of every `land.yml` run that is landing a chain in `main` mode — or whose plan has not yet said what it
+is — and `none` otherwise; it fails when GitHub cannot be read. `/land` runs it before its rebase and again
+before `git push origin main`, and when a chain land is in flight waits for it (`in-flight --wait`), then
+rebases, so the chain's publish finds `main` where its plan left it. The hold is advisory: nothing stops a
+push to `main`, and a push during a chain land costs that land a run.
+
+⭐ **`Land: rehearsal` is the dry run, and runs every step**: the proofs, the publish and the fetch-back.
+It never mints the token that pushes `main`, and it always retracts, so it leaves nothing behind.
+
+**How a commit reaches `main`:**
+
+- an ordinary commit from a session that can push `main`: `git push origin main`;
+- an ordinary commit from a session that can push only its own branch: one commit with `Land: main`,
+  pushed to that branch;
+- a commit the pinned seed refuses, from any session: only through `land.yml` — push the chain with
+  `Land: main` on its head, or run `scripts/land.sh submit [--rehearsal]`, which pushes `HEAD` to
+  `land/<first 12 hex digits of HEAD>`, dispatches `land.yml` on it, follows the run and deletes the branch.
+
+The outcome is the head commit's check runs. A chain's `S` is the commit on `main` whose `Bootstrap-Chain:`
+trailers end with the head commit.
 
 ⛔ **Old seeds stay published.** Every `seed-*` release is pinned by some commit, and bisecting and a
-benchmark's control arm build from them. A release nothing pins is a retracted one, and `pin-seed.sh`
+benchmark's control arm build from them. A release nothing pins is a retracted one, and `land.yml`
 deletes it itself.
 
 ---
@@ -388,6 +435,8 @@ release until someone adds a secret teaches people to ignore red marks.
 | `TAP_TOKEN` | `homebrew.yml` | The formula is generated but not pushed; commit `dist/homebrew/maxon.rb` to the tap by hand. |
 | `VSCE_PAT` | `vscode-extension.yml` | ⛔ **A hard failure when the release must publish the extension.** |
 | `OVSX_PAT` | `vscode-extension.yml` | ⛔ Likewise — VSCodium, Cursor and Windsurf install from Open VSX. |
+| `LAND_APP_ID` | `land.yml` | ⛔ **A land in `main` mode fails before it publishes anything.** Rehearsals do not need it. |
+| `LAND_APP_PRIVATE_KEY` | `land.yml` | ⛔ Likewise. |
 
 ⛔ **The two extension secrets are the exception, and only in the case that has already been
 decided.** `scripts/extension-release-gate.sh` answers `skip` when nothing under `vscode-extension/`
@@ -397,6 +446,14 @@ stay on an old version of an extension whose install flow points at a release th
 
 `GITHUB_TOKEN` covers the release itself and nothing else; it cannot write to another repository,
 which is why the tap needs its own.
+
+**The landing App** pushes `main` for `land.yml`, because a push made with `GITHUB_TOKEN` starts no
+workflow, and CI must run on what lands. It is a GitHub App installed on this repository alone, with the
+repository permissions **Contents: write** and **Workflows: write** — without the second, a land whose
+commit touches `.github/workflows/` is refused. `LAND_APP_ID` is its App ID and `LAND_APP_PRIVATE_KEY` a
+private key generated for it. Only the jobs that mint its token name them, and the jobs that build a branch's
+compilers do not. ⚠ A run uses the `land.yml` and `scripts/land.sh` of the branch it lands, so anyone who can push a branch can reach the App: push access to this repository is the access to `main`. `GITHUB_TOKEN` creates the seed's tags and release, so a seed release starts none of the
+`release: published` workflows.
 
 ---
 

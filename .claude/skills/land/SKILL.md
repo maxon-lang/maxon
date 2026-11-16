@@ -525,9 +525,14 @@ fires after it.
 **No agent rebases, stashes, commits or pushes.** Git state is the coordinator's, start to finish.
 
 ```bash
+scripts/land.sh in-flight --wait                    # a chain land in flight holds main: wait for it first
 git fetch && git log --oneline HEAD..origin/main    # empty: nothing to rebase onto — skip the rest of §7
 git stash push -u -m land && git pull --rebase && git stash pop
 ```
+
+**A chain land in flight holds `main`** (`docs/RELEASING.md`): a push while `land.yml` publishes a seed costs
+that land its run. `in-flight --wait` prints `none` at once when no chain land is running; otherwise it names
+the branch and run and returns when they finish. A failure to read GitHub is a failure, not a `none`.
 
 **Check before you stash.** The pop rewrites every changed file, so a stash round-trip with nothing to
 rebase onto still moves their mtimes past the compiler binary's: `spec-test` then refuses it as STALE
@@ -569,7 +574,7 @@ fix commit; the cost of a local battery is paid on every change.
 | **Filtered tree corpora and IR specs** — `./maxon-bin/.maxon/maxon test <tests/dir> --filter=…` and `spec-test ir-specs --filter=<spec>/` for each corpus case or `ir-specs/` spec the change touched | each `0 fail` / `failed: 0`. A pin the change moved is re-minted with `--update-required --filter=<spec>/` and staged with the change (`git add -A ir-specs/ specs/`); a change to one target's emitted code also filters `ir-specs` on that target's lane (`--target=<lane>`), which compiles each pin without running it, on any host. See the box below |
 | **LINT** — `./maxon-bin/.maxon/maxon lint maxon-bin` · `./maxon-bin/.maxon/maxon lint --tests tests/<corpus>` · `bash scripts/lint-tree.sh <group>` | **`lint maxon-bin` when the diff touches `maxon-bin/`; `lint --tests` for each corpus under `tests/` the diff touches; `lint-tree.sh` for each other group (`script-programs`, `multicore-stress`, `manifests`) whose sources the diff touches.** Exit 0: one `Linted …` line per `lint`, and `lint-tree.sh`'s report naming no subject that did not lint clean. Run after the build, with the compiler it wrote, so the change's own rules meet the tree. The build, the self-compile and `maxon test` compile past the lint rules — E3064 and E3065 (a dropped result), E3092 (an `export` no other directory uses: adding or removing an `export` or deleting its last cross-directory caller, which de-duplicating usually is, orphans one) and E3219 (an unused unexported declaration) — so without this row CI's "Every first-party program lints clean" step is the first to see them. Add `--target=<lane>` to `lint maxon-bin` when the change touches a lane's `#if` branch |
 | **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds a file declaring types, or adds or tightens a diagnostic that is not a lint rule.** The slot compiler that `run build` wrote was compiled by its predecessor, so this row is the first time the change's own rules meet the compiler's own source. Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
-| **The seed chain** — on a throwaway clone at a short path with the diff applied and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`; exit 0, or a refusal | **Where the tree's sources start using a declaration, intrinsic, language form, rule or runtime behaviour the change itself made legal or required, or the change alters a rule the seed applies to the compiler's own source.** CI builds from the pinned seed. Any failure is a refusal, except E6002, which is a locked slot. ⛔ **A refused commit lands through `scripts/pin-seed.sh`, never `git push`** (§9): it freezes `HEAD`, proves the seed, publishes it and pushes the commit with its pin. Naming the `--prove=<lane>` lanes is yours, by `docs/RELEASING.md` "Which lanes to prove"; that document owns the procedure |
+| **The seed chain** — on a throwaway clone at a short path with the diff applied and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`; exit 0, or a refusal | **Where the tree's sources start using a declaration, intrinsic, language form, rule or runtime behaviour the change itself made legal or required, or the change alters a rule the seed applies to the compiler's own source.** CI builds from the pinned seed. Any failure is a refusal, except E6002, which is a locked slot. ⛔ **A refused commit lands through `land.yml`, never `git push`** (§9): the commit becomes the last of a bootstrap chain, whose first commit the pinned seed builds; CI freezes, proves and publishes the seed and pushes the commit with its pin. `docs/RELEASING.md` owns the procedure |
 | **The codecs** — `python3 scripts/library-cache/generate-codecs.py --check` | exit 0: the library-cache codecs inside the compiler's sources match what the generator emits. On exit 1, run it without `--check` and stage what it rewrites |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` — which also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **The ladder row** — `./maxon-bin/.maxon/maxon scale-test --note=…` (MCP `run_scale_test` with `note:`) on the rebased, documented, built tree, then `scripts/check-scale-rows.sh --working-tree` | **When §4 read the ladder.** Both exit 0, and the check reports one row added to each table, last, carrying this tree's digest. A delta the run withholds (the corpus changed, or the last row was minted elsewhere) is stated in the note, and the attributable figure there is an A/B against a control compiler built from the parent, run from the same location |
@@ -650,16 +655,29 @@ matches nothing stages NOTHING, so stage only paths `git status --porcelain` lis
 `git diff --cached --stat` before committing: a commit whose message describes a code change must show
 that code file.
 
+Then, as its own step, `scripts/land.sh in-flight`: anything but `none` means a chain land started since §7
+— wait for it (`--wait`), rebase and RE-RUN §8 before pushing.
+
 ```bash
 git push origin main
 ```
 
-⛔ **A commit §8's seed chain refused is pushed by `scripts/pin-seed.sh [--prove=<lane>]...` instead**, with
-the lanes §8's row names; the commit and its pin go in one push. On a failure the script retracts what it
-published and undoes the pin commit: rebase, re-run §8 and re-run the script.
-⭐ **Run it WITHOUT ASKING (user ruling).** Publishing the `seed-*` pre-release and pushing its pin is
+⛔ **A commit §8's seed chain refused lands only through `land.yml`** (`docs/RELEASING.md`, "A commit the
+pinned seed refuses lands with its own seed"). Put the intermediate tree the pinned seed accepts — the
+compiler change before any source uses it — in a commit of its own before your commit; more than one when
+the change needs several. That chain is scaffolding: `main` receives your commit alone, squashed onto
+`origin/main` with a `Bootstrap-Chain:` trailer, plus the pin. Land it with
+`scripts/land.sh submit` from the main checkout, or by pushing the chain to your branch with the trailer
+`Land: main` on its head. CI builds the chain, freezes, proves on every lane and publishes the seed, and
+pushes your commit with its pin. A failed or moved-`main` run retracts what it published: rebase, re-run §8
+and land again. `Land: rehearsal` (`submit --rehearsal`) runs every step and retracts.
+⭐ **Land it WITHOUT ASKING (user ruling).** Publishing the `seed-*` pre-release and pushing its pin is
 part of landing, already authorized like the `git push` it replaces: never stop for approval, never hand
 the user a seed to freeze or publish by hand.
+
+⛔ **A session that can push only its own branch** lands an ordinary commit as one commit carrying the
+trailer `Land: main`, pushed to that branch; `land.yml` fast-forwards `main` to it. The outcome is that
+commit's check runs.
 
 Once the push is accepted, delete `temp/land/` and every other `temp/` directory this change created.
 

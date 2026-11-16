@@ -23,7 +23,7 @@
 # ⛔ **A TREE DECLARING WHAT THE PINNED SEED DOES NOT KNOW CANNOT BE BUILT BY IT**, and the seed is the one
 # compiler nothing here can regenerate — every CI lane and every release runner starts with this script,
 # so a refusal is four red lanes that no later commit can fix. The cure is a new seed frozen from the refused
-# commit, which lands with it through `scripts/pin-seed.sh`.
+# commit, which lands with it through `land.yml` (`docs/RELEASING.md`).
 
 set -euo pipefail
 

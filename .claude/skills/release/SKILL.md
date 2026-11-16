@@ -219,7 +219,7 @@ merge keeps the tag an ancestor of `main`; rebased copies would reappear in the 
 
 The seed is the `seed-*` pre-release that `scripts/seed-tag` pins, frozen and independent of releases:
 cutting one changes nothing about what builds `main`, and there is nothing to refresh locally. A new seed
-is made only when a commit needs one, and that commit lands with it through `scripts/pin-seed.sh`.
+is made only when a commit needs one, and that commit lands with it through `land.yml`.
 `docs/RELEASING.md` owns the procedure.
 
 ## What this skill may not do
