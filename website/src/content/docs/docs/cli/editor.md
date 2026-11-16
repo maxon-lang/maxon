@@ -61,7 +61,8 @@ yellow while it loads a project. Its tooltip shows the compiler's version and lo
 The formatting settings replace the editor's own tab settings for Maxon files. The extension also turns
 on format-on-save and semantic highlighting for Maxon files by default. A capability word (`isolated`,
 `immutable`, `mutable`) qualifying a type is coloured `#D85C8A`, as the `capability` semantic token and
-by the TextMate grammar alike.
+by the TextMate grammar alike, and a block label `#808080`, as the `label` semantic token and by the
+TextMate grammar alike.
 
 **Commands:**
 
@@ -401,7 +402,7 @@ one kind advertised.
 | `textDocument/linkedEditingRange` | A block's opening name and its `end '…'` label, edited together |
 | `textDocument/rename` | Renames a declaration's name and its matching `end '…'` label. References elsewhere are not renamed. |
 | `textDocument/codeAction` | The quick fixes of the published diagnostics the requested range touches, and an action applying every quick fix of the document when it has two or more (see **Quick fixes** above) |
-| `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator`, `capability` and no modifiers. Every reference to a type is `type`: a type the project, a sibling file or `stdlib/` declares, a type the buffer declares, a type parameter, and the compiler's own `__Builtins`, `__Raw` and `__DebugStream` names and built-in managed types. A local or parameter named like a type is `variable`. `int`, `float`, `bool`, `cstring`, `byte`, the sized integer and float names and `Self` are `type`. The word `isolated`, `immutable` or `mutable` qualifying a type is `capability` |
+| `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator`, `capability`, `label` and no modifiers. Every reference to a type is `type`: a type the project, a sibling file or `stdlib/` declares, a type the buffer declares, a type parameter, and the compiler's own `__Builtins`, `__Raw` and `__DebugStream` names and built-in managed types. A local or parameter named like a type is `variable`. `int`, `float`, `bool`, `cstring`, `byte`, the sized integer and float names and `Self` are `type`. The word `isolated`, `immutable` or `mutable` qualifying a type is `capability`. A block label, the quoted name after a block opener or after `end`, is `label`: after `end` always, and after an opener once an `end` with the same name closes that block; every other character literal is `string`. |
 
 Any other request is answered with JSON-RPC error `-32601` (method not found).
 

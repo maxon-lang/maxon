@@ -141,7 +141,7 @@ end 'definitionLocalBinding'
 // backward the closer is met first, so its label is pushed and its own opener pops it. Matching by
 // name is also what keeps an ordinary character literal (`let c = 'a'`) from being read as a block.
 function definitionTrackBlockNesting(closedLabels TokenIndexArray, tokens TokenArray, at ElementIndex)
-	if definitionClosesABlock(tokens, at: at) 'aCloser'
+	if lspLabelClosesABlock(tokens, at: at) 'aCloser'
 		closedLabels.push(at)
 		return
 	end 'aCloser'
@@ -160,15 +160,6 @@ function definitionTrackBlockNesting(closedLabels TokenIndexArray, tokens TokenA
 
 	_ = try closedLabels.pop() otherwise panic("definitionTrackBlockNesting: the stack was tested non-empty above")
 end 'definitionTrackBlockNesting'
-
-function definitionClosesABlock(tokens TokenArray, at ElementIndex) returns bool
-	if at == 0 'nothingBefore'
-		return false
-	end 'nothingBefore'
-
-	let before = try tokens.get(at - 1) otherwise return false
-	return before.kind == TokenKind.end
-end 'definitionClosesABlock'
 
 // The local binding forms this resolver knows: the four a KEYWORD introduces, plus a function's
 // parameter list.

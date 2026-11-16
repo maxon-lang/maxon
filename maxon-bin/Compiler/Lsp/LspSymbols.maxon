@@ -659,8 +659,16 @@ function lspLineOf(line LineNumber) returns LspLineNumber
 	return line - 1
 end 'lspLineOf'
 
-// Every index this file forms is derived from an `LspTokenLine`, whose bounds came from the same array — so an
-// out-of-range read is a defect in this walk and not an input a document can present.
+// Every index handed here comes from a walk over the same array — so an out-of-range read is a defect in
+// that walk and not an input a document can present.
 function lspTokenAt(tokens TokenArray, index ElementIndex) returns Token
-	return try tokens.get(index) otherwise panic("lspTokenAt: index {index} is outside a {tokens.count()}-token stream — every index here is derived from an LspTokenLine built off this same array")
+	return try tokens.get(index) otherwise panic("lspTokenAt: index {index} is outside a {tokens.count()}-token stream — every index handed in comes from a walk over this same array")
 end 'lspTokenAt'
+
+function lspLabelClosesABlock(tokens TokenArray, at ElementIndex) returns bool
+	if at == 0 'nothingBefore'
+		return false
+	end 'nothingBefore'
+
+	return lspTokenAt(tokens, index: at - 1).kind == TokenKind.end
+end 'lspLabelClosesABlock'
