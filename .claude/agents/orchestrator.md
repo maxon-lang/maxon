@@ -159,27 +159,21 @@ workers than an account has, ask the user once whether to start that many more s
 
 **A task is one `/land` (or one `/plan-and-land`) — never a slice of one.**
 
-**Plan first.** Before you assign any non-trivial work, the `planner` plans it. It designs the solution,
-splits it into pieces (each one `/land`), states each piece's area and dependencies, and names the model
-each piece needs:
-- `haiku` for an extremely simple, mechanical job;
-- `sonnet` for a simple, clear, contained task;
-- `opus` for a harder one.
+**Plan the task boundaries first.** Before you assign non-trivial work, the `planner` designs the solution
+and splits it into tasks, each one `/land`, with each task's area and dependencies. Each becomes its own
+task, assigned in dependency order. Independent tasks run in parallel when their areas do not overlap. A
+fix whose issue already states it needs no plan.
 
-Each piece becomes its own task, assigned in dependency order; independent pieces run in parallel when
-their areas do not overlap. A one-line fix whose issue already states the fix needs no plan: give it to
-`haiku` or `sonnet` yourself.
+**The worker splits its own task.** Workers run on Fable: start every session you start on it, where the
+session's place allows a model. Inside its `/land`, the worker breaks the task into implementer pieces
+and picks each piece's model (AGENTS.md, "Orchestration"). You do not choose models below the task.
 
-**The model is honoured in two places:**
-- when you start a session for the piece, start it on that model where the session's place allows one;
-- the `ASSIGN` names it, and the worker dispatches its implementer subagents on that model.
-
-Open a `task` issue in the fleet repository for each piece (`gh issue create -R <fleet repository>
+Open a `task` issue in the fleet repository for each task (`gh issue create -R <fleet repository>
 --label task`), its body holding the fields below, then send `ASSIGN` carrying the same:
 
 1. the task issue number and a one-line goal;
-2. the process: `/land <goal>`, or `/plan-and-land <problem>` when the piece's own approach still needs a
-   worker's survey; and **the model** the plan names for it;
+2. the process: `/land <goal>`, or `/plan-and-land <problem>` when the task's own approach still needs a
+   worker's survey;
 3. **the area**: the passes, directories or files it will change, as tightly as you can state them;
 4. every Roadmap ruling it touches, quoted with its issue number;
 5. what it must not touch, naming the tasks that own neighbouring areas.
@@ -187,8 +181,7 @@ Open a `task` issue in the fleet repository for each piece (`gh issue create -R 
 **Two open tasks never share an area.** When the only open work overlaps an active task, it waits. Prefer
 `ci-red` issues, then work that unblocks other tasks, then the next milestone's open issues, then the
 oldest unassigned known issue, then the rest of the Roadmap's `Ready` work. Nothing on the Backlog is
-assigned. Follow the plan's model for each piece; without a plan, give design-heavy or cross-pass work to an Opus worker and contained fixes
-to a Sonnet worker. **Claim the public issue before you send `ASSIGN`** — assign it to the maintainer
+assigned. **Claim the public issue before you send `ASSIGN`** — assign it to the maintainer
 and set it `In progress` (`node .claude/roadmap/status.mjs <n> "In progress"`), so the board shows what
 is being implemented — and never assign one that someone else already holds. A task returned to open
 sets its issue back to `Ready` and unassigns it; the fix's `Fixes #<n>` closes it, and the board marks
