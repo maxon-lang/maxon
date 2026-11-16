@@ -84,4 +84,6 @@ Push to a branch of your own if you cannot push main, then DONE <task> <sha> <br
 - A `PROGRESS` that reports full-suite runs, repeated gate runs on an unchanged tree, or gates before the
   change is finished gets the testing line back.
 - A task returned to open sets its issue back to `Ready` and unassigns it.
+- A task moved to another worker is never retitled: close its fleet task issue (`not planned`, naming
+  why) and open a fresh one for the new owner, so the panel's clock and the title's owner both start over.
 - The fix's `Fixes #<n>` closes the issue, and `fleet.mjs land` closes the task and releases its waiters.
