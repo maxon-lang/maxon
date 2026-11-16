@@ -4617,52 +4617,36 @@ extension Parser
 		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: GenericAliasSink.collect(genericAliases), tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: false, visibility: visibility) otherwise return
 	end 'recordScannedTypeAlias'
 
-	// Consume an optional leading `export` / `public` modifier and answer what it means. THE one reader of
-	// those two — four walks meet it (the top-level dispatch, a type member, the declaration sweep's typealias
-	// arm and its type-body scan) and each would otherwise spell the same four lines, which is one rule written
-	// down four times in a file where a fifth walk is always about to be added.
-	//
 	// It THROWS, and the tolerant sweep's callers absorb that with `try … otherwise return` exactly as they
 	// absorb a malformed declaration: a modifier conflict is the REAL parse's to report, with a position.
 	function consumeOptionalVisibility() returns Visibility throws SourceParseError
-		if self.at(TokenKind.export) 'exported'
-			let exportTok = self.current()
-			self.advance()
+		let modifierTok = self.current()
 
-			// The anchor is the SECOND modifier's token and not the first: the modifier that cannot be there is
-			// the one the message is about, and it is the oracle's position (`public-keyword`'s).
-			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordExport)
-			try self.requireVisibilityFitsTheRuntimeTier(VisibilityModifierWord.wordExport, anchor: exportTok)
+		if not isVisibilityModifier(modifierTok.kind) 'unmarked'
+			return Visibility.unexported
+		end 'unmarked'
 
-			return Visibility.global
-		end 'exported'
+		let word = visibilityModifierWordSpelledBy(modifierTok.kind)
+		self.advance()
 
-		if self.at(TokenKind.public) 'publicApi'
-			let publicTok = self.current()
-			self.advance()
-			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordPublic)
-			try self.requireVisibilityFitsTheRuntimeTier(VisibilityModifierWord.wordPublic, anchor: publicTok)
+		try self.refuseSecondVisibilityModifier(word)
+		try self.requireVisibilityFitsTheRuntimeTier(word, anchor: modifierTok)
 
-			return Visibility.public
-		end 'publicApi'
-
-		return Visibility.unexported
+		return visibilityOfModifierWord(word)
 	end 'consumeOptionalVisibility'
 
-	// A modifier has just been consumed; refuse a second one. Split out because there are now THREE words
-	// and so three arms that would otherwise each re-spell "which other modifiers could be here", which is
-	// the modifier SET written down a fourth time.
+	// A modifier has just been consumed; refuse a second one.
 	function refuseSecondVisibilityModifier(consumed VisibilityModifierWord) throws SourceParseError
 		if not visibilityModifierIn(self.tokens, index: self.pos) 'onlyOne'
 			return
 		end 'onlyOne'
 
 		let tok = self.current()
-		let offending = self.visibilityModifierWordAt(self.pos)
+		let offending = visibilityModifierWordSpelledBy(tok.kind)
 
-		// Sorted into `VisibilityModifierWord`'s declaration order, NOT the order they were written. Six
-		// live cases pin `'export' and 'module' cannot be combined`, so `module export` must render exactly
-		// what `export module` renders. The POSITION stays the offending token's either way.
+		// Sorted into `VisibilityModifierWord`'s declaration order, NOT the order they were written: the
+		// public-keyword spec pins `public export` and `export public` to one sentence, anchored on the
+		// SECOND modifier's token in both orders.
 		if consumed.ordinal <= offending.ordinal 'alreadyInOrder'
 			throw SourceParseError.visibilityModifiersCombined(consumed, later: offending, line: tok.line, column: tok.column)
 		end 'alreadyInOrder'
@@ -4693,20 +4677,6 @@ extension Parser
 
 		throw SourceParseError.wideVisibilityInRuntimeSource(keyword, line: anchor.line, column: anchor.column)
 	end 'requireVisibilityFitsTheRuntimeTier'
-
-	// Which modifier word sits at `index`. Only ever asked where `visibilityModifierIn` already answered
-	// true, so a token that is none of the three is a caller bug rather than an input.
-	function visibilityModifierWordAt(index ElementIndex) returns VisibilityModifierWord
-		if self.kindAt(index) == TokenKind.export 'exported'
-			return VisibilityModifierWord.wordExport
-		end 'exported'
-
-		if self.kindAt(index) == TokenKind.public 'publicApi'
-			return VisibilityModifierWord.wordPublic
-		end 'publicApi'
-
-		panic("visibilityModifierWordAt: token at {index} is not a visibility modifier")
-	end 'visibilityModifierWordAt'
 
 	// ⭐⭐ **IS THE CURSOR ON THE `spawn` PREFIX OPERATOR?** An identifier spelled `spawn` is the
 	// operator iff the next token past an optional `(capacity: …)` group opens a NAME, because two

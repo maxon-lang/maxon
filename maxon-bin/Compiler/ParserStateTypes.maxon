@@ -6016,9 +6016,8 @@ end 'declarationBeginsStatementIn'
 
 // A modifier that may stand between a statement's start and the keyword opening its declaration: a
 // visibility tier, or the `static` a type member spells (`export static function create`). The tier half
-// asks `visibilityModifierIn` rather than respelling `export`/`public`, for that predicate's
-// own stated reason — a third tier taught to one reader and not another would put two readers of one
-// grammar a token apart.
+// asks `visibilityModifierIn` rather than respelling `export`/`public`: a third tier taught to one reader
+// and not another would put two readers of one grammar a token apart.
 function declarationModifierIn(tokens TokenArray, index ElementIndex) returns bool
 	return pastDeclarationModifiers(tokens, index: index) > index
 end 'declarationModifierIn'
@@ -6037,13 +6036,8 @@ function staticModifierEndsAt(tokens TokenArray, index ElementIndex) returns boo
 	return index > 0 and tokenKindAt(tokens, index: index - 1) == TokenKind.static
 end 'staticModifierEndsAt'
 
-// The same question at an arbitrary INDEX — split out for `moduleModifierIn`'s reason, one door up: the
-// fixed-element-count scan (`Parser.structFieldKeywordAt`) walks a type body by index and parses
-// nothing, so it cannot ask a cursor-relative predicate. One rule, two entry points, and the cursor
-// form is the indexed one asked at `self.pos`.
 function visibilityModifierIn(tokens TokenArray, index ElementIndex) returns bool
-	let kind = tokenKindAt(tokens, index: index)
-	return kind == TokenKind.export or kind == TokenKind.public
+	return isVisibilityModifier(tokenKindAt(tokens, index: index))
 end 'visibilityModifierIn'
 
 function pastVisibilityModifiers(tokens TokenArray, index ElementIndex) returns ElementIndex

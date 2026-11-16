@@ -157,7 +157,7 @@ function isProgramWideTier(visibility Visibility) returns bool
 	return visibility == Visibility.global or visibility == Visibility.public
 end 'isProgramWideTier'
 
-// The two WORDS that select a tier — the source-level surface of `Visibility`, which the tier enum
+// The WORDS that select a tier — the source-level surface of `Visibility`, which the tier enum
 // itself cannot carry because `unexported` has no word and `global` is not spelled "global".
 //
 // ⚠ **DECLARATION ORDER IS THE ORDER A COMBINED-MODIFIER DIAGNOSTIC NAMES THEM**, and it is NOT encounter
@@ -175,19 +175,54 @@ union VisibilityModifier
 	unspelled
 end 'VisibilityModifier'
 
+let VisibilityModifierWords = VisibilityModifierWord.allCases
+
+function visibilityOfModifierWord(word VisibilityModifierWord) returns Visibility
+	return match word 'word'
+		wordExport gives Visibility.global
+		wordPublic gives Visibility.public
+	end 'word'
+end 'visibilityOfModifierWord'
+
+function visibilityModifierTokenKind(word VisibilityModifierWord) returns TokenKind
+	return match word 'word'
+		wordExport gives TokenKind.export
+		wordPublic gives TokenKind.public
+	end 'word'
+end 'visibilityModifierTokenKind'
+
+function isVisibilityModifier(kind TokenKind) returns bool
+	for word in VisibilityModifierWords 'eachWord'
+		if visibilityModifierTokenKind(word) == kind 'spellsIt'
+			return true
+		end 'spellsIt'
+	end 'eachWord'
+
+	return false
+end 'isVisibilityModifier'
+
+function visibilityModifierWordSpelledBy(kind TokenKind) returns VisibilityModifierWord
+	for word in VisibilityModifierWords 'eachWord'
+		if visibilityModifierTokenKind(word) == kind 'spellsIt'
+			return word
+		end 'spellsIt'
+	end 'eachWord'
+
+	panic("visibilityModifierWordSpelledBy: '{kind.rawValue}' is not a visibility modifier")
+end 'visibilityModifierWordSpelledBy'
+
 function visibilityModifierWordOf(visibility Visibility) returns VisibilityModifier
-	return match visibility 'tier'
-		global gives VisibilityModifier.spelled(VisibilityModifierWord.wordExport)
-		public gives VisibilityModifier.spelled(VisibilityModifierWord.wordPublic)
-		unexported gives VisibilityModifier.unspelled
-	end 'tier'
+	for word in VisibilityModifierWords 'eachWord'
+		if visibilityOfModifierWord(word) == visibility 'selectsIt'
+			return VisibilityModifier.spelled(word)
+		end 'selectsIt'
+	end 'eachWord'
+
+	return VisibilityModifier.unspelled
 end 'visibilityModifierWordOf'
 
 function visibilityModifierText(word VisibilityModifierWord) returns String
-	match word 'word'
-		wordExport then return "export"
-		wordPublic then return "public"
-	end 'word'
+	return visibilityModifierTokenKind(word).rawValue
 end 'visibilityModifierText'
 
 // The quoted spelling a diagnostic prints. The words themselves are reserved in `Lexer.KeywordTable`.
@@ -196,15 +231,11 @@ function visibilityModifierSpelling(word VisibilityModifierWord) returns String
 end 'visibilityModifierSpelling'
 
 function visibilitySpelledBy(kind TokenKind) returns Visibility
-	if kind == TokenKind.export 'exported'
-		return Visibility.global
-	end 'exported'
+	if not isVisibilityModifier(kind) 'unmarked'
+		return Visibility.unexported
+	end 'unmarked'
 
-	if kind == TokenKind.public 'publicApi'
-		return Visibility.public
-	end 'publicApi'
-
-	return Visibility.unexported
+	return visibilityOfModifierWord(visibilityModifierWordSpelledBy(kind))
 end 'visibilitySpelledBy'
 
 export union SpelledFieldName
