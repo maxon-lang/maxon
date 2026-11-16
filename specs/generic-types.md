@@ -1537,6 +1537,114 @@ end 'main'
 4
 ```
 
+<!-- test: a-bare-generic-factory-binds-t-from-a-generic-function-result -->
+The argument is the result of a generic function call, whose type is known only once that function's
+instance is: the factory binds `T` from it all the same.
+```maxon
+typealias Tally = int(0 to u64.max)
+type Wrap uses T
+	export let held as T
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+end 'Wrap'
+function same(x T) uses T returns T
+	return x
+end 'same'
+function main() returns ExitCode
+	let w = Wrap.create(same(3 as Tally))
+	print("{w.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+
+```
+
+<!-- test: a-bare-generic-factory-binds-t-from-a-generic-static-result -->
+The same with the argument produced by a generic static function of another generic type.
+```maxon
+typealias Tally = int(0 to u64.max)
+type Wrap uses T
+	export let held as T
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+end 'Wrap'
+type Mid uses T
+	export let item as T
+	static function boxUp(x U) uses U returns Tally
+		_ = x
+		return 2
+	end 'boxUp'
+end 'Mid'
+function main() returns ExitCode
+	let w = Wrap.create(Mid.boxUp(3 as Tally))
+	print("{w.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+
+```
+
+<!-- test: a-bare-generic-factory-binds-t-from-a-bound-generic-function-result -->
+The same with the generic function's result held in a binding first.
+```maxon
+typealias Tally = int(0 to u64.max)
+type Wrap uses T
+	export let held as T
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+end 'Wrap'
+function same(x T) uses T returns T
+	return x
+end 'same'
+function main() returns ExitCode
+	let m = same(3 as Tally)
+	let w = Wrap.create(m)
+	print("{w.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+
+```
+
+<!-- test: error.a-bare-generic-factory-argument-from-an-undefined-call-is-the-only-report -->
+An argument whose type nothing knows fixes no `T`, and it has already been refused at its own call, so the
+factory call reports nothing.
+```maxon
+typealias Tally = int(0 to u64.max)
+type Wrap uses T
+	export let held as T
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+end 'Wrap'
+function main() returns ExitCode
+	let w = Wrap.create(nowhere(3 as Tally))
+	print("{w.held}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:10:22: call to undefined function 'nowhere'
+```
+
 <!-- test: a-throwing-generic-factory-releases-a-consumed-managed-argument -->
 A throwing generic factory that fails before it builds `Self` releases the `T`-typed argument it consumed. The
 argument is a heap string, so the call leaks it (**exit 101**) unless the shared generic body drops the parameter

@@ -11025,6 +11025,63 @@ end 'main'
 1
 ```
 
+<!-- test: a-generic-service-is-instantiated-from-a-generic-function-result -->
+The factory's argument is the result of a generic function call, whose type is known only once that
+function's instance is: the spawn reads the instantiation off it all the same.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function same(x T) uses T returns T
+	return x
+end 'same'
+
+function main() returns ExitCode
+	let h = spawn Box.create(same(1 as Whole))
+	let v = try await h.peek() otherwise 0
+	return v as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+
+<!-- test: error.a-generic-service-argument-from-an-undefined-call-is-the-only-report -->
+An argument whose type nothing knows fixes no instantiation, and it has already been refused at its own
+call, so the spawn reports nothing.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(nowhere(1 as Whole))
+	return 0
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:15:27: call to undefined function 'nowhere'
+```
+
 <!-- test: two-instantiations-of-one-generic-service-coexist -->
 TWO instantiations of one generic service in one program, under one `Box.request` and one `Box.handle`.
 Nothing about a companion names a type argument, so this is the case that would break first if the payload

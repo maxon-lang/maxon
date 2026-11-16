@@ -4445,7 +4445,7 @@ extension Parser
 			try self.checkCrossingArguments(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, firstSource: receiverArgs, door: CrossingDoor.spawn)
 		end 'aFactoryOnAnotherThread'
 
-		let instantiated = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
+		let instantiated = (try self.spawnFactoryConstructorInstance(inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)).constructedOr(constructorInstance)
 		let storedSlots = self.storedSlotCandidates(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, constructorInstance: instantiated)
 
 		for stored in storedSlots 'eachStoredSlot'
@@ -7663,12 +7663,16 @@ extension Parser
 		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
 		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
-		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
+		let answer = try self.spawnFactoryConstructorInstance(inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
+		let constructed = answer.constructedOr(constructorInstance)
 		self.stampDefaultsSubject(callee, args: args, argLabels: argLabels, defaultedArgs: defaultedArgs, receiverSlots: NoReceiverSlots, constructorInstance: constructed)
-		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
-		try self.requireACountSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
-		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, bound: bound)
-		try self.requireBareGenericResultIsTyped(result, callee: callee, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
+
+		let result = match answer 'inference'
+			deferred gives self.mintDeferredValue()
+			supplied or
+			inferred gives try self.mintInstanceCheckedCallResult(callee, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor, resultUsed: resultUsed, bound: bound)
+		end 'inference'
+
 		let opaqueWordReading = try self.typeCallResultThroughInstance(result, callee: callee, args: args, argLabels: argLabels, bound: bound, constructed: constructed, anchor: anchor)
 		self.noteLiteralColumnsCorpusCall(result, callee: callee, args: args)
 		self.noteIdentityPrimitiveClone(result, callee: callee, args: args)
@@ -7802,6 +7806,15 @@ extension Parser
 		self.recordBrandHandOvers(args, kind: BrandRecordKind.handOver, first: 0, argLabels: argLabels, opIndex: opIdx, range: callRange)
 		return read
 	end 'emitResolvedCall'
+
+	function mintInstanceCheckedCallResult(callee ByteArray, args ValueIdArray, argLabels NameRoster, constructed ConstructorInstance, inferInstanceOf FactoryInference, anchor Token, resultUsed bool, bound BoundReturn) returns ValueId throws SourceParseError
+		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
+		try self.requireACountSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
+		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, bound: bound)
+		try self.requireBareGenericResultIsTyped(result, callee: callee, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
+
+		return result
+	end 'mintInstanceCheckedCallResult'
 
 	// A proven `get` lowers to `__managed_get_unchecked`, which loads the slot word without retaining it, while
 	// the call's result is enrolled as an owned temp that releases on drop. A managed or opaque element therefore
@@ -7966,11 +7979,8 @@ extension Parser
 		let aliases = NameRoster.create(0)
 
 		for value in values 'eachValue'
-			if tagIsUnresolved(self.tagOf(value)) 'notYetTyped'
-				return GenericUnification.disagreed
-			end 'notYetTyped'
-
-			let argument = try self.genericArgumentOf(value, functionName: functionName, paramName: paramName, anchor: anchor)
+			let fixed = try self.typeArgumentOfValue(value) otherwise return GenericUnification.disagreed
+			let argument = try self.genericArgumentOf(value, fixed: fixed, functionName: functionName, paramName: paramName, anchor: anchor)
 
 			if argument.kind == GenericArgumentKind.rangedAlias and not aliases.contains(argument.name) 'aNewAlias'
 				aliases.push(argument.name)
@@ -8033,8 +8043,10 @@ extension Parser
 		end 'kind'
 	end 'noteOfAlikeArgument'
 
-	function genericArgumentOf(value ValueId, functionName String, paramName String, anchor Token) returns GenericFunctionArgument throws SourceParseError
-		let tag = self.tagOf(value)
+	// The kind is read off `fixed` and every name off `value`: an `integer` or `float` type carries no
+	// alias or enumeration name, so a name read off `fixed` would merge distinct instances.
+	function genericArgumentOf(value ValueId, fixed MaxonType, functionName String, paramName String, anchor Token) returns GenericFunctionArgument throws SourceParseError
+		let tag = maxonTypeTag(fixed)
 
 		if self.valueIsLinear(value) 'aLinearTypeArgument'
 			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: linearTypeArgumentMessage(self.valueKindWord(value), holder: functionName), line: anchor.line, column: anchor.column)
@@ -8048,8 +8060,8 @@ extension Parser
 			string then return GenericFunctionArgument.create(GenericArgumentKind.string, name: EmptySourceText)
 			character then return GenericFunctionArgument.create(GenericArgumentKind.character, name: EmptySourceText)
 			structRef then return GenericFunctionArgument.create(GenericArgumentKind.record, name: self.internedName(self.valueNameId(value)))
+			unresolved then panic("genericArgumentOf: a deferred value fixes no type argument — `typeArgumentOfValue` answers absent for one")
 			exitCode or
-			unresolved or
 			void or
 			function or
 			typeParameter or
@@ -8670,9 +8682,13 @@ extension Parser
 
 			// A type over the bare base may hold the instance itself: `substituteThroughInstance` hands a
 			// top-level `structRef` back unchanged, so such a type never says what `T` holds.
-			if not self.argumentHoldsAPromise(argument) and not self.signatures.typeNamesTheBareBase(self.spawnTypeArgumentOfValue(argument), base: self.signatures.genericInstanceBaseName(gid)) 'holdsNone'
-				continue
-			end 'holdsNone'
+			if not self.argumentHoldsAPromise(argument) 'noPromiseHeld'
+				let typed = try self.spawnTypeArgumentOfValue(argument) otherwise continue
+
+				if not self.signatures.typeNamesTheBareBase(typed, base: self.signatures.genericInstanceBaseName(gid)) 'holdsNone'
+					continue
+				end 'holdsNone'
+			end 'noPromiseHeld'
 
 			// A position every declaration takes moves the promise into the callee, so the caller holds
 			// nothing the result could borrow.

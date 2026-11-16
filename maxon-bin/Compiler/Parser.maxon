@@ -5120,6 +5120,20 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
+union FactoryInstanceAnswer
+	supplied
+	inferred(id GenericInstanceId)
+	deferred
+
+	function constructedOr(given ConstructorInstance) returns ConstructorInstance
+		return match self 'answer'
+			supplied or
+			deferred gives given
+			inferred(id) gives ConstructorInstance.instance(id)
+		end 'answer'
+	end 'constructedOr'
+end 'FactoryInstanceAnswer'
+
 union TypeParameterScope
 	ofTheEnclosingType(position ElementIndex)
 	ofTheGenericFunction(position ElementIndex)
@@ -5681,6 +5695,8 @@ end 'ServiceSpawnSite'
 let sharedNotAServiceSpawn = ServiceSpawnSite.notASpawn
 
 let sharedNoCallInstanceSource = CallInstanceSource.nowhere
+
+let sharedSuppliedFactoryInstance = FactoryInstanceAnswer.supplied
 
 union HolderArgument
 	holds(argument ValueId)

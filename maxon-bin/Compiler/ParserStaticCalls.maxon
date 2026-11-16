@@ -3102,7 +3102,8 @@ extension Parser
 			let argument = try slotted.get(position) otherwise panic("slottedMemberFeed: slotted.get OOB at column {i} — `slotCallArgs` answered `ordered`, so the counts agree")
 
 			if self.typeIsWrittenOverTheBase(declared, base: base) 'aSlotOfTheBase'
-				fed = fed or not self.signatures.argIsFullyConcrete(self.typeOf(argument))
+				let typed = try self.spawnTypeArgumentOfValue(argument) otherwise continue
+				fed = fed or not self.signatures.argIsFullyConcrete(typed)
 			end 'aSlotOfTheBase'
 		end 'eachUserParam'
 
@@ -3112,34 +3113,32 @@ extension Parser
 	// Does `declared` mention one of `base`'s own type parameters — the parameter itself, or an instance written
 	// over one at any depth?
 	function typeIsWrittenOverTheBase(declared MaxonType, base ByteArray) returns bool
+		for paramName in self.signatures.structTypeParamsOf(base) 'eachParam'
+			if self.typeIsWrittenOverParameter(declared, token: typeParamTokenFor(base, paramName: paramName)) 'overThisParam'
+				return true
+			end 'overThisParam'
+		end 'eachParam'
+
+		return false
+	end 'typeIsWrittenOverTheBase'
+
+	function typeIsWrittenOverParameter(declared MaxonType, token TypeParamId) returns bool
 		let tag = maxonTypeTag(declared)
 
 		if tag == ValueTypeTag.genericInstance 'anInstance'
 			let id = genericInstanceIdOf(declared)
 
 			for position in 0 upto self.signatures.genericInstanceArgCount(id) 'eachArgument'
-				if self.typeIsWrittenOverTheBase(self.signatures.substitutedInstanceArg(id, position: position), base: base) 'overTheBase'
+				if self.typeIsWrittenOverParameter(self.signatures.substitutedInstanceArg(id, position: position), token: token) 'overTheParameter'
 					return true
-				end 'overTheBase'
+				end 'overTheParameter'
 			end 'eachArgument'
 
 			return false
 		end 'anInstance'
 
-		if tag != ValueTypeTag.typeParameter 'aConcreteLeaf'
-			return false
-		end 'aConcreteLeaf'
-
-		let token = typeParamIdOf(declared)
-
-		for paramName in self.signatures.structTypeParamsOf(base) 'eachParam'
-			if typeParamTokenFor(base, paramName: paramName) == token 'declaredByTheBase'
-				return true
-			end 'declaredByTheBase'
-		end 'eachParam'
-
-		return false
-	end 'typeIsWrittenOverTheBase'
+		return tag == ValueTypeTag.typeParameter and typeParamIdOf(declared) == token
+	end 'typeIsWrittenOverParameter'
 
 	// ⚠ **THE REMEDY IS A `typealias`, BECAUSE A `with` INSTANCE IS SPELLED IN ONE** — a field typed
 	// `Box with T` inline does not parse.
@@ -3360,13 +3359,13 @@ extension Parser
 	//
 	// `constructorInstanceOf`'s third road, and deliberately not an arm of it: that door answers from the
 	// BASE NAME alone and is asked before any argument exists.
-	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, serviceSite ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
-		let base = try inferInstanceOf.baseName() otherwise return supplied
+	function spawnFactoryConstructorInstance(inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, serviceSite ServiceSpawnSite) returns FactoryInstanceAnswer throws SourceParseError
+		let base = try inferInstanceOf.baseName() otherwise return sharedSuppliedFactoryInstance
 
 		let params = self.signatures.structTypeParamsOf(base)
 
 		if params.isEmpty() 'aPlainType'
-			return supplied
+			return sharedSuppliedFactoryInstance
 		end 'aPlainType'
 
 		// ⇒ **WHERE NO DECLARATION IS NAMEABLE, REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with
@@ -3376,29 +3375,30 @@ extension Parser
 				throw self.unnameableFactoryRefusal(callee, anchor: try serviceSite.token() otherwise anchor)
 			end 'aSpawn'
 
-			return supplied
+			return sharedSuppliedFactoryInstance
 		end 'noDeclarationIsNameable'
 
-		return try self.instanceFixedByFactoryDeclaration(supplied, base: base, decl: decl, callee: callee, args: args, argLabels: argLabels, anchor: anchor, site: serviceSite)
+		return try self.instanceFixedByFactoryDeclaration(base, decl: decl, callee: callee, args: args, argLabels: argLabels, anchor: anchor, site: serviceSite)
 	end 'spawnFactoryConstructorInstance'
 
-	function instanceFixedByFactoryDeclaration(supplied ConstructorInstance, base ByteArray, decl SweptDeclaration, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
+	function instanceFixedByFactoryDeclaration(base ByteArray, decl SweptDeclaration, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, site ServiceSpawnSite) returns FactoryInstanceAnswer throws SourceParseError
 		let params = self.signatures.structTypeParamsOf(base)
 		let typeArgs = MaxonTypeArray.create(0)
 
 		for position in 0 upto params.count() 'eachTypeParam'
 			let paramName = try params.get(position) otherwise panic("instanceFixedByFactoryDeclaration: params.get OOB at {position} on a list walked to its own count")
+			let inferred = try self.factoryTypeArgumentAt(base, paramName: paramName, position: position, decl: decl, args: args, argLabels: argLabels) otherwise return FactoryInstanceAnswer.deferred
 
-			match self.factoryTypeArgumentAt(base, paramName: paramName, position: position, decl: decl, args: args, argLabels: argLabels) 'argument'
+			match inferred 'argument'
 				found(t) then typeArgs.push(t)
-				absent then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, site: site)
+				absent then return try self.uninferredFactoryInstance(UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, site: site)
 			end 'argument'
 		end 'eachTypeParam'
 
-		return try self.instanceOfFactoryTypeArguments(supplied, base: base, typeArgs: typeArgs, callee: callee, anchor: anchor, site: site)
+		return try self.instanceOfFactoryTypeArguments(base, typeArgs: typeArgs, callee: callee, anchor: anchor, site: site)
 	end 'instanceFixedByFactoryDeclaration'
 
-	function instanceOfFactoryTypeArguments(supplied ConstructorInstance, base ByteArray, typeArgs MaxonTypeArray, callee ByteArray, anchor Token, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
+	function instanceOfFactoryTypeArguments(base ByteArray, typeArgs MaxonTypeArray, callee ByteArray, anchor Token, site ServiceSpawnSite) returns FactoryInstanceAnswer throws SourceParseError
 		for t in typeArgs 'eachTypeArgument'
 			_ = try self.requireInferableTypeArgument(t, anchor: try site.token() otherwise anchor)
 		end 'eachTypeArgument'
@@ -3413,7 +3413,7 @@ extension Parser
 		// one shape `ServiceBehaviour` cannot build `<T>.__behave` for: `receiverLayoutSourceOf` would forward a descriptor
 		// the synthesized body has no slot for. Refused here rather than aborting the compiler two tiers down.
 		if not self.signatures.argsAreFullyConcrete(typeArgs) 'stillOpaque'
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, site: site)
+			return try self.uninferredFactoryInstance(UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, site: site)
 		end 'stillOpaque'
 
 		let gid = self.signatures.internGenericInstanceOf(base, args: typeArgs)
@@ -3424,7 +3424,7 @@ extension Parser
 		// by nobody: E3017 goes unraised and the program reaches `witnessSlotImpl` with no conformance
 		// selected.
 		self.recordInferredInstantiation(gid, at: anchor)
-		return ConstructorInstance.instance(gid)
+		return FactoryInstanceAnswer.inferred(gid)
 	end 'instanceOfFactoryTypeArguments'
 
 	function unnameableFactoryRefusal(callee ByteArray, anchor Token) returns SourceParseError
@@ -3444,8 +3444,8 @@ extension Parser
 	// ⭐ **WHAT AN INFERENCE THAT FIXED NOTHING ANSWERS — ONE HOME, because both misses answer identically on
 	// the ordinary road and differ only in the sentence the `spawn` road raises.** The reason travels as a
 	// verdict rather than a rendered sentence so the ordinary road builds no String it will not use.
-	function uninferredFactoryInstance(supplied ConstructorInstance, reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
-		let spawnTok = try site.token() otherwise return supplied
+	function uninferredFactoryInstance(reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, site ServiceSpawnSite) returns FactoryInstanceAnswer throws SourceParseError
+		let spawnTok = try site.token() otherwise return sharedSuppliedFactoryInstance
 		let member = unqualifiedMemberOf(callee)
 
 		match reason 'why'
@@ -3454,11 +3454,12 @@ extension Parser
 		end 'why'
 	end 'uninferredFactoryInstance'
 
-	// What the arguments fix one type parameter to, or `absent`. The FIRST factory parameter declared
-	// at that parameter, or at an instance written over it, whose argument fixes it decides; labels
-	// are mapped through `argSlotPosition`, the one home of the label-to-position rule, so
+	// What the arguments fix one type parameter to, or `absent` when no parameter fixes it; it throws
+	// absent while a deferred argument sits at a parameter that could fix it. The FIRST factory parameter
+	// declared at that parameter, or at an instance written over it, whose argument fixes it decides;
+	// labels are mapped through `argSlotPosition`, the one home of the label-to-position rule, so
 	// `create(item: x)` fixes `T` exactly as `create(x)` does.
-	function factoryTypeArgumentAt(typeName ByteArray, paramName ByteArray, position ElementIndex, decl SweptDeclaration, args ValueIdArray, argLabels NameRoster) returns InferredTypeArgument
+	function factoryTypeArgumentAt(typeName ByteArray, paramName ByteArray, position ElementIndex, decl SweptDeclaration, args ValueIdArray, argLabels NameRoster) returns InferredTypeArgument throws AbsentError
 		let token = typeParamTokenFor(typeName, paramName: paramName)
 		var inferred = InferredTypeArgument.absent
 
@@ -3466,11 +3467,15 @@ extension Parser
 			let swept = try decl.paramTypes.get(p) otherwise panic("factoryTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
 			let sweptTag = maxonTypeTag(swept)
 
-			if sweptTag == ValueTypeTag.unresolved or (sweptTag == ValueTypeTag.typeParameter and typeParamIdOf(swept) != token) 'notThisParameter'
+			if sweptTag == ValueTypeTag.unresolved 'unreadBySweep'
 				continue
-			end 'notThisParameter'
+			end 'unreadBySweep'
 
 			let declared = swept if sweptTag == ValueTypeTag.typeParameter else self.sweptParamType(swept, scopeFilePath: decl.declFilePath)
+
+			if not self.declaredTypeCanFixTypeArgument(declared, token: token, base: typeName) 'fixesNothingHere'
+				continue
+			end 'fixesNothingHere'
 
 			for i in 0 upto args.count() 'eachArgument'
 				let label = try argLabels.get(i) otherwise panic("factoryTypeArgumentAt: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
@@ -3481,7 +3486,9 @@ extension Parser
 					continue
 				end 'anotherPosition'
 
-				match self.typeArgumentFixedByArgument(declared, actual: self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("factoryTypeArgumentAt: args.get OOB at {i}")), token: token, base: typeName, position: position) 'atThisArgument'
+				let actual = try self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("factoryTypeArgumentAt: args.get OOB at {i}"))
+
+				match self.typeArgumentFixedByArgument(declared, actual: actual, token: token, base: typeName, position: position) 'atThisArgument'
 					found(fixed) then inferred = self.joinedInferredArgument(inferred, next: fixed)
 					absent then break
 				end 'atThisArgument'
@@ -3546,19 +3553,35 @@ extension Parser
 		return InferredTypeArgument.absent
 	end 'typeArgumentFixedByType'
 
+	function declaredTypeCanFixTypeArgument(declared MaxonType, token TypeParamId, base ByteArray) returns bool
+		if maxonTypeTag(declared) == ValueTypeTag.structRef 'theBaseItself'
+			return self.internedName(typeNameIdOf(declared)).equals(base)
+		end 'theBaseItself'
+
+		return self.typeIsWrittenOverParameter(declared, token: token)
+	end 'declaredTypeCanFixTypeArgument'
+
 	// An argument's type as a TYPE ARGUMENT of the SIGNATURE INDEX's registry. A name crosses interners as a
 	// NAME — the value's id belongs to this file's table — and the canonical `structRef`/`named` split is the
 	// index's own, asked through its door so an inferred instantiation and a spelled one intern once.
-	function spawnTypeArgumentOfValue(value ValueId) returns MaxonType
-		let declared = self.typeOf(value)
+	function spawnTypeArgumentOfValue(value ValueId) returns MaxonType throws AbsentError
+		let declared = try self.typeArgumentOfValue(value)
 		let tag = maxonTypeTag(declared)
 
 		if tag != ValueTypeTag.named and not tagNamesADeclaredType(tag) 'carriesNoName'
 			return declared
 		end 'carriesNoName'
 
-		return self.signatures.canonicalInstanceArg(maxonTypeOfTag(tag, nameId: self.signatures.indexTypeNames().intern(self.valueTypeName(value))))
+		return self.signatures.canonicalInstanceArg(maxonTypeOfTag(tag, nameId: self.signatures.indexTypeNames().intern(self.internedName(typeNameIdOf(declared)))))
 	end 'spawnTypeArgumentOfValue'
+
+	function typeArgumentOfValue(value ValueId) returns MaxonType throws AbsentError
+		if self.valueIsDeferred(value) 'notYetTyped'
+			throw AbsentError.absent
+		end 'notYetTyped'
+
+		return self.typeOf(value)
+	end 'typeArgumentOfValue'
 
 	// ⭐ **A GENERIC CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct.**
 	// `BoolSizer.create(…)` links to `Sizer.create`, which returns `Self` — the BASE struct `Sizer`
