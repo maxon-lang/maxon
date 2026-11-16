@@ -3072,7 +3072,7 @@ extension ProgramSignatures
 	end 'namedElementClass'
 
 	function elementDeclaresItsOwn(element MaxonType, member ByteArray) returns bool
-		return self.userDeclaresMember(self.conformerNameOfType(element, idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath).toByteArray(), member: member)
+		return self.userDeclaresMemberInAnyFile(self.conformerNameOfType(element, idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath).toByteArray(), member: member)
 	end 'elementDeclaresItsOwn'
 
 	function elementLoadsAsItsValue(id GenericInstanceId) returns bool
@@ -4941,7 +4941,7 @@ extension ProgramSignatures
 	end 'calleeVisibilityFrom'
 
 	function templateCalleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns SymbolVisibility
-		let templates = self.genericTemplatesOf(callee)
+		let templates = self.genericTemplatesInAnyFile(callee)
 
 		if templates.count() == 0 'aRegisteredMemberName'
 			let site = try self.settledDeclarations().funcDeclSites.get(callee) otherwise return SymbolVisibility.visible
@@ -8061,10 +8061,10 @@ extension ProgramSignatures
 	// disambiguated gets none.
 	function unambiguousAliasSpelling(entry GenericAliasEntry) returns immutable ByteArray
 		if not self.genericAliasSpellingIsSuperseded(entry.aliasName) 'onlyOneTypeInThisProgramWearsThisName'
-			return entry.aliasName
+			return withoutExtensionMemberMint(entry.aliasName)
 		end 'onlyOneTypeInThisProgramWearsThisName'
 
-		return freeze self.contestedDeclarationSpelling(entry.aliasName, declFilePath: entry.filePath).toByteArray()
+		return freeze self.contestedDeclarationSpelling(withoutExtensionMemberMint(entry.aliasName), declFilePath: entry.filePath).toByteArray()
 	end 'unambiguousAliasSpelling'
 
 	// The type name this callee's `returns` clause wrote; `absent` where it wrote none. The caller
@@ -8079,9 +8079,10 @@ extension ProgramSignatures
 	end 'returnAliasNameOf'
 
 	export function returnInnerAliasOf(callee ByteArray, aliasName ByteArray) returns immutable ByteArray throws AbsentError
-		let nested = try self.aliasNestedInDeclaringTypeOf(callee, aliasName: aliasName, declFilePath: self.recordedReturnDeclFileOf(callee))
+		let declFilePath = self.recordedReturnDeclFileOf(callee)
+		let nested = try self.aliasNestedInDeclaringTypeOf(callee, aliasName: aliasName, declFilePath: declFilePath)
 
-		if not self.declaresInnerAlias(nested) 'notAnInnerAlias'
+		if not self.declaresInnerAliasInAnyFile(nested) or not self.innerAliasIsSeenFrom(nested, readerLayer: self.declarationLayerOf(declFilePath)) 'notAnInnerAlias'
 			throw AbsentError.absent
 		end 'notAnInnerAlias'
 

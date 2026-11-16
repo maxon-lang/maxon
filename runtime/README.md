@@ -89,7 +89,7 @@ reserved names:
   positions is needed.
 
 Both doors admit a reserved name only where `Parser.fileMayUseReservedNames` holds and
-`ProgramSignatures.declaresCallee` says some file declares it. `fileMayUseReservedNames` is true for a
+`ProgramSignatures.declaresCalleeInAnyFile` says some file declares it. `fileMayUseReservedNames` is true for a
 `runtime/` file, for `stdlib/Builtins.maxon` and `stdlib/Testing.maxon`, and for a file this compile wrote
 part of — which includes the author's staged `*.maxtest` file under `maxon test`, so on both doors that
 file is the standing exception to "no file outside the tier calls or names a runtime entry".
@@ -288,7 +288,7 @@ allocator reads no usage bit; whether a second thread exists is a run-time word 
 `__proc_exe_path` stays a builder (`ProcessRuntime`): its body allocates and returns a managed buffer
 (E3153), and the allocator entries it would call (`__mm_alloc`, `__mm_free`, `__managed_create`,
 `__managed_reserve`) are builder-built and declared in no source, so a tier call to one fails
-`declaresCallee` and earns E3004. `__thread_cpu_ticks` stays a builder (`ClockRuntime`): its green-thread
+`declaresCalleeInAnyFile` and earns E3004. `__thread_cpu_ticks` stays a builder (`ClockRuntime`): its green-thread
 arm reads the current green thread's clock offset, which no `__Raw` row names.
 
 A tier body spliced into code the compiler does not own is refused by `splicingWouldWidenTheSafePoint`, so

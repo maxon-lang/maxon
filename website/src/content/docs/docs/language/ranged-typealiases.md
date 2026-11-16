@@ -453,10 +453,13 @@ for a standard-library type too. An [interface extension](/docs/language/composi
 default: a conforming type whose body declares the same member keeps its own, and the extension's methods,
 compiled for that type, read it.
 
-A nested typealias that an `extension` of the program declares under the name of one a library `extension` of
-the same type also declares (`Array.ElementArray`, `Array.SortComparator`, `Iterable.ElementTransform`) is a
-separate member. The program's extension bodies, in every file, spell it with the bare name, and callers of
-the program's methods see it; the library's bodies and methods keep the library's member. A member without
+A nested typealias that an `extension` declares under the name of one an `extension` of a lower
+[layer](/docs/language/namespaces/#bare-names-and-ambiguity) also declares for the same type (`Array.ElementArray`, `Array.SortComparator`,
+`Iterable.ElementTransform`) is a separate member, one per declaring layer. An extension body, in every file,
+spells the bare name for the member its own layer declares, else for the one the nearest layer below it
+declares, and callers of a method see the member that method's layer reads; the library's bodies and methods
+keep the library's member. Two layers' members that are different types stay different types: a value of one
+where the other is expected is **E3005**. A member without
 a visibility modifier is spelled from its declaring directory's subtree only: an extension body in another
 directory naming it is [E3008](/docs/cli/error-codes/#e3008--symbolnotexported).
 

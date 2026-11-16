@@ -1,0 +1,60 @@
+let LibraryCachePrimitiveLoweredMemberCaseDirName = "library-cache-author-int-lowered-member"
+let UndeclaredPrimitiveExtensionsFileName = "PrimitiveExtensions.maxon"
+let LoweredPlainProgramSource = "function main() returns ExitCode\n\tlet n = 5\n\tlet m = n.clone()\n\n\tprint(\"\{m.toString()\} \{n.hash()\}\\n\")\n\treturn 0\nend 'main'\n"
+let LoweredCloneProgramSource = "extension int\n\tfunction clone() returns Self\n\t\treturn self\n\tend 'clone'\nend 'int'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let LoweredToStringProgramSource = "extension int implements Stringable\n\tfunction toString() returns String\n\t\treturn \"mine\"\n\tend 'toString'\nend 'int'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let LoweredPlainProgramDirName = "plain"
+let LoweredCloneProgramDirName = "cloning"
+let LoweredToStringProgramDirName = "stringifying"
+let LoweredPlainOutputName = "plain-program"
+let LoweredRefusedOutputName = "refused-program"
+let LoweredPlainAnswer = "5 5\n"
+let LoweredFirstCacheRootDirName = "lowered-first-cache"
+let LoweredColdCacheRootDirName = "lowered-cold-cache"
+let LoweredMemberErrorCode = "E3006"
+
+test 'a program that adds clone or toString to int is refused when no library file declares it, the same cold and warm'
+	requireHeldInAnInstallOutsideCheckout(LibraryCachePrimitiveLoweredMemberCaseDirName, check: AuthorIntLoweredMemberIsRefused.create())
+end 'a program that adds clone or toString to int is refused when no library file declares it, the same cold and warm'
+
+type AuthorIntLoweredMemberIsRefused implements OutsideCheckoutCase
+	static function create() returns AuthorIntLoweredMemberIsRefused
+		return Self{}
+	end 'create'
+
+	function refused(dir FilePath, cacheRootDirName String, program String, member String, which String) returns String throws TestFailure
+		let cacheRoot = stagingDir(dir.join(cacheRootDirName).toString())
+		let build = runBuildUnder(cacheRoot, dir: dir, program: program, output: LoweredRefusedOutputName, options: StringArray.create(0), binary: installedCompilerIn(dir))
+		let diagnostic = withoutCarriageReturns(build.stderr)
+		let refusal = "Duplicate method '{member}' in type 'int': the compiler supplies it to 'int'"
+
+		try Expect.isTrue(build.exitCode() != 0, message: "{which} was built, and a layer above `int` may not declare a member the compiler lowers for it. It wrote to stdout: {build.stdout}")
+		try Expect.isTrue(diagnostic.contains(LoweredMemberErrorCode), message: "{which} was refused without {LoweredMemberErrorCode}. It wrote to stderr: {diagnostic}")
+		try Expect.isTrue(diagnostic.contains(refusal), message: "{which} was refused without naming the member the compiler supplies. It wrote to stderr: {diagnostic}")
+
+		return diagnostic
+	end 'refused'
+
+	function requireRefusedTheSameColdAndWarm(dir FilePath, program String, member String) throws TestFailure
+		let warm = try refused(dir, cacheRootDirName: LoweredFirstCacheRootDirName, program: program, member: member, which: "the warm build of the program declaring `int.{member}`")
+		let cold = try refused(dir, cacheRootDirName: LoweredColdCacheRootDirName, program: program, member: member, which: "the cold build of the program declaring `int.{member}`")
+		try Expect.equal(warm, expected: cold, message: "the warm and the cold build of the program declaring `int.{member}` must report the same diagnostic.")
+	end 'requireRefusedTheSameColdAndWarm'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		try File.delete(dir.join(StdlibDirName).join(UndeclaredPrimitiveExtensionsFileName)) otherwise panic("the gate could not run — could not remove {UndeclaredPrimitiveExtensionsFileName} from the staged library")
+		stageProgram(dir, name: LoweredPlainProgramDirName, source: LoweredPlainProgramSource)
+		stageProgram(dir, name: LoweredCloneProgramDirName, source: LoweredCloneProgramSource)
+		stageProgram(dir, name: LoweredToStringProgramDirName, source: LoweredToStringProgramSource)
+
+		let cacheRoot = stagingDir(dir.join(LoweredFirstCacheRootDirName).toString())
+		try requireBuilt(runBuildUnder(cacheRoot, dir: dir, program: LoweredPlainProgramDirName, output: LoweredPlainOutputName, options: StringArray.create(0), binary: installedCompilerIn(dir)), which: "the build of a program calling `clone`, `toString` and `hash` on an `int` with no library file declaring them")
+
+		let ran = spawnCompiler(StringArray.create(0), binary: dir.join("{LoweredPlainOutputName}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: 0, message: "the program calling the lowered members did not exit 0. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+		try Expect.equal(withoutCarriageReturns(ran.stdout), expected: LoweredPlainAnswer, message: "the program calling the lowered members did not print what the compiler supplies. It wrote to stderr: {ran.stderr}")
+
+		try requireRefusedTheSameColdAndWarm(dir, program: LoweredCloneProgramDirName, member: "clone")
+		try requireRefusedTheSameColdAndWarm(dir, program: LoweredToStringProgramDirName, member: "toString")
+	end 'requireHeldIn'
+end 'AuthorIntLoweredMemberIsRefused'

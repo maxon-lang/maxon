@@ -3009,7 +3009,7 @@ extension Parser
 		end 'receiverIsNeitherArrayDeclaration'
 
 		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
-			if not declaration.equals(receiversOwn) and self.signatures.declaresCallee(qualifiedMethodName(declaration, methodName: methodTok.value)) 'theOtherDeclarationCarriesIt'
+			if not declaration.equals(receiversOwn) and self.signatures.declaresCalleeInAnyFile(qualifiedMethodName(declaration, methodName: methodTok.value)) 'theOtherDeclarationCarriesIt'
 				throw SourceParseError.unsupported(twoArrayDeclarationsRefusal(self.signatures.arrayRecordDeclaredName(), member: methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(self.signatures.arrayRecordDeclaredName())), line: methodTok.line, column: methodTok.column)
 			end 'theOtherDeclarationCarriesIt'
 		end 'eachArrayDeclaration'
@@ -3126,7 +3126,7 @@ extension Parser
 	// BUFFER, a door keyed on it would ask the **`Array`** roster about `__ManagedMemory`'s members — and the two
 	// rosters are DELIBERATELY different lists. Every buffer member off the `Array` roster
 	// (`swap`, `elementSize`, `grow`, `setLength`, `shiftLeft`, …) therefore falls through to
-	// `declaresCallee("Array.<m>")` and is handed to the ENCLOSING RECORD's same-named method:
+	// `declaresCalleeFor("Array.<m>")` and is handed to the ENCLOSING RECORD's same-named method:
 	//   • **MEASURED as a SILENT WRONG ANSWER** — a `type Array` declaring an `elementSize()` of its own got
 	//     that method's value back from `managed.elementSize()`, compiled, linked and RAN, returning 99 where
 	//     the buffer's answer is 8. No diagnostic anywhere.
@@ -3260,7 +3260,7 @@ extension Parser
 			return false
 		end 'notAMemberName'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))
+		return self.signatures.declaresCalleeFor(qualifiedMethodName(typeName, methodName: memberTok.value), readerLayer: self.job.declarationLayer)
 	end 'corpusDeclaresMemberAtCursor'
 
 	function corpusServesNamedMemberOffRoster(member ByteArray, surface MemberSurface, typeName ByteArray) returns bool
@@ -3268,7 +3268,7 @@ extension Parser
 			return surface == MemberSurface.array and self.declaredIndexIsNotAnIntegerAlias(member, typeName: typeName)
 		end 'theSynthesizedSurfaceServesIt'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: member))
+		return self.signatures.declaresCalleeFor(qualifiedMethodName(typeName, methodName: member), readerLayer: self.job.declarationLayer)
 	end 'corpusServesNamedMemberOffRoster'
 
 	function declaredIndexIsNotAnIntegerAlias(member ByteArray, typeName ByteArray) returns bool
@@ -6275,7 +6275,7 @@ extension Parser
 			return false
 		end 'namesAValue'
 
-		return not (self.signatures.nameIsDeclared(tok.value) or self.signatures.declaresCallee(tok.value) or isSizedTypeName(tok.value))
+		return not (self.signatures.nameIsDeclared(tok.value) or self.signatures.declaresCalleeInAnyFile(tok.value) or isSizedTypeName(tok.value))
 	end 'baseNamesNothingAt'
 
 	// `p.x` — read field `x` out of the box `p` points at.

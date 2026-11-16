@@ -6011,7 +6011,7 @@ extension Parser
 	//   • BOTH operands of the SAME type — spelled as one property, exactly as the byte-record and
 	//     `StringIndex` arms above spell theirs, so a later edit cannot widen one side alone into a
 	//     compare of one type's box against another's. An `Array` is `arrayEqualityOperands`'.
-	//   • the type DECLARES the method, asked of the WHOLE-PROGRAM index (`declaresCallee`) rather
+	//   • the type DECLARES the method, asked of the WHOLE-PROGRAM index (`declaresCalleeFor`) rather
 	//     than of this file — the method may be declared in any file, including the one using it,
 	//     which is `materializeStructToStringPart`'s reason for asking the same question the same way.
 	//     A struct without it falls through to E3005, and so does a generic instance without it
@@ -6026,7 +6026,7 @@ extension Parser
 		let tag = self.tagOf(lhs)
 
 		if tag == ValueTypeTag.structRef or (tag == ValueTypeTag.genericInstance and not self.signatures.isArrayInstance(self.valueInstanceId(lhs))) 'aStructOrAUserGenericInstance'
-			return self.signatures.declaresCallee(qualifiedMethodName(self.comparedTypeName(lhs), methodName: structComparisonMethodName(op)))
+			return self.signatures.declaresCalleeFor(qualifiedMethodName(self.comparedTypeName(lhs), methodName: structComparisonMethodName(op)), readerLayer: self.job.declarationLayer)
 		end 'aStructOrAUserGenericInstance'
 
 		return false
@@ -8529,10 +8529,10 @@ extension Parser
 		let callee = qualifiedMethodName(structName, methodName: ToStringMethodName)
 
 		// Asked of the WHOLE-PROGRAM index, not of this file: a struct's `toString` may be declared anywhere,
-		// including in the file that uses it in an interpolation. `declaresCallee` answers exactly that with a
+		// including in the file that uses it in an interpolation. `declaresCalleeFor` answers exactly that with a
 		// `Map.contains`; the return type it does not fetch is fetched a few lines down by `emitCall`'s
 		// `mintCallResult`, which is where it is actually needed.
-		if not self.signatures.declaresCallee(callee) 'noToString'
+		if not self.signatures.declaresCalleeFor(callee, readerLayer: self.job.declarationLayer) 'noToString'
 			self.recordArtifactDiagnostic(ErrorCode.semanticPartialInterfaceImpl, message: "Type '{self.valueDisplayTypeName(exprVal) if self.valueTypeNameIsATuple(exprVal) else String.from(structName)}' used in string interpolation must have a toString method", range: SourceRange.ofToken(exprTok))
 
 			// The recorded diagnostic fails the build; materialize an EMPTY placeholder part so the interp

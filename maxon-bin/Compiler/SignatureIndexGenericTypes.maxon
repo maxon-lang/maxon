@@ -636,7 +636,7 @@ extension ProgramSignatures
 
 	function existentialSitesSpelled(spelled immutable ByteArray, layout StructLayout) returns GenericInstanceIdArray
 		let inner = joinQualifiedName(layout.name, member: spelled)
-		let key = inner if self.declaresInnerAlias(inner) else spelled
+		let key = inner if self.declaresInnerAliasFor(inner, readerLayer: self.declarationLayerOf(layout.declFilePath)) else spelled
 
 		if not self.isAliasOfFormFor(key, readerFilePath: layout.declFilePath, wanted: FormAliasKind.generic) 'namesNoInstance'
 			return GenericInstanceIdArray.create(0)
@@ -5327,15 +5327,25 @@ extension ProgramSignatures
 		end 'form'
 	end 'declaredTypeNamed'
 
-	// `declFilePath` is the file declaring `callee`: it decides whether the member is the program's or the
-	// library's when both declare the name.
+	// `declFilePath` is the file declaring `callee`: its layer decides which layer's member the name is when
+	// several layers declare it.
 	export function aliasNestedInDeclaringTypeOf(callee ByteArray, aliasName ByteArray, declFilePath FilePath) returns immutable ByteArray throws AbsentError
 		match self.functionDeclaringType(callee) 'declaring'
-			method(typeName) then return joinQualifiedName(typeName, member: self.innerAliasMemberFor(typeName, member: aliasName, inExtensionBody: true, readerPath: declFilePath))
+			method(typeName) then return self.aliasNestedUnder(typeName, aliasName: aliasName, declFilePath: declFilePath)
 			freeFunction or
 			undeclared then throw AbsentError.absent
 		end 'declaring'
 	end 'aliasNestedInDeclaringTypeOf'
+
+	function aliasNestedUnder(typeName ByteArray, aliasName ByteArray, declFilePath FilePath) returns immutable ByteArray
+		let plain = joinQualifiedName(typeName, member: aliasName)
+
+		if not self.settledDeclarations().multiLayerInnerAliases.contains(plain) 'oneLayerDeclaresIt'
+			return plain
+		end 'oneLayerDeclaresIt'
+
+		return joinQualifiedName(typeName, member: self.innerAliasMemberFor(typeName, member: aliasName, inExtensionBody: true, readerLayer: self.declarationLayerOf(declFilePath)))
+	end 'aliasNestedUnder'
 
 	export function declaredCalleeTakesReceiver(callee ByteArray) returns bool
 		match self.calleeReceiverOf(callee) 'receiver'
@@ -5397,9 +5407,9 @@ extension ProgramSignatures
 	// The `bool` half of `returnTypeOf`, which adopts the return type into the asker's interner: that
 	// allocates and needs an interner the asker may not hold, and a `Map.contains` needs neither. A
 	// method is asked by its mangled key (`Widget.byteLength`), the key the index files it under.
-	export function declaresCallee(callee ByteArray) returns bool
+	export function declaresCalleeInAnyFile(callee ByteArray) returns bool
 		return self.settledDeclarations().returnTypes.contains(callee)
-	end 'declaresCallee'
+	end 'declaresCalleeInAnyFile'
 
 	export function functionTypedBindingVisibleFrom(name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns bool
 		if not self.topLevelBindingVisibleFrom(name, readerFilePath: readerFilePath) 'noBindingOfThisName'
@@ -5413,7 +5423,7 @@ extension ProgramSignatures
 		end 'binding'
 	end 'functionTypedBindingVisibleFrom'
 
-	export function siblingKindFrom(written ByteArray, enclosingTypeName ByteArray, walked WalkedSibling) returns SiblingKind
+	export function siblingKindFrom(written ByteArray, enclosingTypeName ByteArray, walked WalkedSibling, readerLayer DeclarationLayer) returns SiblingKind
 		if enclosingTypeName.isEmpty() 'notInATypeBody'
 			return SiblingKind.notASibling
 		end 'notInATypeBody'
@@ -5426,11 +5436,12 @@ extension ProgramSignatures
 
 		let sibling = qualifiedMethodName(enclosingTypeName, methodName: written)
 
-		if self.declaresCallee(sibling) 'indexedSibling'
+		if self.declaresCalleeFor(sibling, readerLayer: readerLayer) 'indexedSibling'
 			return SiblingKind.instanceSibling if self.declaredMethodTakesReceiver(sibling) else SiblingKind.staticSibling
 		end 'indexedSibling'
 
-		let template = try self.genericTemplatesOf(sibling).get(0) otherwise return SiblingKind.notASibling
+		let template = try self.genericTemplatesFor(sibling, readerLayer: readerLayer).get(0) otherwise return SiblingKind.notASibling
+
 		return SiblingKind.instanceSibling if template.takesReceiver else SiblingKind.staticSibling
 	end 'siblingKindFrom'
 
@@ -5443,7 +5454,7 @@ extension ProgramSignatures
 			end 'resolution'
 		end 'severalDirectoriesDeclareIt'
 
-		if self.declaresCallee(written) and self.declaresAFunctionVisibleFrom(written, readerFilePath: readerFilePath) 'aVisibleDeclaration'
+		if self.declaresCalleeInAnyFile(written) and self.declaresAFunctionVisibleFrom(written, readerFilePath: readerFilePath) 'aVisibleDeclaration'
 			return BareCallKind.declaredVisible
 		end 'aVisibleDeclaration'
 
@@ -5459,14 +5470,14 @@ extension ProgramSignatures
 			return BareCallKind.builtin
 		end 'aBuiltin'
 
-		return BareCallKind.declaredHidden if self.declaresCallee(written) or self.isGenericFunctionKey(written) else BareCallKind.undeclared
+		return BareCallKind.declaredHidden if self.declaresCalleeInAnyFile(written) or self.isGenericFunctionKey(written) else BareCallKind.undeclared
 	end 'invisibleBareNameKind'
 
 	// The one answer to "does a call to this name have a definition", for the parser's deferral doors.
-	// `declaresCallee` goes first: it is one map lookup, and
+	// `declaresCalleeInAnyFile` goes first: it is one map lookup, and
 	// `isCompilerInternalCallee` can allocate.
 	export function definesCallee(callee ByteArray) returns bool
-		return self.declaresCallee(callee) or isCompilerInternalCallee(callee)
+		return self.declaresCalleeInAnyFile(callee) or isCompilerInternalCallee(callee)
 	end 'definesCallee'
 
 	// ⭐⭐ **DOES `typeName` SUPPLY THE CURSOR PROTOCOL A `for … in` OVER A USER TYPE LOWERS TO?**
@@ -5482,7 +5493,7 @@ extension ProgramSignatures
 	//
 	// ⛔ **AND THE REST OF THE RULE IS NOT SHARED — THIS SIDE TESTS EXISTENCE AND THE CLAUSE, AND NOTHING
 	// ELSE.** The dispatched arm additionally requires the requirement to take a receiver and to declare no
-	// parameters (`witnessProtocolTarget`); this one cannot, because `declaresCallee` is a NAME lookup and no
+	// parameters (`witnessProtocolTarget`); this one cannot, because `declaresCalleeInAnyFile` is a NAME lookup and no
 	// per-callee arity is stored to ask. So a `current(at Index)` beside a throwing `advance()` is admitted
 	// here and then reported downstream by `emitCall` as **`E3036: 'Weird.current' expects 2 argument(s) but 1
 	// were provided`** (MEASURED) — an argument count against a call the author never wrote, where this door
@@ -5504,13 +5515,13 @@ extension ProgramSignatures
 	// construction rather than by a rule somewhere else remembering to check the payload — and it is
 	// verbatim what `stdlib/Interfaces.maxon:145` declares, so it narrows nothing a conforming type writes.
 	export function declaresCursorProtocol(typeName ByteArray) returns bool
-		if not self.declaresCallee(qualifiedMethodName(typeName, methodName: CurrentMethodName)) 'noCurrent'
+		if not self.declaresCalleeInAnyFile(qualifiedMethodName(typeName, methodName: CurrentMethodName)) 'noCurrent'
 			return false
 		end 'noCurrent'
 
 		let advance = qualifiedMethodName(typeName, methodName: AdvanceMethodName)
 
-		if not self.declaresCallee(advance) 'noAdvance'
+		if not self.declaresCalleeInAnyFile(advance) 'noAdvance'
 			return false
 		end 'noAdvance'
 
@@ -5531,7 +5542,7 @@ extension ProgramSignatures
 	export function iterableFactory(typeName ByteArray) returns IterableFactory
 		let create = qualifiedMethodName(typeName, methodName: CreateIteratorMethodName)
 
-		if not self.declaresCallee(create) 'noFactory'
+		if not self.declaresCalleeInAnyFile(create) 'noFactory'
 			return IterableFactory.notDeclared
 		end 'noFactory'
 
@@ -5543,7 +5554,7 @@ extension ProgramSignatures
 	// head alone. It is reached only through `resolveQualifiedFunctionName`, so every position a chain is
 	// written in reads one answer.
 	//
-	// **THE TYPE READING WINS WHEREVER THERE IS ONE**, which is the `declaresCallee` half: a `type utils` with
+	// **THE TYPE READING WINS WHEREVER THERE IS ONE**, which is the `declaresCalleeInAnyFile` half: a `type utils` with
 	// a `static helper` keeps `utils.helper()`, so a directory may be named after a type and no existing call
 	// moves.
 	//
@@ -5554,13 +5565,13 @@ extension ProgramSignatures
 	// it is not, exactly as `Wrapper.Idx` and `api.Score` are keys in one map and never compete.
 	//
 	// A contested free function is registered under its `<directory>~name` mint, so the written
-	// `lib.inner.pick` is never a registered key and `declaresCallee` does not veto it.
+	// `lib.inner.pick` is never a registered key and `declaresCalleeInAnyFile` does not veto it.
 	function resolvesAsNamespaceQualifiedFunction(written ByteArray) returns bool
 		if not self.settledDeclarations().namespaceQualifiedFunctions.contains(written) 'noDirectoryDeclaresIt'
 			return false
 		end 'noDirectoryDeclaresIt'
 
-		return not (self.declaresCallee(written) or self.isGenericFunctionKey(written))
+		return not (self.declaresCalleeInAnyFile(written) or self.isGenericFunctionKey(written))
 	end 'resolvesAsNamespaceQualifiedFunction'
 
 	export function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
@@ -6426,15 +6437,15 @@ extension ProgramSignatures
 		return self.settledDeclarations().genericTemplates.contains(key)
 	end 'isGenericFunctionKey'
 
-	export function genericTemplatesOf(key ByteArray) returns GenericFunctionTemplateArray
+	export function genericTemplatesInAnyFile(key ByteArray) returns GenericFunctionTemplateArray
 		return try self.settledDeclarations().genericTemplates.get(key) otherwise GenericFunctionTemplateArray.create(0)
-	end 'genericTemplatesOf'
+	end 'genericTemplatesInAnyFile'
 
 	export function genericNameIsDeclaredTwiceInOneDirectory(key ByteArray) returns bool
 		let seenSites = DeclaringSiteSet.create()
 		let directories = DeclaringDirectorySet.create()
 
-		for template in self.genericTemplatesOf(key) 'eachTemplate'
+		for template in self.genericTemplatesInAnyFile(key) 'eachTemplate'
 			if sharesADirectoryWithAnEarlierDeclaration(seenSites, directories: directories, siteKey: template.siteKey(), directory: self.moduleDirectoryOf(template.declFilePath)) 'aSecondDeclaration'
 				return true
 			end 'aSecondDeclaration'
@@ -6473,7 +6484,7 @@ extension ProgramSignatures
 	end 'settleContestedGenericTemplates'
 
 	function declaresAGenericTemplateVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
-		for template in self.genericTemplatesOf(key) 'eachTemplate'
+		for template in self.genericTemplatesInAnyFile(key) 'eachTemplate'
 			if self.templateIsVisibleFrom(key, template: template, readerFilePath: readerFilePath) 'visible'
 				return true
 			end 'visible'
@@ -7174,7 +7185,7 @@ extension ProgramSignatures
 		fingerprint.note("extensionInnerAliasMembers", value: declarations.extensionInnerAliasMembers.count())
 		fingerprint.note("extensionInnerAliasKeepers", value: declarations.extensionInnerAliasKeepers.count())
 		fingerprint.note("typeBodyInnerAliasMembers", value: declarations.typeBodyInnerAliasMembers.count())
-		fingerprint.note("authorShadowedInnerAliases", value: declarations.authorShadowedInnerAliases.count())
+		fingerprint.note("multiLayerInnerAliases", value: declarations.multiLayerInnerAliases.count())
 		fingerprint.note("nestedFunctionAliasMembers", value: declarations.nestedFunctionAliasMembers.count())
 		fingerprint.note("pendingImplementsClauses", value: declarations.pendingImplementsClauses.count() as EntryCount)
 		fingerprint.note("implementsParents", value: declarations.implementsParents.count())
@@ -7230,6 +7241,7 @@ extension ProgramSignatures
 		fingerprint.note("funcReturnsFreshRecord", value: declarations.funcReturnsFreshRecord.count())
 		fingerprint.note("funcFreshReturnForwards", value: declarations.funcFreshReturnForwards.count())
 		fingerprint.noteFlag("freshReturnForwardsClosed", flag: self.freshReturnForwardsClosed)
+		fingerprint.noteFlag("nameEventsFolded", flag: self.nameEventsFolded)
 		fingerprint.noteFlag("forwardedStoresClosed", flag: self.forwardedStoresClosed)
 		fingerprint.note("funcConstructsFromParams", value: declarations.funcConstructsFromParams.count())
 		fingerprint.note("funcReturnsReceiverField", value: declarations.funcReturnsReceiverField.count())

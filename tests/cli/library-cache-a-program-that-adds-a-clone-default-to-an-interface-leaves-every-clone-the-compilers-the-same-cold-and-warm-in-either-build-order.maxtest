@@ -1,0 +1,47 @@
+let LibraryCacheCloneDefaultCaseDirName = "library-cache-clone-default"
+let StagedLibraryCloneFileName = "LibraryClone.maxon"
+let StagedLibraryCloneSource = "public typealias CopiedLength = int(0 to 1000)\n\npublic function libraryCopyLength(view ByteView) returns CopiedLength\n\tlet copy = view.clone()\n\tvar length = 0 as CopiedLength\n\n\tfor _ in copy 'bytes'\n\t\tlength = length + 1\n\tend 'bytes'\n\n\treturn length\nend 'libraryCopyLength'\n"
+let CloneDefaultPlainProgramSource = "function main() returns ExitCode\n\tprint(\"\{libraryCopyLength(\"abc\".bytes())\}\\n\")\n\treturn 0\nend 'main'\n"
+let CloneDefaultExtendingProgramSource = "type Bag implements Iterable with (RangeBound, RangeIterator)\n\tlet finish as RangeBound\n\n\tstatic function create(finish RangeBound) returns Self\n\t\treturn Self\{finish: finish\}\n\tend 'create'\n\n\tfunction createIterator() returns RangeIterator throws IterationError\n\t\treturn try RangeIterator.create(1, last: self.finish)\n\tend 'createIterator'\nend 'Bag'\n\nextension Iterable\n\tfunction clone() returns Self\n\t\tprint(\"extension clone\\n\")\n\t\treturn self\n\tend 'clone'\nend 'Iterable'\n\nfunction copyThroughIterable(value T) uses T returns T where T is Iterable\n\treturn value.clone()\nend 'copyThroughIterable'\n\nfunction main() returns ExitCode\n\tlet bag = Bag.create(3)\n\tlet direct = bag.clone()\n\tlet generic = copyThroughIterable(bag)\n\n\tprint(\"\{libraryCopyLength(\"abc\".bytes())\} \{direct.finish\} \{generic.finish\}\\n\")\n\treturn 0\nend 'main'\n"
+let CloneDefaultPlainDirName = "plain"
+let CloneDefaultExtendingDirName = "extending"
+let CloneDefaultPlainOutputName = "plain-program"
+let CloneDefaultExtendingOutputName = "extending-program"
+let CloneDefaultPlainAnswer = "3\n"
+let CloneDefaultExtendingAnswer = "3 3 3\n"
+let CloneDefaultPlainFirstCacheRootDirName = "plain-first-cache"
+let CloneDefaultExtendingFirstCacheRootDirName = "extending-first-cache"
+let CloneDefaultColdCacheRootDirName = "cold-cache"
+let CloneDefaultSubject = "a program that adds a `clone` default to `Iterable`"
+
+test 'a program that adds a clone default to an interface leaves every clone the compilers, the same cold and warm in either build order'
+	requireHeldInAnInstallOutsideCheckout(LibraryCacheCloneDefaultCaseDirName, check: CloneDefaultLeavesTheCompilersClone.create())
+end 'a program that adds a clone default to an interface leaves every clone the compilers, the same cold and warm in either build order'
+
+type CloneDefaultLeavesTheCompilersClone implements OutsideCheckoutCase
+	static function create() returns CloneDefaultLeavesTheCompilersClone
+		return Self{}
+	end 'create'
+
+	function builtAndRan(dir FilePath, cacheRootDirName String, program String, output String, answer String, which String) throws TestFailure
+		let cacheRoot = stagingDir(dir.join(cacheRootDirName).toString())
+
+		try requireBuilt(runBuildUnder(cacheRoot, dir: dir, program: program, output: output, options: StringArray.create(0), binary: installedCompilerIn(dir)), which: which)
+
+		let ran = spawnCompiler(StringArray.create(0), binary: dir.join("{output}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: 0, message: "{which} did not exit 0. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+		try Expect.equal(withoutCarriageReturns(ran.stdout), expected: answer, message: "{which} did not print what the compiler's `clone` gives, and an `extension clone` line means the interface default ran. It wrote to stderr: {ran.stderr}")
+	end 'builtAndRan'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeStagedFile(dir.join(StdlibDirName).join(StagedLibraryCloneFileName), content: StagedLibraryCloneSource)
+		stageProgram(dir, name: CloneDefaultPlainDirName, source: CloneDefaultPlainProgramSource)
+		stageProgram(dir, name: CloneDefaultExtendingDirName, source: CloneDefaultExtendingProgramSource)
+
+		try builtAndRan(dir, cacheRootDirName: CloneDefaultPlainFirstCacheRootDirName, program: CloneDefaultPlainDirName, output: CloneDefaultPlainOutputName, answer: CloneDefaultPlainAnswer, which: "the plain program, built first")
+		try builtAndRan(dir, cacheRootDirName: CloneDefaultPlainFirstCacheRootDirName, program: CloneDefaultExtendingDirName, output: CloneDefaultExtendingOutputName, answer: CloneDefaultExtendingAnswer, which: "{CloneDefaultSubject}, built warm after the plain program")
+		try builtAndRan(dir, cacheRootDirName: CloneDefaultExtendingFirstCacheRootDirName, program: CloneDefaultExtendingDirName, output: CloneDefaultExtendingOutputName, answer: CloneDefaultExtendingAnswer, which: "{CloneDefaultSubject}, built first")
+		try builtAndRan(dir, cacheRootDirName: CloneDefaultExtendingFirstCacheRootDirName, program: CloneDefaultPlainDirName, output: CloneDefaultPlainOutputName, answer: CloneDefaultPlainAnswer, which: "the plain program, built warm after {CloneDefaultSubject}")
+		try builtAndRan(dir, cacheRootDirName: CloneDefaultColdCacheRootDirName, program: CloneDefaultExtendingDirName, output: CloneDefaultExtendingOutputName, answer: CloneDefaultExtendingAnswer, which: "{CloneDefaultSubject}, built cold")
+	end 'requireHeldIn'
+end 'CloneDefaultLeavesTheCompilersClone'

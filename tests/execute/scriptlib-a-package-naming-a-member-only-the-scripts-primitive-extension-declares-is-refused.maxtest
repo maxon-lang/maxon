@@ -1,0 +1,22 @@
+let PrimitiveMemberCaseLabel = "scriptlib-a-package-names-a-script-primitive-member"
+let PrimitiveMemberPackageSource = "public function twice(n FullRangeInt) returns FullRangeInt\n\treturn n.doubled()\nend 'twice'\n"
+let PrimitiveMemberScriptSource = "extension int\n\tfunction doubled() returns FullRangeInt\n\t\treturn self * 2\n\tend 'doubled'\nend 'int'\n\nfunction main() returns ExitCode\n\tprint(\"\{twice(21)\}\\n\")\n\treturn 0\nend 'main'\n"
+let PrimitiveMemberCode = "E2015"
+
+test 'a scriptlib package naming a member only the script primitive extension declares is refused'
+	let staged = stageScriptlibCase(PrimitiveMemberCaseLabel)
+	writeScriptlibPackageFile(stagedTier(PrimitiveMemberCaseLabel), package: MintProbePackageName, fileName: MintProbePackageFileName, content: PrimitiveMemberPackageSource)
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: PrimitiveMemberScriptSource)
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.notEqual(observedExit, expected: 0, message: "a package calling `n.doubled()` ran. `doubled` is declared by the script's `extension int`, a layer above the package, and a layer never sees a member only a layer above it declares. It said: {run.stdout}{run.stderr}")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.contains(observedStderr, needle: PrimitiveMemberCode, message: "the package's `n.doubled()` was refused, but not as a method `int` has no declaration of ({PrimitiveMemberCode})")
+	Expect.contains(observedStderr, needle: MintProbePackageFileName, message: "the refusal does not name `{MintProbePackageFileName}`, the package file holding the call")
+
+	discardStagedDir(caseRootOf(staged.sources))
+end 'a scriptlib package naming a member only the script primitive extension declares is refused'

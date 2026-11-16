@@ -5240,7 +5240,7 @@ extension Parser
 		let header = try self.readExtensionHeader() otherwise return
 
 		self.scanBodyNestedAliases()
-		let siteIsTheLibrarys = index.declaredByTheCorpus(self.job.path)
+		let siteLayer = self.job.declarationLayer
 
 		let members = self.scannedPerInstanceAliases.declared()
 		let functionMembers = self.scannedFunctionAliases.declared()
@@ -5255,17 +5255,17 @@ extension Parser
 		// withheld rule: the verdict is what decides whether these declarations are that conformer's, and it is
 		// taken per (extension, conformer) by the fold — which is the pass that then declines to publish them.
 		// A set that had already applied the verdict would be answering a question this pass cannot yet ask,
-		// and the cost of not applying it is bounded: `declaresInnerAlias` reports a name whose declaration the
+		// and the cost of not applying it is bounded: `declaresInnerAliasInAnyFile` reports a name whose declaration the
 		// fold withheld, in a body that receives no methods and emits nothing.
 		for conformer in extensionTargetConformers(header.target) 'eachConformer'
 			for member in members 'eachMember'
 				let qualified = joinQualifiedName(conformer, member: member)
 				index.recordExtensionInnerAliasMember(qualified)
-				index.noteExtensionInnerAliasTier(qualified, library: siteIsTheLibrarys)
+				index.noteExtensionInnerAliasTier(qualified, layer: siteLayer)
 			end 'eachMember'
 
 			for member in functionMembers 'eachFunctionMember'
-				index.noteExtensionInnerAliasTier(joinQualifiedName(conformer, member: member), library: siteIsTheLibrarys)
+				index.noteExtensionInnerAliasTier(joinQualifiedName(conformer, member: member), layer: siteLayer)
 			end 'eachFunctionMember'
 		end 'eachConformer'
 	end 'publishExtensionInnerAliases'
@@ -5518,15 +5518,21 @@ extension Parser
 				// hides the interface extension's of that name on that type. A TYPE extension's shadowed member is
 				// recorded the same way and refused by the real parse as a duplicate (`parseExtensionDeclaration`).
 				let qualifiedMethodName = qualifiedMethodName(conformer, methodName: methodName)
-				let shadowed = index.conformerDeclaresOwnMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver)
+				let shadowed = index.conformerDeclaresOwnMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver) or (not extensionTargetIsAnInterface(header.target) and index.compilerSuppliedMemberAboveItsTypesLayer(conformer, memberName: methodName, takesReceiver: memberTakesReceiver, siteLayer: self.job.declarationLayer))
+				let yields = extensionTargetIsAnInterface(header.target) and index.compilerSuppliesMember(conformer, memberName: methodName, takesReceiver: memberTakesReceiver)
+				let withheld = shadowed or yields
 
 				if shadowed 'theConformerDeclaresItsOwn'
-					index.noteExtensionShadowedMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver)
+					index.noteExtensionShadowedMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver, reason: ExtensionShadowReason.conformerDeclaresIt)
 				end 'theConformerDeclaresItsOwn'
 
+				if yields 'theCompilerSuppliesIt'
+					index.noteExtensionShadowedMethod(qualifiedMethodName, takesReceiver: memberTakesReceiver, reason: ExtensionShadowReason.compilerSuppliesIt)
+				end 'theCompilerSuppliesIt'
+
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, header: header, conformer: conformer, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, takesReceiver: memberTakesReceiver, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
-					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName, shadowed: shadowed)
+					satisfied then self.publishOrShadowExtensionMethod(index, header: header, conformer: conformer, shadowed: withheld, qualifiedMethodName: qualifiedMethodName, takesReceiver: memberTakesReceiver, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName, shadowed: withheld)
 				end 'verdict'
 
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -10220,7 +10226,7 @@ extension Parser
 	// function — because the registries are keyed by name and hold one entry per key, so the second has no
 	// entry to live in. `TopLevelNameScope.maxon`'s ledger judges the cross-family pairs this cannot see.
 	function requireGenericNameDeclaredOnce(template GenericFunctionTemplate, nameTok Token) throws SourceParseError
-		for other in self.signatures.genericTemplatesOf(template.key) 'eachTemplate'
+		for other in self.signatures.genericTemplatesInAnyFile(template.key) 'eachTemplate'
 			if self.declaredBefore(other.declFilePath, line: other.line, column: other.column, nameTok: nameTok) 'anEarlierTemplate'
 				throw self.duplicateGenericDeclaration(template.key, nameTok: nameTok)
 			end 'anEarlierTemplate'
@@ -10238,7 +10244,7 @@ extension Parser
 			return
 		end 'anInstanceOfATemplate'
 
-		for template in self.signatures.genericTemplatesOf(key) 'eachTemplate'
+		for template in self.signatures.genericTemplatesInAnyFile(key) 'eachTemplate'
 			if self.declaredBefore(template.declFilePath, line: template.line, column: template.column, nameTok: nameTok) 'anEarlierTemplate'
 				throw self.duplicateGenericDeclaration(key, nameTok: nameTok)
 			end 'anEarlierTemplate'

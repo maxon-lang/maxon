@@ -1,0 +1,19 @@
+let RefusedExtensionDirName = "diagnostics-project-refused-extension"
+let RefusedExtensionDeclaringFileName = "extension.maxon"
+let RefusedExtensionBufferFileName = "main.maxon"
+let RefusedExtensionDeclaringSource = "extension ParseError\n\tfunction hash() returns HashValue\n\t\treturn 777\n\tend 'hash'\nend 'ParseError'\n"
+let RefusedExtensionBufferSource = "function main() returns ExitCode\n\tlet failure = ParseError.invalidFormat\n\tprint(\"\{failure.hash()\}\\n\")\n\treturn 0\nend 'main'\n"
+
+test 'a hash a sibling file declares on a library enum is published on that file and not at the call in this one'
+	let root = stagedProjectDiagnosticsRoot(RefusedExtensionDirName)
+	writeCorpusFile(root, fileName: RefusedExtensionDeclaringFileName, content: RefusedExtensionDeclaringSource)
+	writeCorpusFile(root, fileName: RefusedExtensionBufferFileName, content: RefusedExtensionBufferSource)
+
+	let calling = probeProjectDiagnostics(root, fileName: RefusedExtensionBufferFileName, content: RefusedExtensionBufferSource)
+	let declaring = probeProjectDiagnostics(root, fileName: RefusedExtensionDeclaringFileName, content: RefusedExtensionDeclaringSource)
+
+	discardStagedDir(root)
+
+	try expectNoProjectDiagnostics(calling, note: "`failure.hash()` reads the `hash` the compiler supplies to the library enum `ParseError`, and the sibling file's `hash` is refused on that sibling, so this file has nothing wrong with it.")
+	try expectProjectDiagnosticCodesAndLines(declaring, expected: "E3006@1", note: "the sibling's `extension ParseError` declares a `hash` the compiler already supplies to the library enum, which a `maxon build` refuses as E3006 at the member's name on line 2 (0-based line 1).")
+end 'a hash a sibling file declares on a library enum is published on that file and not at the call in this one'

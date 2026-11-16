@@ -88,7 +88,7 @@ export type ParseJob
 	//
 	// ⚠ **THE TWO DOORS READ IT AT DIFFERENT GRAIN, AND THAT IS THE WHOLE POINT.** The CALL door asks
 	// only whether the list is non-empty (`fileMayUseReservedNames`), because a generated fragment has
-	// to reach names OTHER files declare and that door already conjoins `declaresCallee`. The
+	// to reach names OTHER files declare and that door already conjoins `declaresCalleeInAnyFile`. The
 	// DECLARATION door asks whether the name being declared is IN the list (`requireUnreservedName`),
 	// because a staged `.maxtest` file is the author's own bytes with a dispatcher appended — so a
 	// per-file answer there would hand the author the reserved space.
@@ -132,9 +132,18 @@ export type ParseJob
 	export let instrumentsCoverage as bool
 	export let recordsEditorFacts as bool
 	export let initializerRole as InitializerRole
+	let declarationLayer as DeclarationLayer
+
+	static function layerOfSource(isScriptlibSource bool, isLibrarySource bool) returns DeclarationLayer
+		if isScriptlibSource 'aScriptlibPackage'
+			return DeclarationLayer.scriptlib
+		end 'aScriptlibPackage'
+
+		return DeclarationLayer.sharedCorpus if isLibrarySource else DeclarationLayer.author
+	end 'layerOfSource'
 
 	export static function create(path FilePath, authoredPath FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool, recordsEditorFacts bool) returns ParseJob
-		return Self{path: path, authoredPath: authoredPath, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, recordsEditorFacts: recordsEditorFacts, initializerRole: InitializerRole.ordinary}
+		return Self{path: path, authoredPath: authoredPath, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declarationLayer: Self.layerOfSource(isScriptlibSource, isLibrarySource: isStdlibSource or isRuntimeSource), declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, recordsEditorFacts: recordsEditorFacts, initializerRole: InitializerRole.ordinary}
 	end 'create'
 
 	// The job `ProgramSignatures` parses an initializer under, in the role it names: the declaring file's
@@ -142,7 +151,7 @@ export type ParseJob
 	// because the fold's ops reach no emitted image. Derived from the stored job rather than from the
 	// project, which would put a `Directory.currentPath()` probe on the per-declaration path.
 	export function forInitializerRole(role InitializerRole) returns ParseJob
-		return Self{path: self.path, authoredPath: self.authoredPath, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, recordsEditorFacts: false, initializerRole: role}
+		return Self{path: self.path, authoredPath: self.authoredPath, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declarationLayer: self.declarationLayer, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, recordsEditorFacts: false, initializerRole: role}
 	end 'forInitializerRole'
 
 	export function readsAuthorSource() returns bool

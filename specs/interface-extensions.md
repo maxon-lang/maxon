@@ -1058,3 +1058,239 @@ end 'main'
 ```exitcode
 43
 ```
+
+<!-- test: interface-extensions.a-member-the-compiler-supplies-to-a-conformer-is-the-compilers-at-every-door -->
+The same boundary for a member the compiler supplies. The compiler gives every `type` a `clone`, so `extension
+Iterable`'s `clone` is a default `Bag` never takes: the direct call and the call inside a generic body that
+holds `Bag` as an `Iterable` both reach the compiler's copy, and the extension's body is never run.
+```maxon
+type Bag implements Iterable with (RangeBound, RangeIterator)
+	let finish as RangeBound
+
+	static function create(finish RangeBound) returns Self
+		return Self{finish: finish}
+	end 'create'
+
+	function createIterator() returns RangeIterator throws IterationError
+		return try RangeIterator.create(1, last: self.finish)
+	end 'createIterator'
+end 'Bag'
+
+extension Iterable
+	function clone() returns Self
+		print("extension clone\n")
+		return self
+	end 'clone'
+end 'Iterable'
+
+function copyThroughIterable(value T) uses T returns T where T is Iterable
+	return value.clone()
+end 'copyThroughIterable'
+
+function sum(bag Bag) returns RangeBound
+	var total = 0 as RangeBound
+
+	for n in bag 'loop'
+		total = total + n
+	end 'loop'
+
+	return total
+end 'sum'
+
+function main() returns ExitCode
+	let bag = Bag.create(3)
+	let direct = bag.clone()
+	let generic = copyThroughIterable(bag)
+
+	print("{sum(direct)} {sum(generic)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 6
+```
+
+<!-- test: interface-extensions.a-conformer-the-compiler-supplies-no-member-to-takes-the-default-at-every-door -->
+The control: `Plain` has no `hash` of its own and the compiler supplies none, so it takes the extension's, through the
+direct call and through a generic body that holds it as the interface. Its `clone` is the compiler's, so the extension's
+`clone` is not run.
+```maxon
+typealias Score = int(i64.min to i64.max)
+
+interface Keyed
+	function key() returns Score
+end 'Keyed'
+
+extension Keyed
+	function hash() returns HashValue
+		return 99
+	end 'hash'
+
+	function clone() returns Self
+		print("extension clone\n")
+		return self
+	end 'clone'
+end 'Keyed'
+
+type Plain implements Keyed
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function key() returns Score
+		return 5
+	end 'key'
+end 'Plain'
+
+function digestKeyed(value T) uses T returns HashValue where T is Keyed
+	return value.hash()
+end 'digestKeyed'
+
+function main() returns ExitCode
+	let plain = Plain.create()
+	let copy = plain.clone()
+
+	print("{plain.hash()} {digestKeyed(plain)} {copy.key()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99 99 5
+```
+
+<!-- test: interface-extensions.a-payload-free-enum-keeps-the-hash-and-equals-the-compiler-grants -->
+An enum is never a conformer an interface extension is expanded over, and the compiler grants it `hash` and `equals`,
+so an enum used as a `Map` key hashes and compares through the granted members whatever an extension of an interface it
+implements declares under those names.
+```maxon
+typealias Score = int(i64.min to i64.max)
+
+interface Keyed
+	function key() returns Score
+end 'Keyed'
+
+extension Keyed
+	function hash() returns HashValue
+		print("extension hash\n")
+		return 99
+	end 'hash'
+
+	function equals(other Self) returns bool
+		print("extension equals\n")
+		return true
+	end 'equals'
+end 'Keyed'
+
+enum Color implements Keyed
+	red
+	green
+
+	function key() returns Score
+		return 1
+	end 'key'
+end 'Color'
+
+typealias Seen = Map with (Color, Score)
+
+function digest(value T) uses T returns HashValue where T is Hashable
+	return value.hash()
+end 'digest'
+
+function main() returns ExitCode
+	let seen = Seen.create()
+	seen.upsert(Color.red, value: 1)
+	seen.upsert(Color.green, value: 2)
+
+	let sameHash = digest(Color.red) == digest(Color.green)
+	let sameColor = Color.red.equals(Color.green)
+
+	print("{seen.count()} {sameHash} {sameColor}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 false false
+```
+
+<!-- test: interface-extensions.a-conformers-own-clone-beats-the-compilers-and-the-extensions -->
+A `clone` the type declares itself is neither the compiler's nor the extension's: it wins at every door, whether it is
+written in the type's body or in an `extension Bag implements Cloneable` of the same layer.
+```maxon
+type Bag implements Iterable with (RangeBound, RangeIterator)
+	let finish as RangeBound
+
+	static function create(finish RangeBound) returns Self
+		return Self{finish: finish}
+	end 'create'
+
+	function createIterator() returns RangeIterator throws IterationError
+		return try RangeIterator.create(1, last: self.finish)
+	end 'createIterator'
+end 'Bag'
+
+type Sack implements Iterable with (RangeBound, RangeIterator)
+	let finish as RangeBound
+
+	static function create(finish RangeBound) returns Self
+		return Self{finish: finish}
+	end 'create'
+
+	function createIterator() returns RangeIterator throws IterationError
+		return try RangeIterator.create(1, last: self.finish)
+	end 'createIterator'
+
+	function clone() returns Sack
+		print("sack clone\n")
+		return Self{finish: self.finish}
+	end 'clone'
+end 'Sack'
+
+extension Bag implements Cloneable
+	function clone() returns Bag
+		print("bag clone\n")
+		return Self{finish: self.finish}
+	end 'clone'
+end 'Bag'
+
+extension Iterable
+	function clone() returns Self
+		print("extension clone\n")
+		return self
+	end 'clone'
+end 'Iterable'
+
+function copyThroughIterable(value T) uses T returns T where T is Iterable
+	return value.clone()
+end 'copyThroughIterable'
+
+function main() returns ExitCode
+	let bag = Bag.create(3)
+	let sack = Sack.create(3)
+	let bagCopy = copyThroughIterable(bag)
+	let sackCopy = copyThroughIterable(sack)
+	let bagDirect = bag.clone()
+	let sackDirect = sack.clone()
+
+	print("{bagCopy.finish} {sackCopy.finish} {bagDirect.finish} {sackDirect.finish}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bag clone
+sack clone
+bag clone
+sack clone
+3 3 3 3
+```

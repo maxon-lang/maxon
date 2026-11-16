@@ -2012,8 +2012,13 @@ end 'foldInterfaceDeclarations'
 // `publishExtensionInnerAliases` takes the member names from the tokens alone, for every site,
 // before the first body is read.
 function foldExtensionDeclarations(project Project, signatures ProgramSignatures) throws CompileError
+	if signatures.nameEventsFolded 'aSecondFold'
+		panic("foldExtensionDeclarations: this index has folded its extension name events already — the fold runs once per index, and the shared-parse guard reads the flag it sets")
+	end 'aSecondFold'
+
 	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.innerAliasNames)
 	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.methodSignatures)
+	signatures.nameEventsFolded = true
 end 'foldExtensionDeclarations'
 
 // ⚠ Strictly before `foldExtensionDeclarations`: a conditional extension's `where` verdict reads
@@ -3907,7 +3912,11 @@ end 'isCompilerWrittenDeclaration'
 // once per file from the anchor only it holds, and a second derivation is a second chance to pick a
 // different anchor for the same file.
 function parseJobFor(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, buildsBodies bool) returns ParseJob
-	return parseJobFrom(project, path: path, namespace: signatures.namespaceOf(path), livesUnderStdlibDirectory: fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path), isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+	let job = parseJobFrom(project, path: path, namespace: signatures.namespaceOf(path), livesUnderStdlibDirectory: fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path), isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+
+	signatures.requireJobLayerMatchesIndex(job)
+
+	return job
 end 'parseJobFor'
 
 function parseJobFrom(project Project, path FilePath, namespace String, livesUnderStdlibDirectory bool, isStdlibSource bool, buildsBodies bool) returns ParseJob

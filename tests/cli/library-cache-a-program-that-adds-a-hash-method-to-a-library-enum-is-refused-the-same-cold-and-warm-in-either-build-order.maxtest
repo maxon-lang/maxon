@@ -1,0 +1,69 @@
+let LibraryCacheAuthorHashOnALibraryEnumCaseDirName = "library-cache-author-enum-hash"
+let StagedLibraryHashFileName = "LibraryHash.maxon"
+let StagedLibraryHashSource = "public function libraryHashOf(failure ParseError) returns HashValue\n\treturn failure.hash()\nend 'libraryHashOf'\n"
+let GrantedHashProgramSource = "function main() returns ExitCode\n\tprint(\"\{libraryHashOf(ParseError.invalidFormat)\}\\n\")\n\treturn 0\nend 'main'\n"
+let AuthorHashProgramSource = "extension ParseError\n\tfunction hash() returns HashValue\n\t\treturn 777\n\tend 'hash'\nend 'ParseError'\n\nfunction main() returns ExitCode\n\tlet failure = ParseError.invalidFormat\n\tprint(\"\{libraryHashOf(failure)\} \{failure.hash()\}\\n\")\n\treturn 0\nend 'main'\n"
+let GrantedHashProgramDirName = "granted"
+let AuthorHashProgramDirName = "extending"
+let GrantedHashOutputName = "granted-program"
+let AuthorHashOutputName = "extending-program"
+let GrantedHashAnswer = "0\n"
+let GrantedFirstCacheRootDirName = "granted-first-cache"
+let AuthorFirstCacheRootDirName = "extending-first-cache"
+let AuthorColdCacheRootDirName = "extending-cold-cache"
+let AuthorHashSubject = "a program that extends the library enum `ParseError` with a `hash` method of its own"
+let SuppliedMemberRefusal = "Duplicate method 'hash' in type 'ParseError': the compiler supplies it to 'ParseError'"
+let SuppliedMemberErrorCode = "E3006"
+
+test 'a program that adds a hash method to a library enum is refused the same cold and warm in either build order'
+	requireHeldInAnInstallOutsideCheckout(LibraryCacheAuthorHashOnALibraryEnumCaseDirName, check: AuthorHashIsRefused.create())
+end 'a program that adds a hash method to a library enum is refused the same cold and warm in either build order'
+
+type AuthorHashIsRefused implements OutsideCheckoutCase
+	static function create() returns AuthorHashIsRefused
+		return Self{}
+	end 'create'
+
+	function built(dir FilePath, cacheRootDirName String, program String, output String, which String) throws TestFailure
+		let cacheRoot = stagingDir(dir.join(cacheRootDirName).toString())
+
+		try requireBuilt(runBuildUnder(cacheRoot, dir: dir, program: program, output: output, options: StringArray.create(0), binary: installedCompilerIn(dir)), which: which)
+	end 'built'
+
+	function refused(dir FilePath, cacheRootDirName String, which String) returns String throws TestFailure
+		let cacheRoot = stagingDir(dir.join(cacheRootDirName).toString())
+		let build = runBuildUnder(cacheRoot, dir: dir, program: AuthorHashProgramDirName, output: AuthorHashOutputName, options: StringArray.create(0), binary: installedCompilerIn(dir))
+		let diagnostic = withoutCarriageReturns(build.stderr)
+
+		try Expect.isTrue(build.exitCode() != 0, message: "{which} was built, and a layer above the library enum may not declare a member the compiler supplies to it. It wrote to stdout: {build.stdout}")
+		try Expect.isTrue(diagnostic.contains(SuppliedMemberErrorCode), message: "{which} was refused without {SuppliedMemberErrorCode}. It wrote to stderr: {diagnostic}")
+		try Expect.isTrue(diagnostic.contains(SuppliedMemberRefusal), message: "{which} was refused without naming the member the compiler supplies. It wrote to stderr: {diagnostic}")
+
+		return diagnostic
+	end 'refused'
+
+	function requireAnswers(dir FilePath, output String, answer String, which String) throws TestFailure
+		let ran = spawnCompiler(StringArray.create(0), binary: dir.join("{output}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: 0, message: "{which} did not exit 0. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+		try Expect.equal(withoutCarriageReturns(ran.stdout), expected: answer, message: "{which} did not print the hash the library body reads. It wrote to stderr: {ran.stderr}")
+	end 'requireAnswers'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeStagedFile(dir.join(StdlibDirName).join(StagedLibraryHashFileName), content: StagedLibraryHashSource)
+		stageProgram(dir, name: GrantedHashProgramDirName, source: GrantedHashProgramSource)
+		stageProgram(dir, name: AuthorHashProgramDirName, source: AuthorHashProgramSource)
+
+		try built(dir, cacheRootDirName: GrantedFirstCacheRootDirName, program: GrantedHashProgramDirName, output: GrantedHashOutputName, which: "the build of a program calling the library body, which fills the library cache")
+		try requireAnswers(dir, output: GrantedHashOutputName, answer: GrantedHashAnswer, which: "a program calling the library body")
+
+		let warm = try refused(dir, cacheRootDirName: GrantedFirstCacheRootDirName, which: "the warm build of {AuthorHashSubject}")
+		let cold = try refused(dir, cacheRootDirName: AuthorColdCacheRootDirName, which: "the cold build of {AuthorHashSubject}")
+		try Expect.equal(warm, expected: cold, message: "the warm and the cold build of {AuthorHashSubject} must report the same diagnostic.")
+
+		let first = try refused(dir, cacheRootDirName: AuthorFirstCacheRootDirName, which: "the build of {AuthorHashSubject} under a cache root of its own")
+		try Expect.equal(first, expected: cold, message: "{AuthorHashSubject} must report the same diagnostic under a cache root it built first.")
+
+		try built(dir, cacheRootDirName: AuthorFirstCacheRootDirName, program: GrantedHashProgramDirName, output: GrantedHashOutputName, which: "the build of a program calling the library body after {AuthorHashSubject}")
+		try requireAnswers(dir, output: GrantedHashOutputName, answer: GrantedHashAnswer, which: "a program calling the library body, built after {AuthorHashSubject}")
+	end 'requireHeldIn'
+end 'AuthorHashIsRefused'

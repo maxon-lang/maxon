@@ -166,7 +166,13 @@ extension Parser
 				if let memberName = try self.extensionMemberMethodNameAt(self.pos) 'aMethod'
 					let extensionMemberName = qualifiedMethodName(conformer, methodName: memberName)
 					let memberTakesReceiver = self.extensionMemberTakesReceiverAt(self.pos)
-					let shadowed = self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: memberTakesReceiver)
+					let shadowed = self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: memberTakesReceiver, reason: ExtensionShadowReason.conformerDeclaresIt)
+					let yielded = self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: memberTakesReceiver, reason: ExtensionShadowReason.compilerSuppliesIt)
+
+					if not extensionTargetIsAnInterface(header.target) and self.signatures.compilerSuppliedMemberAboveItsTypesLayer(conformer, memberName: memberName, takesReceiver: memberTakesReceiver, siteLayer: self.job.declarationLayer) 'aMemberTheCompilerSupplies'
+						let suppliedNameTok = self.tokenAt(pastDeclarationModifiers(self.tokens, index: self.pos) + 1)
+						throw SourceParseError.duplicateDeclaration(compilerSuppliedMemberMessage(memberName, typeName: conformer), line: suppliedNameTok.line, column: suppliedNameTok.column)
+					end 'aMemberTheCompilerSupplies'
 
 					if not shadowed and not extensionTargetIsAnInterface(header.target) and self.signatures.typeDeclaresField(conformer, fieldName: memberName) 'nameTheTypeGivesAField'
 						let fieldMemberTok = self.tokenAt(pastDeclarationModifiers(self.tokens, index: self.pos) + 1)
@@ -178,7 +184,7 @@ extension Parser
 						throw SourceParseError.duplicateDeclaration(duplicateDeclarationMessage(extensionMemberName), line: memberNameTok.line, column: memberNameTok.column)
 					end 'hidesTheTypesOwnMember'
 
-					if shadowed 'anotherDeclarationWearsTheName'
+					if shadowed or (yielded and extensionTargetIsAnInterface(header.target)) 'anotherDeclarationWearsTheName'
 						self.skipPastExtensionMember()
 						continue
 					end 'anotherDeclarationWearsTheName'
@@ -263,7 +269,7 @@ extension Parser
 	// Every bare member name of the enclosing body becomes a registry key through `innerAliasKey`, so the
 	// program's member and a library member of the same name stay two keys; `innerAliasMemberFor` owns the rule.
 	function authorsMemberName(member ByteArray) returns immutable ByteArray
-		return self.signatures.innerAliasMemberFor(self.enclosingTypeName(), member: member, inExtensionBody: self.innerAliasesFromIndex, readerPath: self.job.path)
+		return self.signatures.innerAliasMemberFor(self.enclosingTypeName(), member: member, inExtensionBody: self.innerAliasesFromIndex, readerLayer: self.job.declarationLayer)
 	end 'authorsMemberName'
 
 	function innerAliasKey(member ByteArray) returns immutable ByteArray
@@ -3058,7 +3064,7 @@ extension Parser
 	// deferred, and no E3004 follows because the function exists — an `unresolved` value would survive
 	// with no error.
 	function requireSweptDeclaration(sourceName ByteArray, nameTok Token) throws SourceParseError
-		if self.signatures.declaresCallee(sourceName) 'theSweepFiledIt'
+		if self.signatures.declaresCalleeInAnyFile(sourceName) 'theSweepFiledIt'
 			return
 		end 'theSweepFiledIt'
 
@@ -4369,7 +4375,7 @@ extension Parser
 	// ⚠ **THE ONE SCOPE THAT CANNOT BE READ BACK IS `enclosingInnerAliases`** — it is built by the BODY WALK
 	// and is not a column of anything — which is why `innerAliasesFromIndex` exists: inside a drained default
 	// the same question is answered from the three whole-program alias registries instead
-	// (`namesInnerAliasHere`, the one home of it). That is not a widening: `declaresInnerAlias` is keyed
+	// (`namesInnerAliasHere`, the one home of it). That is not a widening: `declaresInnerAliasFor` is keyed
 	// `<Type>.<member>`, so it answers about exactly the declarations the body walk would have recorded.
 	//
 	// ⚠ An INTERFACE EXTENSION's associated-type substitution is deliberately NOT restored — it is a
@@ -6370,7 +6376,7 @@ extension Parser
 
 		// ⭐⭐ **TWO POSITIONS ANSWER FROM THE WHOLE-PROGRAM REGISTRIES INSTEAD OF FROM THIS BODY'S OWN WALK, AND
 		// THEY ARE ONE MECHANISM.** Both ask the identical `<Type>.<member>` question, so they widen
-		// nothing: `declaresInnerAlias` is keyed by the enclosing type, and it answers about exactly the
+		// nothing: `declaresInnerAliasFor` is keyed by the enclosing type, and it answers about exactly the
 		// declarations a body walk would have recorded.
 		//   • A drained DEFAULT expression — the set below is gone, because the body walk that built it
 		//     closed with its declaration (`restoreDeclaringTypeScope`).
@@ -6392,7 +6398,7 @@ extension Parser
 		// the probe would resolve a written name one way in the sweep and another in the real parse, which is
 		// one declaration recorded under two spellings. An extension body is read only by the two passes that
 		// both run after the pre-pass, so for it the two readings agree by construction.
-		if self.innerAliasesFromIndex and self.enclosingType.isType() and self.signatures.declaresInnerAlias(joinQualifiedName(self.enclosingTypeName(), member: name)) 'aMemberDeclaredElsewhere'
+		if self.innerAliasesFromIndex and self.enclosingType.isType() and self.signatures.declaresInnerAliasFor(joinQualifiedName(self.enclosingTypeName(), member: name), readerLayer: self.job.declarationLayer) 'aMemberDeclaredElsewhere'
 			return true
 		end 'aMemberDeclaredElsewhere'
 
@@ -9680,7 +9686,7 @@ extension Parser
 	// file, or one of the stdlib modules that declare the reserved space), and a non-empty
 	// `compilerMintedNames` (this compile wrote part of the file, `Queries.compilerMintedNamesIn`).
 	//
-	// ⚠ Both are only half an exemption: the door conjoins `declaresCallee`, so what is granted is "a
+	// ⚠ Both are only half an exemption: the door conjoins `declaresCalleeInAnyFile`, so what is granted is "a
 	// `__` name some file in this program declares", never "any `__` name". That conjunction is why
 	// the second provenance may be read per file on this side: a generated dispatcher calls names its
 	// own file does not declare (the entry's helper type, the per-file runner one file over).
@@ -9826,7 +9832,7 @@ extension Parser
 	// `<stdlibDir>/<name>` — never a basename). A rule stated on one side of a name lapses on the
 	// other: `stdlib/Builtins.maxon` could declare `__int_fromString` and then not call it.
 	//
-	// ⚠ **THE `declaresCallee` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN THE
+	// ⚠ **THE `declaresCalleeInAnyFile` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN THE
 	// DECLARATION SIDE'S.**
 	// The declaration exemption admits the names those files WRITE; a bare file test here would admit every
 	// name they do not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
@@ -9865,11 +9871,11 @@ extension Parser
 		// slot and the legal static spelling of a declared instance method (`String.hash("a")` is
 		// `"a".hash()`, and `stdlib/String.maxon` declares `hash()` and `equals()`). So the
 		// synthesized-impl clause is the compiler's only while no file declares the method; conjoined with
-		// `declaresCallee` like the clauses below, it refuses a `<conformer>.<method>` no file declares,
+		// `declaresCalleeInAnyFile` like the clauses below, it refuses a `<conformer>.<method>` no file declares,
 		// which no signature could validate. Sound while the two registries agree (see this function's
 		// header): a callee `funcSignatures` contains is not `isSignaturelessCompilerCallee`, so
 		// SemanticCheck validates it and `lowerCall` slots its arguments against the declaration.
-		if reason == ReservedCalleeReason.synthesizedConformanceImpl and self.signatures.declaresCallee(callee) 'theCorpusOwnDeclarationNamedStatically'
+		if reason == ReservedCalleeReason.synthesizedConformanceImpl and self.signatures.declaresCalleeInAnyFile(callee) 'theCorpusOwnDeclarationNamedStatically'
 			return
 		end 'theCorpusOwnDeclarationNamedStatically'
 
@@ -9880,27 +9886,27 @@ extension Parser
 		// with no `__` in it, so no file fact can tell it from a typed one: `CalleeMint` is that fact, and
 		// it is stated by the one routine that mints such a name (`parseQualifiedCall`'s primitive arm).
 		//
-		// ⚠ **`declaresCallee` IS CONJOINED FOR THE OTHER TWO CLAUSES' REASON**, not as belt-and-braces: the
+		// ⚠ **`declaresCalleeInAnyFile` IS CONJOINED FOR THE OTHER TWO CLAUSES' REASON**, not as belt-and-braces: the
 		// mint says the compiler owns the head, and this says the program actually has that function. The mint
 		// site already refuses an undeclared primitive static in the AUTHOR'S OWN SPELLING (it must — this
 		// message would name `__int_frobnicate`, a symbol nobody wrote), so a `minted` callee that is not
 		// declared is a drift between that check and this one, and lands here rather than in the backend.
-		if mint == CalleeMint.primitiveStatic and self.signatures.declaresCallee(callee) 'theCompilersOwnPrimitiveStaticMint'
+		if mint == CalleeMint.primitiveStatic and self.signatures.declaresCalleeInAnyFile(callee) 'theCompilersOwnPrimitiveStaticMint'
 			return
 		end 'theCompilersOwnPrimitiveStaticMint'
 
 		// ⭐ **THE FOURTH KIND OF EXEMPTION: A DEFAULT VALUE'S HELPER** — a PARAMETER's or a
 		// FIELD's, which are one exemption because they are one mechanism and one mistake. It is the
-		// `primitiveStatic` clause one mint over, and conjoined with `declaresCallee` for its exact reason: the
+		// `primitiveStatic` clause one mint over, and conjoined with `declaresCalleeInAnyFile` for its exact reason: the
 		// mint says the compiler spelled the callee, and this says the program actually contains that function.
 		// Both helpers are declared by the SWEEP (`recordScannedParamDefaults` / `recordScannedFieldDefaultHelper`
 		// publish their return types), so a mint whose helper is absent is a drift between the sweep and the
 		// fill and lands here rather than in the backend.
-		if calleeMintIsDefaultHelper(mint) and self.signatures.declaresCallee(callee) 'theCompilersOwnDefaultHelperMint'
+		if calleeMintIsDefaultHelper(mint) and self.signatures.declaresCalleeInAnyFile(callee) 'theCompilersOwnDefaultHelperMint'
 			return
 		end 'theCompilersOwnDefaultHelperMint'
 
-		if self.fileMayUseReservedNames() and self.signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
+		if self.fileMayUseReservedNames() and self.signatures.declaresCalleeInAnyFile(callee) 'theReservedSpacesOwnDeclaration'
 			return
 		end 'theReservedSpacesOwnDeclaration'
 
@@ -9909,7 +9915,7 @@ extension Parser
 		// rule. `stdlib/Clock.maxon`'s own
 		// `Clock.nowMs()` becomes `__Clock.nowMs()` when a user program declares `type Clock`, so a `__` callee
 		// can be a name the compiler itself minted for a declaration that genuinely exists. Both clauses are
-		// load-bearing for that clause's stated reason: the mint says the compiler owns the head, and `declaresCallee`
+		// load-bearing for that clause's stated reason: the mint says the compiler owns the head, and `declaresCalleeInAnyFile`
 		// says the program actually has that function — a mint-only door would admit `__Clock.whatever`.
 		//
 		// ⚠⚠ **AND THE THIRD CLAUSE IS THAT THE HEAD IS NOT BYTES THE AUTHOR TYPED, FOR `requireUnreservedName`'s
@@ -9938,7 +9944,7 @@ extension Parser
 		//
 		// The disjunction is first because both halves are a few compares while `isMintedStdlibShadowCallee` is
 		// the allocating table scan this function's own header keeps off the common path.
-		if (self.everySpellingIsTheCompilers() or mintHeadIsTheCompilers(mint)) and self.signatures.isMintedStdlibShadowCallee(callee) and self.signatures.declaresCallee(callee) 'theCompilersOwnMint'
+		if (self.everySpellingIsTheCompilers() or mintHeadIsTheCompilers(mint)) and self.signatures.isMintedStdlibShadowCallee(callee) and self.signatures.declaresCalleeInAnyFile(callee) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
 

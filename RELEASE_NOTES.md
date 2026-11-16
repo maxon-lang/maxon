@@ -994,6 +994,23 @@ release's version as its heading when the release is cut.
   Fix: remove `export` (or `public`) from a helper, or give it the entry shape: no parameters, returning
   `ExitCode`, no `throws`. A program's `main` reads its command-line arguments with `CommandLine.args()`.
 
+- A layer above a type's own may not declare a member the compiler supplies to that type. The layers are the
+  standard library, the scriptlib packages and the program, lowest first. An `extension` of a library type in a
+  package or a program that declares `hash` or `equals` for a payload-free enum, `clone` for a struct or a
+  union with payloads (including through `extension T implements Cloneable`), `toString` or `clone` for a
+  primitive, or a static such as `int.fromString` is E3006 at the member's name, whatever its signature. It
+  was accepted, and the program's own calls read it while the library's did not. An `extension` of an
+  interface is not refused; see the next entry.
+  Fix: rename the method, or wrap the type in a type of your own that declares it.
+
+- An `extension` of an interface declares defaults, and a default yields to a member the compiler supplies to
+  a conformer, as it already yielded to a member the conformer declares. The `clone` a `type` has without
+  declaring one is such a member, so an interface extension's `clone` no longer replaces it: the direct call
+  and a call through a generic body both reach the compiler's copy, for a library type and for a
+  type of your own alike. A program whose interface extension declared `clone` and relied on it for its own
+  types ran the extension's body; it now runs the compiler's.
+  Fix: declare `clone` on the type itself, in its body or in an `extension` of the type.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

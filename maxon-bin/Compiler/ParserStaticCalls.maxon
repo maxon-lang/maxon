@@ -2540,7 +2540,7 @@ extension Parser
 		// `int.`/`float.`/`bool.` can never be contested by a `type` — but `byte` is an ordinary identifier here, and a
 		// `type byte` declaring `static function fromString` COMPILES AND RUNS on this tree today (measured:
 		// exit 7). Minting ahead of it would silently re-point a call that already worked at the stdlib body,
-		// which is the shape a green suite cannot see. Asked as `declaresCallee` of the SAME mangled name the
+		// which is the shape a green suite cannot see. Asked as `declaresCalleeFor` of the SAME mangled name the
 		// ordinary path below builds, so the two readings of one call site cannot disagree about what "the
 		// user declared it" means. ⭐ **AND ASKING IT OF THAT NAME MAKES A GENERIC ALIAS FALL OUT FOR FREE** —
 		// `typealias byte = Box with Num` resolves `byte.fromString` to `Box.fromString` before this test, so a
@@ -2554,15 +2554,15 @@ extension Parser
 		// author wrote for which NO declaration exists, which is exactly the case it words its sentence for.
 		//
 		// The order of the two probes is cost: `namesAPrimitiveType` is four `equals` on a short slice and
-		// allocates nothing (the discipline the math-intrinsic table measured), while each `declaresCallee`
+		// allocates nothing (the discipline the math-intrinsic table measured), while each `declaresCalleeInAnyFile`
 		// needs a joined name. Every qualified call in the program pays the first; only a primitive-based one
 		// pays the rest.
 		let declaredCallee = self.denotedStaticCallee(aliasName, member: memberTok.value, nameReader: nameReader)
 
-		if kind == StaticBaseKind.primitive and (not self.signatures.declaresCallee(declaredCallee) or self.primitiveNameIsOnlyDeclaredOutOfSight(typeTok.value)) 'primitiveStatic'
+		if kind == StaticBaseKind.primitive and (not self.signatures.declaresCalleeFor(declaredCallee, readerLayer: self.job.declarationLayer) or self.primitiveNameIsOnlyDeclaredOutOfSight(typeTok.value)) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 
-			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
+			if self.signatures.declaresCalleeInAnyFile(minted) 'declaredPrimitiveStatic'
 				return StaticMemberResolution.minted(minted)
 			end 'declaredPrimitiveStatic'
 
@@ -2588,7 +2588,7 @@ extension Parser
 		// from `aliasName` is a second chance to answer the same call site differently,
 		// which is what `staticCallClaimsBase`'s own header says about the callee name one door up.
 		let registered = declaredCallee
-		let declaredByAFile = self.signatures.declaresCallee(registered) or self.signatures.isGenericFunctionKey(registered)
+		let declaredByAFile = self.signatures.declaresCalleeFor(registered, readerLayer: self.job.declarationLayer) or not self.signatures.genericTemplatesFor(registered, readerLayer: self.job.declarationLayer).isEmpty()
 
 		return StaticMemberResolution.named(registered, declaredByAFile: declaredByAFile)
 	end 'resolveUnownedStatic'
@@ -2705,7 +2705,7 @@ extension Parser
 			return builtin
 		end 'aBuiltin'
 
-		if self.signatures.declaresCallee(self.denotedStaticCallee(aliasName, member: member, nameReader: nameReader)) 'corpus'
+		if self.signatures.declaresCalleeFor(self.denotedStaticCallee(aliasName, member: member, nameReader: nameReader), readerLayer: self.job.declarationLayer) 'corpus'
 			return ArrayStaticKind.corpus
 		end 'corpus'
 
@@ -4591,7 +4591,7 @@ extension Parser
 		// ordinary call below, and `enumConformanceImplName` answers with that same key, so the
 		// witness slot follows the door rather than contradicting it.
 
-		// ⭐⭐ **`u.clone()` ON A BOXED UNION — the struct door's twin, past the same `declaresCallee` test so a
+		// ⭐⭐ **`u.clone()` ON A BOXED UNION — the struct door's twin, past the same `declaresCalleeInAnyFile` test so a
 		// user-written `<U>.clone` still wins.** `MmRuntime.synthesizeUnionCloner` already emits the body (a
 		// fresh box, a whole-box blit, then a deep clone of the LIVE case's managed payloads), and
 		// `installUnionCascades` builds exactly the ones `__clone_` callees root — so this is a call site, not
@@ -4630,12 +4630,12 @@ extension Parser
 	// only by a member no declaration answers, which is a call already bound for the granted conformance or
 	// for a diagnostic.
 	//
-	// ⚠⚠ **THE PROBE IS `ProgramSignatures.enumDeclaresOwnConformanceMethod` AND MAY NOT BE INLINED BACK TO
-	// A `declaresCallee` OF ITS OWN.** Three doors turn on this one question — this dispatch, the witness
+	// ⚠⚠ **THE PROBE IS `ProgramSignatures.enumDeclaresOwnConformanceMethodInAnyFile` AND MAY NOT BE INLINED BACK
+	// TO A `declaresCalleeInAnyFile` OF ITS OWN.** Three doors turn on this one question — this dispatch, the witness
 	// slot's impl name, and E3130's check — and two copies of the same join would let the rule be
 	// refined at one, so `e.hash()` would call one body while the map stamps another.
 	function enumGrantedConformanceMethod(enumName ByteArray, memberName ByteArray) returns BuiltinConformerMethodLookup
-		if self.signatures.enumDeclaresOwnConformanceMethod(enumName, methodName: memberName) 'theEnumDeclaresIt'
+		if self.signatures.enumDeclaresOwnConformanceMethodInAnyFile(enumName, methodName: memberName) 'theEnumDeclaresIt'
 			return BuiltinConformerMethodLookup.notSupplied
 		end 'theEnumDeclaresIt'
 
@@ -4941,7 +4941,7 @@ extension Parser
 		// `MmRuntime.synthesizeStructCascade` — a fresh `__mm_alloc` box, a whole-struct blit, then a deep clone
 		// of each managed field — and this is the door onto it for a source `a.clone()`.
 		//
-		// ⭐ **IT IS WIRED HERE, PAST THE `declaresCallee` TEST, SO A USER-WRITTEN `clone` STILL WINS.** There is
+		// ⭐ **IT IS WIRED HERE, PAST THE `declaresCalleeInAnyFile` TEST, SO A USER-WRITTEN `clone` STILL WINS.** There is
 		// no per-type synthesized Maxon-level function: the Std-tier cloner it would lower to already exists and
 		// is already correct, and `installStructCascades` already emits exactly the ones a program references. So
 		// this is a call site, not a synthesis pass.
@@ -5059,7 +5059,7 @@ extension Parser
 	// service declaring `export function shutdown()` has a variant of that name, so the author's
 	// method wins and the compiler's `shutdown` becomes unspellable for it — which leaves dropping the
 	// last handle as the other road to the same close. It is `cloneIsSynthesized`'s rule, reached by
-	// asking the roster rather than by asking `declaresCallee` a second time.
+	// asking the roster rather than by asking `declaresCalleeInAnyFile` a second time.
 	//
 	// ⚠ `shutdown` is the handle's own method too, and that is not why its arm refuses a value. So is
 	// `clone`, whose whole point is the value it hands back. What separates them is that nothing declares
@@ -5080,7 +5080,7 @@ extension Parser
 			return try self.emitServiceHandleClone(base, cloner: CownHandleCloneBoxName, baseTok: baseTok, memberTok: memberTok)
 		end 'aSecondHandle'
 
-		throw SourceParseError.serviceNotAMessage(serviceNotAMessageRefusal(typeName, handleName: base.layout.name, member: memberTok.value, declaresIt: self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))), line: memberTok.line, column: memberTok.column)
+		throw SourceParseError.serviceNotAMessage(serviceNotAMessageRefusal(typeName, handleName: base.layout.name, member: memberTok.value, declaresIt: self.signatures.declaresCalleeInAnyFile(qualifiedMethodName(typeName, methodName: memberTok.value))), line: memberTok.line, column: memberTok.column)
 	end 'dispatchOnServiceHandle'
 
 	function requireImplementersAnswerAlike(interfaceName ByteArray, representative ByteArray, request EnumLayout, caseIndex CaseIndex, memberTok Token) throws SourceParseError
@@ -5564,11 +5564,11 @@ extension Parser
 	end 'serviceMessageFirstParam'
 
 	// Is this member the SYNTHESIZED struct `clone` — the name `clone`, on a struct that declares no `clone` of
-	// its own? The gate in front of the emit below. `declaresCallee` is the WHOLE-PROGRAM index, not this file:
+	// its own? The gate in front of the emit below. `declaresCalleeInAnyFile` reads the WHOLE-PROGRAM index, not this file:
 	// a user's `Point.clone` may be written in any file, which is the same reason
 	// `structComparisonOperands` asks its `equals` question the same way.
 	function cloneIsSynthesized(callee ByteArray, memberTok Token) returns bool
-		return memberTok.value.equals(CloneMethodName) and not self.signatures.declaresCallee(callee)
+		return memberTok.value.equals(CloneMethodName) and not self.signatures.declaresCalleeInAnyFile(callee)
 	end 'cloneIsSynthesized'
 
 	// `p.clone()` as the direct `__clone_<T>(box)` call it is. The result is a FRESH, SOLELY-owned box — the
@@ -6833,7 +6833,7 @@ extension Parser
 	end 'replyDeferrerThrowsReplyStopped'
 
 	function requireReplyLaterShape(func IrFunction, replyTok Token, baseIndex ElementIndex) throws SourceParseError
-		if not self.signatures.declaresCallee(func.name) 'notADeclaredBody'
+		if not self.signatures.declaresCalleeInAnyFile(func.name) 'notADeclaredBody'
 			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is written in the body of a message, not in a closure or a default value", line: replyTok.line, column: replyTok.column)
 		end 'notADeclaredBody'
 
@@ -7768,16 +7768,17 @@ extension Parser
 		// ⭐ **THE SYNTHESIZED SURFACE IS NOT RETIRED BY THIS, AND MUST NOT BE:** a program that declares
 		// nothing still reaches every arm below unchanged, which is what keeps `5.hash()`, `"{x}"` and
 		// `x.clone()` working with no `stdlib/PrimitiveExtensions.maxon` listed. This is the
-		// `cloneIsSynthesized` rule — *"wired PAST the `declaresCallee` test, so a user-written `clone`
+		// `cloneIsSynthesized` rule — *"wired PAST the `declaresCalleeInAnyFile` test, so a user-written `clone`
 		// still wins"* — asked of a primitive instead of a struct.
 		//
-		// ⚠ **`declaresCallee` IS THE WHOLE-PROGRAM SWEEP, NOT THIS FILE**, for `cloneIsSynthesized`'s
-		// reason: the `extension int` may be written in any file, and an answer that depended on which file the
-		// call is in would dispatch one `n.hash()` to the declaration and another to the synthesized impl.
+		// ⚠ **`declaredMemberBeatsTheCompilerFor` READS THE WHOLE-PROGRAM SWEEP, NOT THIS FILE**, for
+		// `cloneIsSynthesized`'s reason: the `extension int` may be written in any file, and an answer that
+		// differed between two files of one layer would dispatch one `n.hash()` to the declaration and another
+		// to the synthesized impl.
 		let methodTok = self.current()
 		let declaredCallee = qualifiedMethodName(typeName, methodName: methodTok.value)
 
-		if self.signatures.declaredMemberBeatsTheCompiler(typeName, member: methodTok.value) 'theProgramDeclaresItsOwn'
+		if self.signatures.declaredMemberBeatsTheCompilerFor(typeName, member: methodTok.value, readerLayer: self.job.declarationLayer) 'theProgramDeclaresItsOwn'
 			// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver, and no token at this call
 			// site spells the type — `dispatchMethodOnBase`'s mint, for its reason. `ConstructorInstance.none`
 			// because a primitive has no box for a constructor to have built.
@@ -8558,7 +8559,7 @@ extension Parser
 			return
 		end 'notTheReceiversShape'
 
-		if not qualifiedMemberIs(callee, member: CloneMethodName) or self.signatures.userDeclaresMember(qualifyingTypeName(callee), member: CloneMethodName) 'notThePrimitiveIdentity'
+		if not qualifiedMemberIs(callee, member: CloneMethodName) or self.signatures.userDeclaresMemberInAnyFile(qualifyingTypeName(callee), member: CloneMethodName) 'notThePrimitiveIdentity'
 			return
 		end 'notThePrimitiveIdentity'
 

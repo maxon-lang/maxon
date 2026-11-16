@@ -2235,7 +2235,7 @@ extension Parser
 	// others are about QUALIFIED callees a bare name cannot spell: `__Raw.*`, a `<conformer>.<method>` impl, a
 	// `<primitive>.<method>` or default-helper mint, and the stdlib shadow mint — whose contest moves nominal
 	// TYPE names alone (`Queries.contestStdlibDeclarationsAgainstUserNames`), so no function name is ever one.
-	// `declaresCallee` is conjoined for the call door's reason: the file fact says this file may write the
+	// `declaresCalleeInAnyFile` is conjoined for the call door's reason: the file fact says this file may write the
 	// reserved space, and this says the program actually has that function.
 	function requireFunctionValueNameIsNotReserved(tok Token) throws SourceParseError
 		let reason = reservedCalleeReasonOf(tok.value)
@@ -2244,7 +2244,7 @@ extension Parser
 			return
 		end 'ordinaryName'
 
-		if self.fileMayUseReservedNames() and self.signatures.declaresCallee(tok.value) 'theReservedSpacesOwnDeclaration'
+		if self.fileMayUseReservedNames() and self.signatures.declaresCalleeInAnyFile(tok.value) 'theReservedSpacesOwnDeclaration'
 			return
 		end 'theReservedSpacesOwnDeclaration'
 
@@ -4026,7 +4026,7 @@ extension Parser
 	end 'isImplicitSelfMethod'
 
 	function siblingKindOf(name ByteArray) returns SiblingKind
-		return self.signatures.siblingKindFrom(name, enclosingTypeName: self.enclosingTypeNameOrEmpty(), walked: self.walkedSiblingOf(name))
+		return self.signatures.siblingKindFrom(name, enclosingTypeName: self.enclosingTypeNameOrEmpty(), walked: self.walkedSiblingOf(name), readerLayer: self.job.declarationLayer)
 	end 'siblingKindOf'
 
 	function walkedSiblingOf(name ByteArray) returns WalkedSibling
@@ -7279,7 +7279,7 @@ extension Parser
 			return declaration
 		end 'nameable'
 
-		if self.requestedInstanceSiteKeys.contains(callee) or self.signatures.isGenericFunctionKey(callee) or self.signatures.declaresCallee(callee) 'nothingToJudgeHere'
+		if self.requestedInstanceSiteKeys.contains(callee) or self.signatures.isGenericFunctionKey(callee) or self.signatures.declaresCalleeInAnyFile(callee) 'nothingToJudgeHere'
 			throw AbsentError.absent
 		end 'nothingToJudgeHere'
 
@@ -7805,7 +7805,7 @@ extension Parser
 
 	function inferredGenericInstances(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, mint CalleeMint) returns GenericFunctionInstanceArray throws SourceParseError
 		let templates = self.genericTemplatesNameableHere(callee, mint: mint)
-		let refuse = templates.count() == 1 and not self.signatures.declaresCallee(callee)
+		let refuse = templates.count() == 1 and not self.signatures.declaresCalleeFor(callee, readerLayer: self.job.declarationLayer)
 		let inferred = GenericFunctionInstanceArray.create(0)
 
 		for template in templates 'eachTemplate'
@@ -7822,7 +7822,7 @@ extension Parser
 	// it rather than E3004.
 	function genericTemplatesNameableHere(callee ByteArray, mint CalleeMint) returns GenericFunctionTemplateArray
 		let nameable = self.genericTemplatesNameableFrom(callee, mint: mint)
-		return self.signatures.genericTemplatesOf(callee) if nameable.isEmpty() else nameable
+		return self.signatures.genericTemplatesFor(callee, readerLayer: self.job.declarationLayer) if nameable.isEmpty() else nameable
 	end 'genericTemplatesNameableHere'
 
 	function genericTemplatesNameableFrom(callee ByteArray, mint CalleeMint) returns GenericFunctionTemplateArray
@@ -7830,7 +7830,7 @@ extension Parser
 		let callerName = self.namingCallerName()
 		let exempt = callNamesNothingTheReaderWrote(mint, readerFilePath: self.job.path)
 
-		for template in self.signatures.genericTemplatesOf(callee) 'eachTemplate'
+		for template in self.signatures.genericTemplatesFor(callee, readerLayer: self.job.declarationLayer) 'eachTemplate'
 			if exempt or declarationMayBeNamed(self.signatures, visibility: template.visibility, declFilePath: template.declFilePath, registeredName: callee, readerFilePath: self.job.path, callerName: callerName) 'theCallerMayNameIt'
 				nameable.push(template)
 			end 'theCallerMayNameIt'
@@ -9026,7 +9026,7 @@ extension Parser
 	function recordConstantArgRangeChecks(callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token)
 		// A callee no file DECLARES has no parameter list to consult — a runtime helper (`__managed_push`), or an
 		// undeclared name whose own E3004 is SemanticCheck's to raise.
-		if not self.signatures.declaresCallee(callee) 'noDeclaredParams'
+		if not self.signatures.declaresCalleeInAnyFile(callee) 'noDeclaredParams'
 			return
 		end 'noDeclaredParams'
 

@@ -1405,3 +1405,313 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: stdlib-user-shadows.a-library-method-calls-the-librarys-function-past-an-authors-extension-method-of-that-name -->
+A program extends `String` with a method named `scanIsAscii`, the name of a free function the library's `isAscii` calls bare.
+A library file never sees an author's declaration, so `isAscii` still calls the library's function and answers for each
+string, and the program's own method answers its own value.
+```maxon
+typealias Tally = int(0 to 1000)
+
+extension String
+	function scanIsAscii() returns Tally
+		return 7
+	end 'scanIsAscii'
+end 'String'
+
+function main() returns ExitCode
+	let plain = "abc"
+	let broken = "a\rb"
+	let accented = "né"
+	print("{plain.isAscii()} {broken.isAscii()} {accented.isAscii()} {plain.scanIsAscii()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true true false 7
+```
+
+<!-- test: stdlib-user-shadows.a-library-method-keeps-the-librarys-answer-past-an-authors-extension-method-of-the-same-signature -->
+A program extends `String` with a method named `needleOccursIn` that takes what the library's free function of that
+name takes and answers otherwise. `contains` calls that function bare and keeps the library's answer; the program's
+method answers its own when the program calls it.
+```maxon
+extension String
+	public function needleOccursIn(haystack String, len BytePos, needle String) returns bool
+		return len > haystack.byteLength() + needle.byteLength()
+	end 'needleOccursIn'
+end 'String'
+
+function main() returns ExitCode
+	let word = "abc"
+	print("{word.contains("b")} {word.contains("z")} {word.needleOccursIn(word, len: 3, needle: "b")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false false
+```
+
+<!-- test: stdlib-user-shadows.a-library-static-calls-the-librarys-function-past-an-authors-static-extension-method-of-that-name -->
+A program extends `CivilDate` with a static method named `daysInMonth`, the name of a free function the library's
+`CivilDate.create` calls bare. `create` still asks the library's function, so it accepts February 29 in a leap year
+and refuses it in a common one, and the program's own static answers its own value.
+```maxon
+typealias Tally = int(0 to 1000)
+
+extension CivilDate
+	static function daysInMonth(year CivilYear, month CivilMonth) returns Tally
+		return 31 if year > 0 and month > 0 else 30
+	end 'daysInMonth'
+end 'CivilDate'
+
+function leapDayOf(year CivilYear) returns String
+	let made = try CivilDate.create(year, month: 2, day: 29) otherwise return "refused"
+	return "day {made.day}"
+end 'leapDayOf'
+
+function main() returns ExitCode
+	let made = try CivilDate.create(2024, month: 1, day: 31) otherwise return 1
+	print("{leapDayOf(2024)}, {leapDayOf(2023)}, {CivilDate.daysInMonth(2023, month: 2)}, {made.month}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+day 29, refused, 31, 1
+```
+
+<!-- test: stdlib-user-shadows.a-library-method-keeps-the-librarys-answer-past-an-authors-static-extension-method-of-the-same-signature -->
+A program extends `String` with a static method named `countGraphemes` that takes what the library's free function of
+that name takes and answers otherwise. `count()` calls that function bare and keeps the library's answer; the program's
+static answers its own when the program calls it.
+```maxon
+extension String
+	public static function countGraphemes(text String) returns GraphemeIndex
+		return 99 if text.isEmpty() else 98
+	end 'countGraphemes'
+end 'String'
+
+function main() returns ExitCode
+	let word = "abc"
+	print("{word.count()} {String.countGraphemes("q")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 98
+```
+
+<!-- test: stdlib-user-shadows.a-library-extension-reads-the-librarys-alias-past-an-authors-member-alias-of-that-name -->
+A program extends `Array` with a member typealias named `ElementIndex`, the name of an alias the library's own `Array`
+extensions spell bare. A library file never sees an author's declaration, so the library's sort keeps indexing with
+the library's `ElementIndex` and sorts an array longer than the program's alias could index.
+```maxon
+typealias Tally = int(0 to 1000)
+typealias TallyArray = Array with Tally
+
+extension Array
+	public typealias ElementIndex = int(0 to 5)
+end 'Array'
+
+function main() returns ExitCode
+	let items = TallyArray from [3, 1, 2, 9, 4, 7, 5, 8, 6, 0, 11, 15, 12, 14, 13, 10]
+	items.sort()
+	let first = try items.get(0) otherwise 99
+	let last = try items.get(15) otherwise 99
+	print("{first} {last}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 15
+```
+
+<!-- test: stdlib-user-shadows.error.a-hash-on-a-library-enum-is-a-member-the-compiler-supplies -->
+A program extends the library enum `ParseError` with a `hash` method of its own. The compiler supplies `hash` to every
+payload-free enum, and a layer above the one that declares the enum may not declare a member the compiler supplies to
+it, so the declaration is refused at its name.
+```maxon
+extension ParseError
+	function hash() returns HashValue
+		return 777
+	end 'hash'
+end 'ParseError'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:3:11: Duplicate method 'hash' in type 'ParseError': the compiler supplies it to 'ParseError', and a layer above the one that declares 'ParseError' may not declare it — rename the method, or wrap 'ParseError' in a type of your own that declares it
+```
+
+<!-- test: stdlib-user-shadows.error.a-mismatched-hash-on-a-library-enum-is-the-same-refusal-not-e3130 -->
+The refusal does not depend on the member's signature: a `hash` that returns a `String` is refused for being a member
+the compiler supplies, not for failing the requirement the enum's own layer would be held to.
+```maxon
+extension ParseError
+	function hash() returns String
+		return "x"
+	end 'hash'
+end 'ParseError'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:3:11: Duplicate method 'hash' in type 'ParseError': the compiler supplies it to 'ParseError', and a layer above the one that declares 'ParseError' may not declare it — rename the method, or wrap 'ParseError' in a type of your own that declares it
+```
+
+<!-- test: stdlib-user-shadows.error.a-clone-on-a-library-struct-is-a-member-the-compiler-supplies -->
+The compiler supplies `clone` to every struct, so an extension that makes the library struct `CivilDate` `Cloneable`
+by declaring `clone` is refused at the method's name.
+```maxon
+extension CivilDate implements Cloneable
+	function clone() returns CivilDate
+		return self
+	end 'clone'
+end 'CivilDate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:3:11: Duplicate method 'clone' in type 'CivilDate': the compiler supplies it to 'CivilDate', and a layer above the one that declares 'CivilDate' may not declare it — rename the method, or wrap 'CivilDate' in a type of your own that declares it
+```
+
+<!-- test: stdlib-user-shadows.an-enum-the-program-declares-may-declare-its-own-hash -->
+The refusal is about a layer above the type's own: an enum the program declares may declare `hash` itself, and its direct
+call and its use as a `Map` key both read that method.
+```maxon
+enum Color
+	red
+	green
+end 'Color'
+
+extension Color
+	function hash() returns HashValue
+		return 5
+	end 'hash'
+end 'Color'
+
+typealias SeenColors = Map with (Color, HashValue)
+
+function main() returns ExitCode
+	let seen = SeenColors.create()
+	seen.upsert(Color.green, value: 7)
+	let found = try seen.get(Color.green) otherwise 0
+	print("{Color.green.hash()} {found}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 7
+```
+
+<!-- test: stdlib-user-shadows.an-interface-extension-leaves-a-library-conformer-the-members-the-compiler-supplies -->
+An interface extension's member is a default, and a conformer the compiler supplies the member to keeps the compiler's, in
+whatever layer the conformer is declared. The program's `extension Iterable` declares `clone`, which the compiler
+supplies to the library type `ByteView` and to the program's own `Bag`, so the extension is not refused and neither
+conformer takes it, through the direct call or through a generic body that holds the value as an `Iterable`.
+```maxon
+typealias Total = int(0 to 1000)
+
+type Bag implements Iterable with (RangeBound, RangeIterator)
+	let finish as RangeBound
+
+	static function create(finish RangeBound) returns Self
+		return Self{finish: finish}
+	end 'create'
+
+	function createIterator() returns RangeIterator throws IterationError
+		return try RangeIterator.create(1, last: self.finish)
+	end 'createIterator'
+end 'Bag'
+
+extension Iterable
+	function clone() returns Self
+		print("extension clone\n")
+		return self
+	end 'clone'
+end 'Iterable'
+
+function copyThroughIterable(value T) uses T returns T where T is Iterable
+	return value.clone()
+end 'copyThroughIterable'
+
+function main() returns ExitCode
+	let view = "abc".bytes()
+	let viewCopy = view.clone()
+	let viewGeneric = copyThroughIterable(view)
+	var viewLength = 0 as Total
+	var genericLength = 0 as Total
+
+	for _ in viewCopy 'bytes'
+		viewLength = viewLength + 1
+	end 'bytes'
+
+	for _ in viewGeneric 'genericBytes'
+		genericLength = genericLength + 1
+	end 'genericBytes'
+
+	let bagCopy = Bag.create(3).clone()
+	var bagSum = 0 as RangeBound
+
+	for n in bagCopy 'bag'
+		bagSum = bagSum + n
+	end 'bag'
+
+	print("{viewLength} {genericLength} {bagSum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3 6
+```
+
+<!-- test: stdlib-user-shadows.error.an-enums-own-mismatched-hash-is-e3130 -->
+A layer is held to the requirement for the member of a type it declares itself: an enum the program declares, with a
+`hash` that does not return `HashValue`, is the requirement's own diagnostic rather than the refusal a layer above the
+enum's gets.
+```maxon
+enum Color
+	red
+	green
+end 'Color'
+
+extension Color
+	function hash() returns String
+		return "x"
+	end 'hash'
+end 'Color'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3130: <fragment>:8:11: `enum Color` conforms to 'Hashable' automatically — an enum without associated values is `Hashable` and `Equatable` with no `implements` clause — and its 'hash' is declared hash() returns String, which does not implement hash() returns HashValue. That member is what a `Map`/`Set` keyed by 'Color' hashes and compares through, so it must implement the requirement; rename it if it means something else
+```

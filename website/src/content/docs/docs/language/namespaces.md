@@ -258,6 +258,23 @@ protocols. A `b"…"` literal's element is the type the file's bare `Byte` names
 the file's own, else the one project alias it sees, else the library's; a `type Byte` leaves the literal on the
 library's, and an ambiguous bare `Byte` refuses the literal with **E3063**.
 
+Source comes in three layers, lowest first: the standard library with the
+runtime tier, the [scriptlib](/docs/cli/#the-scriptlib-directory) packages, and the program. A file
+sees the members its own layer and the layers below it declare. A method, a static method or a nested
+typealias that a program's `extension` adds to a library type is therefore the program's alone: a library
+file that spells the same name, as a bare call to one of its own functions or as a member, keeps the
+library's declaration, and so `"abc".contains("b")` answers the same whatever the program's
+`extension String` declares. A package's extension members stand the same way toward the library. A member
+declared in a higher layer is reached from a lower one through a type that layer declares: the library's
+generics call the `hash`, `equals`, `compare`, `toString` and `clone` a program's own type declares. A member
+the compiler supplies to a type, such as the `hash` and `equals` it grants a payload-free enum
+([Enum Interface Conformance](/docs/language/enums-unions/#enum-interface-conformance)), the `clone` of a struct, the `toString` and
+`clone` of a primitive, or `int.fromString`, is declared only by the layer that declares the type: an
+`extension` of that type in a layer above it that declares one is **E3006** at the member's name, whatever its
+signature. Rename the method, or wrap the type in a type of your own that declares it. An `extension` of an
+interface declares a default, which yields to a member the compiler supplies to a
+conformer, whatever layer the conformer is declared in (see [Interface Extensions](/docs/language/composite-types/#interface-extensions)).
+
 **Only a declaration the file can see counts**, for every kind of name. A project type named like a
 primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.
 What a call knows about its callee comes from the declaration it binds, too: whether the callee never

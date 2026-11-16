@@ -1020,7 +1020,7 @@ extension ProgramSignatures
 	// function in the reader's own directory outranks every binding, and a function at the root outranks a
 	// binding outside the reader's own directory. A library reader answers false.
 	function functionOutranksBinding(name ByteArray, readerFilePath FilePath) returns bool
-		if not self.declaresCallee(name) and not self.isContestedFreeFunction(name) or not self.settledDeclarations().fileModuleDirectories.contains(readerFilePath.toString()) or self.declaredByTheCorpus(readerFilePath) 'noFunctionBearsTheNameHere'
+		if not self.declaresCalleeInAnyFile(name) and not self.isContestedFreeFunction(name) or not self.settledDeclarations().fileModuleDirectories.contains(readerFilePath.toString()) or self.declaredByTheCorpus(readerFilePath) 'noFunctionBearsTheNameHere'
 			return false
 		end 'noFunctionBearsTheNameHere'
 
@@ -2387,7 +2387,7 @@ extension ProgramSignatures
 	// ⇒ `ConformanceCheck.checkGrantedEnumConformance` is the other half of THIS function and may not be
 	// removed while this branch stands.
 	export function enumConformanceImplName(enumName ByteArray, methodName ByteArray) returns immutable ByteArray
-		if self.enumDeclaresOwnConformanceMethod(enumName, methodName: methodName) 'theEnumWritesItsOwn'
+		if self.enumDeclaresOwnConformanceMethodInAnyFile(enumName, methodName: methodName) 'theEnumWritesItsOwn'
 			return qualifiedMethodName(enumName, methodName: methodName)
 		end 'theEnumWritesItsOwn'
 
@@ -2398,14 +2398,11 @@ extension ProgramSignatures
 	// the override probe, read by all THREE doors that turn on it.** `Parser.enumGrantedConformanceMethod`
 	// decides whether `e.hash()` is a method call or the granted conformance; `enumConformanceImplName`
 	// decides which symbol the witness slot is stamped with; `ConformanceCheck.checkGrantedEnumConformance`
-	// decides which members it must hold to the requirement.
-	//
-	// ⚠ **THEY WERE TWO COPIES OF ONE JOIN AND THAT IS EXACTLY WHY THIS EXISTS**: refine the rule at one and
-	// the other keeps the old one, so `e.hash()` would call one body while the map stamped another — the
-	// single-home invariant this whole grant rests on, broken by the edit that was meant to tighten it.
-	export function enumDeclaresOwnConformanceMethod(enumName ByteArray, methodName ByteArray) returns bool
-		return self.declaresCallee(qualifiedMethodName(enumName, methodName: methodName))
-	end 'enumDeclaresOwnConformanceMethod'
+	// decides which members it must hold to the requirement. Only the enum's own layer can declare one: a
+	// type extension above it is refused by `compilerSuppliedMemberAboveItsTypesLayer`.
+	export function enumDeclaresOwnConformanceMethodInAnyFile(enumName ByteArray, methodName ByteArray) returns bool
+		return self.declaresCalleeInAnyFile(qualifiedMethodName(enumName, methodName: methodName))
+	end 'enumDeclaresOwnConformanceMethodInAnyFile'
 
 	// ⭐⭐ **THE SAME NAME AS THE *STDLIB* SPELLS IT — and THE base every compiler-MINTED array instance is
 	// interned under.** What `isArrayBaseName` recognizes as the corpus declaration MOVED; what a reader with
@@ -3197,7 +3194,7 @@ extension ProgramSignatures
 	// order: two extensions publishing one `<Conformer>.<method>` stay E3006 whichever folds first.
 	//
 	// This is not the test for "does `<Type>.<method>` exist": every method an extension publishes is
-	// a method of the conformer, and this answers `false` for it. Existence is `declaresCallee`.
+	// a method of the conformer, and this answers `false` for it. Existence is `declaresCalleeInAnyFile`.
 	export function conformerDeclaresOwnMethod(qualified ByteArray, takesReceiver bool) returns bool
 		let site = try self.settledDeclarations().funcDeclSites.get(qualified) otherwise return false
 		return site.takesReceiver == takesReceiver and not self.settledDeclarations().extensionPublishedMethods.contains(extensionMemberKindKey(qualified, takesReceiver: takesReceiver))
@@ -3209,7 +3206,7 @@ extension ProgramSignatures
 	// one test: the sweep captures it at the declaration and files it here.
 	//
 	// ⚠ **A NAME NOTHING DECLARES PANICS RATHER THAN ANSWERING "receiverless"** — the caller has already
-	// established that the declaration exists (`declaresCallee`), because a name with no declaration is not a
+	// established that the declaration exists (`declaresCalleeInAnyFile`), because a name with no declaration is not a
 	// sibling at all and takes a different door entirely. Answering `false` for it would be a sentinel: a typo
 	// would silently become a receiver-less call and be reported against its ARGUMENTS.
 	// ⭐ **THE FILE THAT DECLARED THIS FUNCTION — the reader for any question about what a name in its own
@@ -3233,7 +3230,7 @@ extension ProgramSignatures
 	end 'declaringFileIfDeclared'
 
 	export function cloneIsACompilerCopy(callee ByteArray) returns bool
-		if not self.declaresCallee(callee) 'synthesized'
+		if not self.declaresCalleeInAnyFile(callee) 'synthesized'
 			return true
 		end 'synthesized'
 
@@ -3241,7 +3238,7 @@ extension ProgramSignatures
 	end 'cloneIsACompilerCopy'
 
 	export function declaredMethodTakesReceiver(qualified ByteArray) returns bool
-		let site = try self.settledDeclarations().funcDeclSites.get(qualified) otherwise panic("ProgramSignatures.declaredMethodTakesReceiver: nothing declares '{String.from(qualified)}' — the caller establishes that through `declaresCallee` first, and the two registries are written by one act (`record`)")
+		let site = try self.settledDeclarations().funcDeclSites.get(qualified) otherwise panic("ProgramSignatures.declaredMethodTakesReceiver: nothing declares '{String.from(qualified)}' — the caller establishes that through `declaresCalleeInAnyFile` first, and the two registries are written by one act (`record`)")
 		return site.takesReceiver
 	end 'declaredMethodTakesReceiver'
 
@@ -3326,18 +3323,18 @@ extension ProgramSignatures
 		return self.extensionMethodPublishedByStdlib(callee)
 	end 'corpusDeclarationStands'
 
-	// The corpus declares `int.hash` and its siblings itself, so `declaresCallee` alone is true of
+	// The corpus declares `int.hash` and its siblings itself, so `declaresCalleeInAnyFile` alone is true of
 	// every primitive member; the member is the PROGRAM's own only where no standing corpus
 	// declaration accounts for it.
-	export function userDeclaresMember(typeName ByteArray, member ByteArray) returns bool
+	export function userDeclaresMemberInAnyFile(typeName ByteArray, member ByteArray) returns bool
 		let callee = qualifiedMethodName(typeName, methodName: member)
-		return self.declaresCallee(callee) and not self.corpusDeclarationStands(callee)
-	end 'userDeclaresMember'
+		return self.declaresCalleeInAnyFile(callee) and not self.corpusDeclarationStands(callee)
+	end 'userDeclaresMemberInAnyFile'
 
-	export function declaredMemberBeatsTheCompiler(typeName ByteArray, member ByteArray) returns bool
+	export function declaredMemberBeatsTheCompilerInAnyFile(typeName ByteArray, member ByteArray) returns bool
 		let callee = qualifiedMethodName(typeName, methodName: member)
-		return self.declaresCallee(callee) and not self.compilerOutranksTheCorpusOn(typeName, member: member, callee: callee)
-	end 'declaredMemberBeatsTheCompiler'
+		return self.declaresCalleeInAnyFile(callee) and not self.compilerOutranksTheCorpusOn(typeName, member: member, callee: callee)
+	end 'declaredMemberBeatsTheCompilerInAnyFile'
 
 	// ⭐ **DID A LISTED STDLIB `extension` PUBLISH `qualified`?** — the test `corpusDeclarationStands`
 	// builds its residue rule on: a member the CORPUS declares is one whose declaration describes what the
@@ -3349,8 +3346,8 @@ extension ProgramSignatures
 	// Note that an `extension`'s member was withheld from a conformer that declares its own of the
 	// same kind. The decision is recorded and read back by the real parse, so the body it emits and
 	// the signature the fold published are one answer rather than two derivations of it.
-	export function noteExtensionShadowedMethod(qualified ByteArray, takesReceiver bool)
-		self.mainThreadSettled().extensionShadowedMethods.insert(extensionMemberKindKey(qualified, takesReceiver: takesReceiver))
+	export function noteExtensionShadowedMethod(qualified ByteArray, takesReceiver bool, reason ExtensionShadowReason)
+		self.mainThreadSettled().extensionShadowedMethods.insert(extensionShadowKey(qualified, takesReceiver: takesReceiver, reason: reason))
 	end 'noteExtensionShadowedMethod'
 
 	export function noteExtensionHeldArgument(conformer ByteArray, interfaceName ByteArray, associatedPosition ElementIndex, held ExtensionHeldArgument)
@@ -3384,8 +3381,8 @@ extension ProgramSignatures
 
 	// Was `qualified` withheld from its conformer by the rule above? `Set.contains` on the shared empty set
 	// returns before it hashes, so a program with no such shadow does not pay to ask.
-	export function extensionMethodIsShadowed(qualified ByteArray, takesReceiver bool) returns bool
-		return self.settledDeclarations().extensionShadowedMethods.contains(extensionMemberKindKey(qualified, takesReceiver: takesReceiver))
+	export function extensionMethodIsShadowed(qualified ByteArray, takesReceiver bool, reason ExtensionShadowReason) returns bool
+		return self.settledDeclarations().extensionShadowedMethods.contains(extensionShadowKey(qualified, takesReceiver: takesReceiver, reason: reason))
 	end 'extensionMethodIsShadowed'
 
 	// The one write of a function's ownership facts, for `record`'s reason: the table and the hash
@@ -4376,16 +4373,16 @@ extension ProgramSignatures
 		end 'aCycle'
 
 		visiting.push(key)
-		let moves = self.declarationMovesAnElementOut(declaration, forwarderKey: key, visiting: visiting)
+		let moves = self.declarationMovesAnElementOut(declaration, visiting: visiting)
 		_ = try visiting.pop() otherwise panic("ProgramSignatures.keyMovesAnElementOut: pop from the list just pushed to")
 		return moves
 	end 'keyMovesAnElementOut'
 
-	function declarationMovesAnElementOut(declaration FreshReturnForwardingDeclaration, forwarderKey ByteArray, visiting NameRoster) returns bool
-		let forwarderIsTheCorpus = self.forwarderIsTheCorpus(forwarderKey, declFilePath: declaration.declFilePath)
+	function declarationMovesAnElementOut(declaration FreshReturnForwardingDeclaration, visiting NameRoster) returns bool
+		let readerLayer = self.declarationLayerOf(declaration.declFilePath)
 
 		for forward in declaration.forwards 'eachForward'
-			if not self.fieldForwardMovesAnElementOut(forward, forwarderIsTheCorpus: forwarderIsTheCorpus, visiting: visiting) 'aBorrow'
+			if not self.fieldForwardMovesAnElementOut(forward, readerLayer: readerLayer, visiting: visiting) 'aBorrow'
 				return false
 			end 'aBorrow'
 		end 'eachForward'
@@ -4393,19 +4390,19 @@ extension ProgramSignatures
 		return true
 	end 'declarationMovesAnElementOut'
 
-	function fieldForwardMovesAnElementOut(forward FreshReturnForward, forwarderIsTheCorpus bool, visiting NameRoster) returns bool
+	function fieldForwardMovesAnElementOut(forward FreshReturnForward, readerLayer DeclarationLayer, visiting NameRoster) returns bool
 		return match forward 'shape'
-			ofFieldOfEnclosingType(typeName, fields, name) gives self.fieldTargetMovesAnElementOut(self.fieldMemberForwardTarget(typeName, fields: fields, name: name), forwarderIsTheCorpus: forwarderIsTheCorpus, visiting: visiting)
+			ofFieldOfEnclosingType(typeName, fields, name) gives self.fieldTargetMovesAnElementOut(self.fieldMemberForwardTarget(typeName, fields: fields, name: name, readerLayer: readerLayer), visiting: visiting)
 			unqualified or
 			ofEnclosingType or
 			ofNamedType panic("ProgramSignatures.fieldForwardMovesAnElementOut: a call forward reached the field move-out channel")
 		end 'shape'
 	end 'fieldForwardMovesAnElementOut'
 
-	function fieldTargetMovesAnElementOut(target FieldMoveOutTarget, forwarderIsTheCorpus bool, visiting NameRoster) returns bool
+	function fieldTargetMovesAnElementOut(target FieldMoveOutTarget, visiting NameRoster) returns bool
 		return match target 'target'
 			libraryDoor gives true
-			declaration(key) gives self.forwarderMayNameKey(key, forwarderIsTheCorpus: forwarderIsTheCorpus) and self.keyMovesAnElementOut(key, visiting: visiting)
+			declaration(key) gives self.keyMovesAnElementOut(key, visiting: visiting)
 			unnameable gives false
 		end 'target'
 	end 'fieldTargetMovesAnElementOut'
@@ -4555,10 +4552,10 @@ extension ProgramSignatures
 	// to run the close this is part of.
 	function unsettledTargetsOf(declaration FreshReturnForwardingDeclaration, owner ByteArray, forwarder ElementIndex, waiters FreshReturnWaiterMap) returns UnsettledTargetCount
 		var pending = 0 as UnsettledTargetCount
-		let forwarderIsTheCorpus = self.forwarderIsTheCorpus(owner, declFilePath: declaration.declFilePath)
+		let readerLayer = self.declarationLayerOf(declaration.declFilePath)
 
 		for forward in declaration.forwards 'eachForward'
-			match self.freshReturnForwardTarget(forward, declFilePath: declaration.declFilePath, forwarderIsTheCorpus: forwarderIsTheCorpus) 'target'
+			match self.freshReturnForwardTarget(forward, declFilePath: declaration.declFilePath, readerLayer: readerLayer) 'target'
 				declaration(key) then pending = pending + self.awaitedKeyCount(key, owner: owner, forwarder: forwarder, waiters: waiters)
 				unnameable then pending = pending + 1
 			end 'target'
@@ -4592,9 +4589,9 @@ extension ProgramSignatures
 	// asked once every declaration is folded.** It is re-derived rather than read off the parsed call because
 	// `returnsFreshValue` is asked while bodies are still being parsed, in any file order. `unnameable` wherever
 	// that resolution could reach something no key here names exactly; a wrong key would lend one declaration's
-	// freshness to a call that reaches another. `unnameable` too where a shared-corpus forwarder's callee
-	// resolves outside the corpus: its parses are shared between programs, so its answer cannot rest on an
-	// author's declaration.
+	// freshness to a call that reaches another. `unnameable` too where the callee is declared in a layer above
+	// the forwarder's own that its owner type's layer does not reach (`sightOfLayer`): a library forwarder's
+	// answer rests on a declaration above it only through that declaration's owner type.
 	//
 	//   • `name(…)` is `Parser.parseCall`: the enclosing type's member when it declares one
 	//     (`isImplicitSelfMethod`), else the one declaration `resolveFunctionName` finds visible from the
@@ -4606,71 +4603,33 @@ extension ProgramSignatures
 	//     nominal type from the declaring file. A user type that displaces a stdlib one needs no refusal: every
 	//     stdlib spelling of that name is rewritten into the reserved space (`Parser.shadowRenamedTokens`), so
 	//     the bare name is the user's alone.
-	function freshReturnForwardTarget(forward FreshReturnForward, declFilePath FilePath, forwarderIsTheCorpus bool) returns FreshReturnForwardTarget
-		let target = match forward 'shape'
-			unqualified(enclosingType, name) gives self.unqualifiedForwardTarget(enclosingType, name: name, readerFilePath: declFilePath)
-			ofEnclosingType(typeName, name, _) gives self.declaredForwardTarget(qualifiedMethodName(typeName, methodName: name))
-			ofNamedType(typeName, name) gives self.namedTypeForwardTarget(typeName, name: name, readerFilePath: declFilePath)
+	function freshReturnForwardTarget(forward FreshReturnForward, declFilePath FilePath, readerLayer DeclarationLayer) returns FreshReturnForwardTarget
+		return match forward 'shape'
+			unqualified(enclosingType, name) gives self.unqualifiedForwardTarget(enclosingType, name: name, readerFilePath: declFilePath, readerLayer: readerLayer)
+			ofEnclosingType(typeName, name, _) gives self.declaredForwardTarget(qualifiedMethodName(typeName, methodName: name), readerLayer: readerLayer)
+			ofNamedType(typeName, name) gives self.namedTypeForwardTarget(typeName, name: name, readerFilePath: declFilePath, readerLayer: readerLayer)
 			ofFieldOfEnclosingType panic("freshReturnForwardTarget: a field move-out forward is read by `returnsAMovedOutElement` and never reaches the sole-owner close")
 		end 'shape'
-
-		if not self.targetMayBeNamed(target, forwarderIsTheCorpus: forwarderIsTheCorpus) 'anotherLayersDeclaration'
-			return FreshReturnForwardTarget.unnameable
-		end 'anotherLayersDeclaration'
-
-		return target
 	end 'freshReturnForwardTarget'
 
-	function targetMayBeNamed(target FreshReturnForwardTarget, forwarderIsTheCorpus bool) returns bool
-		return match target 'target'
-			declaration(key) gives self.forwarderMayNameKey(key, forwarderIsTheCorpus: forwarderIsTheCorpus)
-			unnameable gives true
-		end 'target'
-	end 'targetMayBeNamed'
-
-	function forwarderMayNameKey(key ByteArray, forwarderIsTheCorpus bool) returns bool
-		return not forwarderIsTheCorpus or self.declaredByTheSharedCorpusAt(self.declaringFileOf(key).toString())
-	end 'forwarderMayNameKey'
-
-	function forwarderIsTheCorpus(forwarderKey ByteArray, declFilePath FilePath) returns bool
-		return self.declaredByTheSharedCorpusAt(declFilePath.toString()) and not self.publishedOntoAnAuthorsType(forwarderKey)
-	end 'forwarderIsTheCorpus'
-
-	function publishedOntoAnAuthorsType(forwarderKey ByteArray) returns bool
-		if not self.settledDeclarations().extensionMethodDeclFiles.contains(forwarderKey) 'notAnExtensionMember'
-			return false
-		end 'notAnExtensionMember'
-
-		let owner = try nameQualifierOf(forwarderKey) otherwise panic("publishedOntoAnAuthorsType: '{String.from(forwarderKey)}' is an extension member and is filed under `<Type>.<member>`")
-
-		if not self.settledDeclarations().userDeclaredTypeNames.contains(owner) 'notAnAuthorsType'
-			return false
-		end 'notAnAuthorsType'
-
-		if not self.authorNamesOverlapTheLibrary() 'theLibraryParsesAreShared'
-			panic("ProgramSignatures.publishedOntoAnAuthorsType: '{String.from(forwarderKey)}' is a library extension member published onto the author's type '{String.from(owner)}', which is read as the author's layer only because `noteExtensionPublishedMethod` notes the member and its owner as library-meant, meeting the author's type name and tripping `authorNameMeantByTheLibrary` so that library parses are not shared — and that verdict is not tripped")
-		end 'theLibraryParsesAreShared'
-
-		return true
-	end 'publishedOntoAnAuthorsType'
-
-	function unqualifiedForwardTarget(enclosingType EnclosingTypeScope, name ByteArray, readerFilePath FilePath) returns FreshReturnForwardTarget
+	function unqualifiedForwardTarget(enclosingType EnclosingTypeScope, name ByteArray, readerFilePath FilePath, readerLayer DeclarationLayer) returns FreshReturnForwardTarget
 		if let typeName = try enclosingType.typeName() 'insideAType'
-			let member = qualifiedMethodName(typeName, methodName: name)
+			let sibling = self.declaredForwardTarget(qualifiedMethodName(typeName, methodName: name), readerLayer: readerLayer)
 
-			if self.declaresCallee(member) 'aSiblingMember'
-				return FreshReturnForwardTarget.declaration(member)
-			end 'aSiblingMember'
+			match sibling 'sibling'
+				declaration then return sibling
+				unnameable then break
+			end 'sibling'
 		end 'insideAType'
 
 		return match self.resolveBareFunctionName(name, readerFilePath: readerFilePath) 'resolution'
-			declaration(key) gives self.declaredForwardTarget(key)
+			declaration(key) gives self.declaredForwardTarget(key, readerLayer: readerLayer)
 			ambiguous or
 			undeclared gives FreshReturnForwardTarget.unnameable
 		end 'resolution'
 	end 'unqualifiedForwardTarget'
 
-	function namedTypeForwardTarget(typeName ByteArray, name ByteArray, readerFilePath FilePath) returns FreshReturnForwardTarget
+	function namedTypeForwardTarget(typeName ByteArray, name ByteArray, readerFilePath FilePath, readerLayer DeclarationLayer) returns FreshReturnForwardTarget
 		if not self.containsStructInAnyFile(typeName) or self.crossKindContested(typeName) or self.isGenericAliasInAnyFile(typeName) or self.containsEnumInAnyFile(typeName) or isCompilerReservedName(typeName) 'notOnlyAType'
 			return FreshReturnForwardTarget.unnameable
 		end 'notOnlyAType'
@@ -4679,10 +4638,10 @@ extension ProgramSignatures
 			return FreshReturnForwardTarget.unnameable
 		end 'theHeadIsNotAType'
 
-		return self.declaredForwardTarget(qualifiedMethodName(typeName, methodName: name))
+		return self.declaredForwardTarget(qualifiedMethodName(typeName, methodName: name), readerLayer: readerLayer)
 	end 'namedTypeForwardTarget'
 
-	function fieldMemberForwardTarget(typeName immutable ByteArray, fields NameRoster, name ByteArray) returns FieldMoveOutTarget
+	function fieldMemberForwardTarget(typeName immutable ByteArray, fields NameRoster, name ByteArray, readerLayer DeclarationLayer) returns FieldMoveOutTarget
 		if not isElementMoveOutName(name) 'notADoor'
 			panic("fieldMemberForwardTarget: `{String.from(name)}` is not on the move-out roster — the sweep records a field forward only for a roster name")
 		end 'notADoor'
@@ -4696,7 +4655,7 @@ extension ProgramSignatures
 
 		let key = member
 
-		if not self.declaresCallee(key) 'noSuchMember'
+		if not self.declaresCalleeFor(key, readerLayer: readerLayer) 'noSuchMember'
 			return FieldMoveOutTarget.unnameable
 		end 'noSuchMember'
 
@@ -4767,8 +4726,12 @@ extension ProgramSignatures
 		return self.genericInstanceBaseName(try self.liveGenericAliasInstance(aliasName) otherwise throw AbsentError.absent)
 	end 'genericAliasBaseName'
 
-	function declaredForwardTarget(key ByteArray) returns FreshReturnForwardTarget
-		return FreshReturnForwardTarget.declaration(key) if self.declaresCallee(key) else FreshReturnForwardTarget.unnameable
+	function declaredForwardTarget(key ByteArray, readerLayer DeclarationLayer) returns FreshReturnForwardTarget
+		if not self.declaresCalleeFor(key, readerLayer: readerLayer) 'nothingNameable'
+			return FreshReturnForwardTarget.unnameable
+		end 'nothingNameable'
+
+		return FreshReturnForwardTarget.declaration(key)
 	end 'declaredForwardTarget'
 
 	// The declaration of `key` returns a record nobody else owns.
@@ -5590,45 +5553,71 @@ extension ProgramSignatures
 		return self.settledDeclarations().typeBodyInnerAliasMembers.contains(qualified)
 	end 'typeBodyDeclaresInnerAlias'
 
-	export function noteExtensionInnerAliasTier(qualified ByteArray, library bool)
+	function noteExtensionInnerAliasTier(qualified ByteArray, layer DeclarationLayer)
 		self.requireBeforeTheBaseline("noteExtensionInnerAliasTier")
 
 		if self.typeBodyDeclaresInnerAlias(qualified) 'theTypesOwnMemberWins'
 			return
 		end 'theTypesOwnMemberWins'
 
-		if library 'aLibrarySite'
-			self.mainThreadSettled().libraryExtensionInnerAliasMembers.insert(qualified)
+		self.mainThreadSettled().extensionInnerAliasMembersAt(layer).insert(qualified)
 
-			if self.settledDeclarations().authorExtensionInnerAliasMembers.contains(qualified) 'theAuthorDeclaresItToo'
-				self.mainThreadSettled().authorShadowedInnerAliases.insert(qualified)
-			end 'theAuthorDeclaresItToo'
-
-			return
-		end 'aLibrarySite'
-
-		self.mainThreadSettled().authorExtensionInnerAliasMembers.insert(qualified)
-
-		if self.settledDeclarations().libraryExtensionInnerAliasMembers.contains(qualified) 'theLibraryDeclaresItToo'
-			self.mainThreadSettled().authorShadowedInnerAliases.insert(qualified)
-		end 'theLibraryDeclaresItToo'
+		for other in DeclarationLayer.allCases 'eachOtherLayer'
+			if other != layer and self.settledDeclarations().extensionInnerAliasMembersAt(other).contains(qualified) 'anotherLayerDeclaresItToo'
+				self.mainThreadSettled().multiLayerInnerAliases.insert(qualified)
+			end 'anotherLayerDeclaresItToo'
+		end 'eachOtherLayer'
 	end 'noteExtensionInnerAliasTier'
 
-	// The member name under which a body files and reads `member`. A program's extension member that a library
-	// extension also declares for `owner` is a separate member with a minted name, so a library body, which
-	// never takes the mint, keeps the library's declaration. A body in the corpus, and a reader outside an
-	// extension body, always get `member` itself.
-	export function innerAliasMemberFor(owner ByteArray, member immutable ByteArray, inExtensionBody bool, readerPath FilePath) returns immutable ByteArray
-		if not inExtensionBody or self.settledDeclarations().authorShadowedInnerAliases.count() == 0 'notAnExtensionOrNothingShadowed'
+	// The member name under which a body files and reads `member`. A key that extensions of more than one
+	// layer declare keeps one member per declaring layer: the lowest layer's is `member` itself and each higher
+	// layer's is minted. A body in an extension reads its own layer's declaration, else the nearest lower
+	// layer's, never a higher one: a reader below every declaring layer gets a member none of them declares.
+	// A reader outside an extension body always gets `member` itself.
+	export function innerAliasMemberFor(owner ByteArray, member immutable ByteArray, inExtensionBody bool, readerLayer DeclarationLayer) returns immutable ByteArray
+		if not inExtensionBody or self.settledDeclarations().multiLayerInnerAliases.count() == 0 'notAnExtensionOrNothingContested'
 			return member
-		end 'notAnExtensionOrNothingShadowed'
+		end 'notAnExtensionOrNothingContested'
 
-		if not self.settledDeclarations().authorShadowedInnerAliases.contains(joinQualifiedName(owner, member: member)) or self.declaredByTheCorpus(readerPath) 'notShadowedForThisReader'
+		let qualified = joinQualifiedName(owner, member: member)
+
+		if not self.settledDeclarations().multiLayerInnerAliases.contains(qualified) 'oneLayerDeclaresIt'
 			return member
-		end 'notShadowedForThisReader'
+		end 'oneLayerDeclaresIt'
 
-		return qualifiedMintName(member, qualifier: AuthorExtensionMemberQualifier)
+		let read = try self.nearestDeclaringLayer(qualified, atOrBelow: readerLayer) otherwise return qualifiedMintName(member, qualifier: readerLayer.name)
+
+		if not self.layerDeclaresBelow(qualified, layer: read) 'theLowestLayersMember'
+			return member
+		end 'theLowestLayersMember'
+
+		return qualifiedMintName(member, qualifier: read.name)
 	end 'innerAliasMemberFor'
+
+	function nearestDeclaringLayer(qualified ByteArray, atOrBelow DeclarationLayer) returns DeclarationLayer throws AbsentError
+		var position = atOrBelow.ordinal + 1
+
+		while position > 0 'walkDown'
+			position = position - 1
+			let candidate = try DeclarationLayer.allCases.get(position) otherwise panic("ProgramSignatures.nearestDeclaringLayer: allCases.get OOB position {position}, below the layer just given")
+
+			if self.settledDeclarations().extensionInnerAliasMembersAt(candidate).contains(qualified) 'declaredHere'
+				return candidate
+			end 'declaredHere'
+		end 'walkDown'
+
+		throw AbsentError.absent
+	end 'nearestDeclaringLayer'
+
+	function layerDeclaresBelow(qualified ByteArray, layer DeclarationLayer) returns bool
+		for lower in DeclarationLayer.allCases 'eachLayer'
+			if lower.ordinal < layer.ordinal and self.settledDeclarations().extensionInnerAliasMembersAt(lower).contains(qualified) 'declaredBelow'
+				return true
+			end 'declaredBelow'
+		end 'eachLayer'
+
+		return false
+	end 'layerDeclaresBelow'
 
 	function requireBeforeTheBaseline(site String)
 		if self.baseline.settled 'pastTheBaseline'
@@ -8721,6 +8710,10 @@ extension ProgramSignatures
 			return String.from(aliasBaseName(identity))
 		end 'noMintQualifiesIt'
 
+		if let inner = try self.settledDeclarations().innerAliases.get(identity) 'anExtensionsMintedInnerAlias'
+			return self.contestedDeclarationSpelling(withoutExtensionMemberMint(identity), declFilePath: inner.declFilePath)
+		end 'anExtensionsMintedInnerAlias'
+
 		match self.settledDeclarations().typeAliases.declarationInAnyFile(identity) 'mint'
 			undeclared then return self.displayOfUnrangedMint(identity)
 			declared(alias) then return self.contestedDeclarationSpelling(aliasBaseName(alias.name), declFilePath: alias.declFilePath)
@@ -9636,6 +9629,208 @@ extension ProgramSignatures
 		return declaredInTheCorpus(self.settledDeclarations().libraryFilePaths, declPath: declPath) and not self.settledDeclarations().scriptlibFilePaths.contains(declPath)
 	end 'declaredByTheSharedCorpusAt'
 
+	function declarationLayerOf(declFilePath FilePath) returns DeclarationLayer
+		if self.declaredByTheSharedCorpusAt(declFilePath.toString()) 'theSharedCorpus'
+			return DeclarationLayer.sharedCorpus
+		end 'theSharedCorpus'
+
+		if self.declaredInTheScriptlib(declFilePath) 'aScriptlibPackage'
+			return DeclarationLayer.scriptlib
+		end 'aScriptlibPackage'
+
+		return DeclarationLayer.author
+	end 'declarationLayerOf'
+
+	function requireJobLayerMatchesIndex(job ParseJob)
+		let indexed = self.declarationLayerOf(job.path)
+
+		if job.declarationLayer != indexed 'theTwoClassificationsDrifted'
+			panic("ProgramSignatures.requireJobLayerMatchesIndex: the parse job for '{job.path.toString()}' classifies it as {job.declarationLayer.name} while the index's recorded file paths classify it as {indexed.name}")
+		end 'theTwoClassificationsDrifted'
+	end 'requireJobLayerMatchesIndex'
+
+	function ownerLayerOf(owner ByteArray) returns DeclarationLayer
+		match self.nominalTypeNameIn(owner) 'owner'
+			declared(_, _, declFilePath) then return self.declarationLayerOf(declFilePath)
+			undeclared then break
+		end 'owner'
+
+		if namesAPrimitiveType(owner) or isCompilerOwnedTypeName(owner) or isCompilerReservedName(owner) or self.namesANamespace(owner) 'aNameNoSourceFileOwns'
+			return DeclarationLayer.sharedCorpus
+		end 'aNameNoSourceFileOwns'
+
+		panic("ProgramSignatures.ownerLayerOf: '{String.from(owner)}' is not a declared type, a primitive, a compiler-owned name or a namespace, so no layer owns the members it qualifies")
+	end 'ownerLayerOf'
+
+	function ownerNameOf(qualified ByteArray) returns immutable ByteArray
+		return match splitQualifiedName(qualified) 'spelling'
+			parts(owner, _) gives owner
+			notQualified gives EmptySourceText
+		end 'spelling'
+	end 'ownerNameOf'
+
+	function sightOfLayer(memberLayer DeclarationLayer, owner ByteArray, readerLayer DeclarationLayer) returns MemberSight
+		if memberLayer.ordinal <= readerLayer.ordinal 'notAboveTheReader'
+			return MemberSight.seen
+		end 'notAboveTheReader'
+
+		if owner.isEmpty() 'aFreeFunction'
+			return MemberSight.hidden
+		end 'aFreeFunction'
+
+		let ownerLayer = self.ownerLayerOf(owner)
+
+		if memberLayer.ordinal > ownerLayer.ordinal 'aboveTheOwnerToo'
+			return MemberSight.hidden
+		end 'aboveTheOwnerToo'
+
+		if ownerLayer == DeclarationLayer.author 'anAuthorsType'
+			self.requireTheLibraryParsesAreUnshared()
+		end 'anAuthorsType'
+
+		return MemberSight.seenThroughItsOwner
+	end 'sightOfLayer'
+
+	// Asked only once `nameEventsFolded`: until the extension fold has noted every name, the sharing verdict
+	// still reads `shareable` for a program whose names turn out to overlap the library's.
+	function requireTheLibraryParsesAreUnshared()
+		if self.nameEventsFolded and self.decidedLibraryParseSharing() == LibraryParseSharing.shareable 'aSharedParseReadsAnAuthorsType'
+			panic("ProgramSignatures.requireTheLibraryParsesAreUnshared: a library file resolved a member that only an author's type owns, which is sound only while library parses are not shared — a library extension's member published onto an author's type is noted as library-meant and meets the author's type name, tripping `authorNameMeantByTheLibrary` — and the library parses are shared")
+		end 'aSharedParseReadsAnAuthorsType'
+	end 'requireTheLibraryParsesAreUnshared'
+
+	function sightOfKey(key ByteArray, readerLayer DeclarationLayer) returns MemberSight
+		if readerLayer == DeclarationLayer.author 'anAuthorSeesEveryLayer'
+			return MemberSight.seen
+		end 'anAuthorSeesEveryLayer'
+
+		return self.sightOfLayer(self.declarationLayerOf(self.declaringFileOf(key)), owner: self.ownerNameOf(key), readerLayer: readerLayer)
+	end 'sightOfKey'
+
+	function memberIsSeenFrom(typeName ByteArray, member ByteArray, readerLayer DeclarationLayer) returns bool
+		if readerLayer == DeclarationLayer.author 'anAuthorSeesEveryLayer'
+			return true
+		end 'anAuthorSeesEveryLayer'
+
+		return self.sightOfKey(qualifiedMethodName(typeName, methodName: member), readerLayer: readerLayer) != MemberSight.hidden
+	end 'memberIsSeenFrom'
+
+	function declaresCalleeFor(callee ByteArray, readerLayer DeclarationLayer) returns bool
+		return self.declaresCalleeInAnyFile(callee) and self.sightOfKey(callee, readerLayer: readerLayer) != MemberSight.hidden
+	end 'declaresCalleeFor'
+
+	function declaredMemberBeatsTheCompilerFor(typeName ByteArray, member ByteArray, readerLayer DeclarationLayer) returns bool
+		return self.declaredMemberBeatsTheCompilerInAnyFile(typeName, member: member) and self.memberIsSeenFrom(typeName, member: member, readerLayer: readerLayer)
+	end 'declaredMemberBeatsTheCompilerFor'
+
+	// The fold withholds the type-extension member it refuses here, so no declaration of it reaches the index:
+	// the parse door asks again and still refuses, and a library parse rests on no member a layer above its
+	// type declares.
+	function compilerSuppliedMemberAboveItsTypesLayer(typeName ByteArray, memberName ByteArray, takesReceiver bool, siteLayer DeclarationLayer) returns bool
+		if siteLayer == DeclarationLayer.sharedCorpus or siteLayer.ordinal <= self.ownerLayerOf(typeName).ordinal 'theTypesOwnLayerOrBelow'
+			return false
+		end 'theTypesOwnLayerOrBelow'
+
+		if self.declaresCalleeInAnyFile(qualifiedMethodName(typeName, methodName: memberName)) 'aDeclarationAlreadyExists'
+			return false
+		end 'aDeclarationAlreadyExists'
+
+		return self.compilerSuppliesMember(typeName, memberName: memberName, takesReceiver: takesReceiver)
+	end 'compilerSuppliedMemberAboveItsTypesLayer'
+
+	function compilerSuppliesMember(typeName ByteArray, memberName ByteArray, takesReceiver bool) returns bool
+		if not takesReceiver 'aStaticMember'
+			return namesAPrimitiveType(typeName) and self.declaresCalleeInAnyFile(primitiveStaticCallee(typeName, methodName: memberName))
+		end 'aStaticMember'
+
+		if memberName.equals(CloneMethodName) and self.typeHasASynthesizedClone(typeName) 'theSynthesizedClone'
+			return true
+		end 'theSynthesizedClone'
+
+		if primitiveTagOfTypeName(typeName) != ValueTypeTag.unresolved and builtinConformerLoweredMethodNames().contains(memberName) 'aLoweredPrimitiveMember'
+			return true
+		end 'aLoweredPrimitiveMember'
+
+		return match builtinConformerMethod(typeName, methodName: memberName, discovered: self.discoveredConformerOf(typeName), interfaces: self.interfaceMap()) 'granted'
+			supplied gives true
+			notSupplied gives false
+		end 'granted'
+	end 'compilerSuppliesMember'
+
+	function typeHasASynthesizedClone(typeName ByteArray) returns bool
+		if self.containsStructInAnyFile(typeName) 'aStruct'
+			return true
+		end 'aStruct'
+
+		match self.enumInAnyFile(typeName) 'anEnumOrUnion'
+			declared(layout) then return layout.carriesPayloads()
+			undeclared then return false
+		end 'anEnumOrUnion'
+	end 'typeHasASynthesizedClone'
+
+	function genericTemplatesFor(key ByteArray, readerLayer DeclarationLayer) returns GenericFunctionTemplateArray
+		let templates = self.genericTemplatesInAnyFile(key)
+
+		if readerLayer == DeclarationLayer.author 'anAuthorSeesEveryLayer'
+			return templates
+		end 'anAuthorSeesEveryLayer'
+
+		let seen = GenericFunctionTemplateArray.create(0)
+		let owner = self.ownerNameOf(key)
+
+		for template in templates 'eachTemplate'
+			if self.sightOfLayer(self.declarationLayerOf(template.declFilePath), owner: owner, readerLayer: readerLayer) != MemberSight.hidden 'aTemplateTheReaderSees'
+				seen.push(template)
+			end 'aTemplateTheReaderSees'
+		end 'eachTemplate'
+
+		return seen
+	end 'genericTemplatesFor'
+
+	function declaresInnerAliasFor(qualified ByteArray, readerLayer DeclarationLayer) returns bool
+		return self.declaresInnerAliasInAnyFile(qualified) and self.innerAliasIsSeenFrom(qualified, readerLayer: readerLayer)
+	end 'declaresInnerAliasFor'
+
+	function innerAliasIsSeenFrom(qualified ByteArray, readerLayer DeclarationLayer) returns bool
+		if readerLayer == DeclarationLayer.author 'anAuthorSeesEveryLayer'
+			return true
+		end 'anAuthorSeesEveryLayer'
+
+		let owner = self.ownerNameOf(qualified)
+
+		if let mint = try extensionMemberMintOf(qualified) 'aLayersMintedMember'
+			return self.sightOfLayer(mint.layer, owner: owner, readerLayer: readerLayer) != MemberSight.hidden
+		end 'aLayersMintedMember'
+
+		var declaredAtSomeLayer = false
+
+		for layer in DeclarationLayer.allCases 'eachLayer'
+			if not self.innerAliasIsDeclaredAt(qualified, layer: layer) 'notThisLayers'
+				continue
+			end 'notThisLayers'
+
+			declaredAtSomeLayer = true
+
+			if self.sightOfLayer(layer, owner: owner, readerLayer: readerLayer) != MemberSight.hidden 'aDeclarationTheReaderSees'
+				return true
+			end 'aDeclarationTheReaderSees'
+		end 'eachLayer'
+
+		if not declaredAtSomeLayer 'declaredNowhere'
+			panic("ProgramSignatures.innerAliasIsSeenFrom: '{String.from(qualified)}' is an inner alias some file declares, yet neither its type's body nor any layer's `extension` bodies are recorded as declaring it")
+		end 'declaredNowhere'
+
+		return false
+	end 'innerAliasIsSeenFrom'
+
+	function innerAliasIsDeclaredAt(qualified ByteArray, layer DeclarationLayer) returns bool
+		if self.typeBodyDeclaresInnerAlias(qualified) 'theTypesOwnBody'
+			return layer == self.ownerLayerOf(self.ownerNameOf(qualified))
+		end 'theTypesOwnBody'
+
+		return self.settledDeclarations().extensionInnerAliasMembersAt(layer).contains(qualified)
+	end 'innerAliasIsDeclaredAt'
+
 	export function rawSurfaceIsRefusedIn(readerFilePath FilePath) returns bool
 		return tierRefusesTheRawSurface(self.declaredInTheStdlib(readerFilePath) or self.rootIsUnderStdlibDirectory, isRuntimeSource: self.declaredInTheRuntimeTier(readerFilePath))
 	end 'rawSurfaceIsRefusedIn'
@@ -10392,7 +10587,7 @@ extension ProgramSignatures
 	end 'innerAliasInstanceOf'
 
 	// Every form of nested alias, a function's and an interface's included — what visibility and the audits
-	// ask. `declaresInnerAlias` below asks the narrower per-instance question.
+	// ask. `declaresInnerAliasInAnyFile` below asks the narrower per-instance question.
 	export function namesAnInnerAliasOfAnyForm(qualified ByteArray) returns bool
 		match splitQualifiedName(qualified) 'split'
 			notQualified then return false
@@ -10403,7 +10598,7 @@ extension ProgramSignatures
 	function namesATypeOwningAnInnerAlias(owner ByteArray, qualified ByteArray) returns bool
 		match self.nominalTypeNameIn(owner) 'owner'
 			undeclared then return false
-			declared then return self.declaresInnerAlias(qualified) or self.settledDeclarations().nestedFunctionAliasMembers.contains(qualified) or self.settledDeclarations().interfaceAliases.contains(qualified)
+			declared then return self.declaresInnerAliasInAnyFile(qualified) or self.settledDeclarations().nestedFunctionAliasMembers.contains(qualified) or self.settledDeclarations().interfaceAliases.contains(qualified)
 		end 'owner'
 	end 'namesATypeOwningAnInnerAlias'
 
@@ -10428,9 +10623,9 @@ extension ProgramSignatures
 	// the whole fold, so it answers the same for every site. It is a SUPERSET during the fold and identical
 	// afterwards, and the excess is bounded by the same tolerance every sweep entry point has: a member the
 	// fold cannot read publishes no declaration, and the program is being refused for that a moment later.
-	export function declaresInnerAlias(qualified ByteArray) returns bool
+	export function declaresInnerAliasInAnyFile(qualified ByteArray) returns bool
 		return self.settledDeclarations().innerAliases.contains(qualified) or self.settledDeclarations().genericAliases.contains(qualified) or self.holdsTupleAlias(qualified) or self.settledDeclarations().extensionInnerAliasMembers.contains(qualified)
-	end 'declaresInnerAlias'
+	end 'declaresInnerAliasInAnyFile'
 
 	// The inner alias `name` names ("Wrapper.Idx"), or `undeclared`. Its stored `.name` is the BARE member
 	// (`Idx`) the method-return retype re-qualifies with a concrete receiver's instance alias.
@@ -11291,7 +11486,7 @@ extension ProgramSignatures
 			return alias.name
 		end 'nothingToTellApart'
 
-		return qualifiedMintName(alias.name, qualifier: AuthorExtensionMemberQualifier)
+		return qualifiedMintName(alias.name, qualifier: DeclarationLayer.author.name)
 	end 'viewedAliasName'
 
 	export function functionAliasScopedName(name ByteArray, readerFilePath FilePath) returns immutable ByteArray

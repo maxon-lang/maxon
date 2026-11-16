@@ -3752,7 +3752,7 @@ extension Parser
 	//
 	// ⭐ **THERE ARE TWO CALLEE CLASSES, AND BOTH ARE ASKED.** A COMPILER-EMITTED
 	// callee (`__managed_count`, `__print_string`, `__managed_append`) is in no signature registry, so
-	// `declaresCallee` answers `false` for it — asking that alone waves every non-throwing builtin
+	// `declaresCalleeInAnyFile` answers `false` for it — asking that alone waves every non-throwing builtin
 	// through: `try arr.count()` and `try print("x")` compile, and the desugar then branches on an
 	// error-flag register the callee never wrote — a `try` that takes its error path on whatever the
 	// ABI left in R10. `isThrowingRuntimeCallee` is THE ONE home of "which builtin throws" (a throwing
@@ -3770,7 +3770,7 @@ extension Parser
 	// (E3055). A DECLARED callee's `throws` clause is written in the program; nothing about the shape of its
 	// name can outrank it.
 	//
-	// ⚠ **AND IT ASKS `declaresCallee`, WHICH IS WHERE A PER-CALL PREDICATE BELONGS.** `returnTypeOf` answers
+	// ⚠ **AND IT ASKS `declaresCalleeInAnyFile`, WHICH IS WHERE A PER-CALL PREDICATE BELONGS.** `returnTypeOf` answers
 	// the same question by ADOPTING the return type into this file's interner, so it allocates a `CalleeReturn`
 	// per ask; in front of the builtin arm that lands on every `try` over an array accessor or a checked divide
 	// in the program — MEASURED on the scale ladder as +52 allocations at rung 0 doubling to +1,664 at rung 5,
@@ -3779,7 +3779,7 @@ extension Parser
 	// its `throws` clause cannot disagree about whether the name has a declaration.
 	//
 	// A WITNESS target answers from its OWN clause, and it has no "undeclared" escape. An interface method is
-	// in NO signature registry, so routing it through `declaresCallee` would answer `false` and wave every
+	// in NO signature registry, so routing it through `declaresCalleeInAnyFile` would answer `false` and wave every
 	// non-throwing interface method through — this very hole, arriving from the other side. Its `throws` is a
 	// fact the constraint resolution already established, so the test is unconditional.
 	function requireThrowingTryTarget(target TryTarget, tryTok Token) throws SourceParseError
@@ -3798,7 +3798,7 @@ extension Parser
 	// The `named` half of the check above. An undeclared callee here is compiler-internal (see
 	// `tryTargetOfCallee`), so the builtin roster answers for it.
 	function requireThrowingNamedTryTarget(callee ByteArray, tryTok Token) throws SourceParseError
-		if self.signatures.declaresCallee(callee) 'declared'
+		if self.signatures.declaresCalleeInAnyFile(callee) 'declared'
 			if not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
 				throw SourceParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
 			end 'nonThrowing'

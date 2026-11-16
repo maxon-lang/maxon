@@ -241,7 +241,9 @@ install or [`maxon upgrade`](#maxon-upgrade) leaves it as it is.
   functions it reaches, and a diagnostic raised inside a package names the package file. A script may
   declare a type named like one the library or a package declares, and inside the package the name
   keeps its library or package meaning; a package that also spells that name as a member is
-  [E3112](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3112). The unused-declaration checks (E3092, E3219)
+  [E3112](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3112). A member a script's `extension` adds to a
+  library or package type is the script's: package and library files keep the meaning their own layer
+  gives the name ([Bare Names and Ambiguity](LANGUAGE_REFERENCE.md#bare-names-and-ambiguity)). The unused-declaration checks (E3092, E3219)
   cover the program's own files.
 - **The compiler's reserved surface stays closed to a package**: a `__` name is
   [E2051](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e2051) or

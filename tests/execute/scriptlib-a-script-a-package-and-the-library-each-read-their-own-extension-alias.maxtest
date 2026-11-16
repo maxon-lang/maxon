@@ -1,0 +1,24 @@
+let ThreeLayerExtensionAliasCaseLabel = "scriptlib-three-layer-extension-alias"
+let ThreeLayerExtensionAliasPackageSource = "public extension Iterable\n\tpublic typealias ElementArray = Array with String\n\n\tpublic function firstWords() returns ElementArray\n\t\treturn ElementArray.create(0)\n\tend 'firstWords'\nend 'Iterable'\n"
+let ThreeLayerExtensionAliasScriptSource = "typealias Tally = int(0 to 1000)\n\nextension Iterable\n\ttypealias ElementArray = Array with Tally\n\n\tfunction tallies() returns ElementArray\n\t\treturn ElementArray.create(0)\n\tend 'tallies'\nend 'Iterable'\n\nfunction main() returns ExitCode\n\tlet words = \"x y\".split(\" \")\n\tlet mapped = words.map(function(s String) gives s)\n\tlet held = words.firstWords()\n\tlet first = try held.get(0) otherwise \"none\"\n\tlet own = words.tallies()\n\tlet ownFirst = try own.get(0) otherwise 9\n\tprint(\"\{mapped.count()\} \{held.count()\} \{first\} \{own.count()\} \{ownFirst\}\\n\")\n\treturn 0\nend 'main'\n"
+let ThreeLayerExtensionAliasAnswer = "2 0 none 0 9"
+
+test 'the library, a scriptlib package and a script each read their own extension alias of one name'
+	let staged = stageScriptlibCase(ThreeLayerExtensionAliasCaseLabel)
+	writeScriptlibPackageFile(stagedTier(ThreeLayerExtensionAliasCaseLabel), package: MintProbePackageName, fileName: MintProbePackageFileName, content: ThreeLayerExtensionAliasPackageSource)
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: ThreeLayerExtensionAliasScriptSource)
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a script, a package and the library each declare an `ElementArray` alias in an `extension Iterable`, and the program did not run. Each extension method reads the alias its own layer declares. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{ThreeLayerExtensionAliasAnswer}{LineFeed}", message: "the script did not print what each layer's own alias gives")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, and neither the script nor the package writes anything there")
+
+	discardStagedDir(caseRootOf(staged.sources))
+end 'the library, a scriptlib package and a script each read their own extension alias of one name'

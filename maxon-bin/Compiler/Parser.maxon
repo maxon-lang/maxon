@@ -5502,7 +5502,7 @@ end 'elementSourceIsInferred'
 // `withArgs`.
 union MethodSurface
 	// Methods DECLARED on a struct or a generic base — the loop emits `<typeName>.current` /
-	// `<typeName>.advance` as direct calls, and `ProgramSignatures.declaresCallee` is what says they exist.
+	// `<typeName>.advance` as direct calls, and `ProgramSignatures.declaresCalleeInAnyFile` is what says they exist.
 	declared(typeName immutable ByteArray, receiver ValueId)
 
 	// ⭐⭐ **A RECEIVER THAT DISPATCHES THROUGH A WITNESS TABLE — BOTH of the kinds the language has**, an
@@ -6198,7 +6198,7 @@ let DetachedBlockLabel = b"detached"
 // E3004 "call to undefined function 'Point.create'", pointing at a call that is perfectly correct.
 //
 // ⚠ **IT MUST ALSO SPELL THE SAME BYTE AS `SignatureIndex.QualifiedAliasSeparator`.**
-// `resolvesAsNamespaceQualifiedFunction` vetoes a chain through `declaresCallee`, whose `Type.method`
+// `resolvesAsNamespaceQualifiedFunction` vetoes a chain through `declaresCalleeInAnyFile`, whose `Type.method`
 // keys are mangled through THIS constant, while the chain `ChainResolution.resolveChain` hands it is
 // joined by `joinQualifiedName`, which spells the OTHER one. The two remain separate facts — this one is the
 // byte an emitted SYMBOL carries; that one is the byte the SOURCE writes between two name segments
@@ -6581,6 +6581,10 @@ end 'duplicateDeclarationMessage'
 function fieldAndMethodMessage(member ByteArray, typeName ByteArray) returns String
 	return "'{String.from(member)}' names both a field and a method of type '{String.from(typeName)}'"
 end 'fieldAndMethodMessage'
+
+function compilerSuppliedMemberMessage(member ByteArray, typeName ByteArray) returns String
+	return "Duplicate method '{String.from(member)}' in type '{String.from(typeName)}': the compiler supplies it to '{String.from(typeName)}', and a layer above the one that declares '{String.from(typeName)}' may not declare it — rename the method, or wrap '{String.from(typeName)}' in a type of your own that declares it"
+end 'compilerSuppliedMemberMessage'
 
 function layoutReceivingField(declared StructLayout, repeatsAField bool) returns StructLayout
 	if not repeatsAField 'aNewName'

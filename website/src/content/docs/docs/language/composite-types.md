@@ -826,6 +826,13 @@ end 'Shape'
   is **E2015** at that binding and at the library's alias. Bind a concrete type that implements the
   interface.
 - Extensions of a parent interface apply to types conforming to a derived one.
+- An extension's member is a default. A conforming type that declares the member keeps its own, and so does
+  a conforming type the compiler supplies the member to, which for a `type` is its `clone`. The compiler's
+  member is the one every call reaches, whatever layer declares the extension and whatever layer declares
+  the type. A conformer the compiler supplies nothing to takes the default. To give a `type` a `clone` of its
+  own, declare it in the type's body or in an `extension` of the type. An `enum` or a `union` takes no
+  default from an interface extension, so the `hash` and `equals` of a payload-free enum are always the
+  compiler's.
 
 ### Conditional Extensions
 
@@ -896,8 +903,10 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A `hash`, `equals`, `compare`, `toString` or `clone` you declare in such an extension replaces the built-in
-one. An extension body cannot declare stored `var`/`let` members (**E2015**).
+A `hash`, `equals`, `compare`, `toString`, `clone` or `fromString` the primitive already has is
+[E3006](/docs/cli/error-codes/#e3006--duplicatedefinition) at its name in such an extension; a member it
+lacks, `hash` for `bool` say, is yours to declare. An extension body cannot declare stored `var`/`let` members
+(**E2015**).
 
 ## Tuples
 

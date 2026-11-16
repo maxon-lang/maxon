@@ -1174,10 +1174,13 @@ for a standard-library type too. An [interface extension](#interface-extensions)
 default: a conforming type whose body declares the same member keeps its own, and the extension's methods,
 compiled for that type, read it.
 
-A nested typealias that an `extension` of the program declares under the name of one a library `extension` of
-the same type also declares (`Array.ElementArray`, `Array.SortComparator`, `Iterable.ElementTransform`) is a
-separate member. The program's extension bodies, in every file, spell it with the bare name, and callers of
-the program's methods see it; the library's bodies and methods keep the library's member. A member without
+A nested typealias that an `extension` declares under the name of one an `extension` of a lower
+[layer](#bare-names-and-ambiguity) also declares for the same type (`Array.ElementArray`, `Array.SortComparator`,
+`Iterable.ElementTransform`) is a separate member, one per declaring layer. An extension body, in every file,
+spells the bare name for the member its own layer declares, else for the one the nearest layer below it
+declares, and callers of a method see the member that method's layer reads; the library's bodies and methods
+keep the library's member. Two layers' members that are different types stay different types: a value of one
+where the other is expected is **E3005**. A member without
 a visibility modifier is spelled from its declaring directory's subtree only: an extension body in another
 directory naming it is [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008).
 
@@ -2009,6 +2012,13 @@ end 'Shape'
   is **E2015** at that binding and at the library's alias. Bind a concrete type that implements the
   interface.
 - Extensions of a parent interface apply to types conforming to a derived one.
+- An extension's member is a default. A conforming type that declares the member keeps its own, and so does
+  a conforming type the compiler supplies the member to, which for a `type` is its `clone`. The compiler's
+  member is the one every call reaches, whatever layer declares the extension and whatever layer declares
+  the type. A conformer the compiler supplies nothing to takes the default. To give a `type` a `clone` of its
+  own, declare it in the type's body or in an `extension` of the type. An `enum` or a `union` takes no
+  default from an interface extension, so the `hash` and `equals` of a payload-free enum are always the
+  compiler's.
 
 ### Conditional Extensions
 
@@ -2079,8 +2089,10 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A `hash`, `equals`, `compare`, `toString` or `clone` you declare in such an extension replaces the built-in
-one. An extension body cannot declare stored `var`/`let` members (**E2015**).
+A `hash`, `equals`, `compare`, `toString`, `clone` or `fromString` the primitive already has is
+[E3006](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3006) at its name in such an extension; a member it
+lacks, `hash` for `bool` say, is yours to declare. An extension body cannot declare stored `var`/`let` members
+(**E2015**).
 
 ---
 
@@ -5147,6 +5159,23 @@ constraints. `int`, `float`, `bool`, `Character`, `String`, arrays and payload-f
 protocols. A `b"…"` literal's element is the type the file's bare `Byte` names when that is an integer alias —
 the file's own, else the one project alias it sees, else the library's; a `type Byte` leaves the literal on the
 library's, and an ambiguous bare `Byte` refuses the literal with **E3063**.
+
+Source comes in three layers, lowest first: the standard library with the
+runtime tier, the [scriptlib](CLI_REFERENCE.md#the-scriptlib-directory) packages, and the program. A file
+sees the members its own layer and the layers below it declare. A method, a static method or a nested
+typealias that a program's `extension` adds to a library type is therefore the program's alone: a library
+file that spells the same name, as a bare call to one of its own functions or as a member, keeps the
+library's declaration, and so `"abc".contains("b")` answers the same whatever the program's
+`extension String` declares. A package's extension members stand the same way toward the library. A member
+declared in a higher layer is reached from a lower one through a type that layer declares: the library's
+generics call the `hash`, `equals`, `compare`, `toString` and `clone` a program's own type declares. A member
+the compiler supplies to a type, such as the `hash` and `equals` it grants a payload-free enum
+([Enum Interface Conformance](#enum-interface-conformance)), the `clone` of a struct, the `toString` and
+`clone` of a primitive, or `int.fromString`, is declared only by the layer that declares the type: an
+`extension` of that type in a layer above it that declares one is **E3006** at the member's name, whatever its
+signature. Rename the method, or wrap the type in a type of your own that declares it. An `extension` of an
+interface declares a default, which yields to a member the compiler supplies to a
+conformer, whatever layer the conformer is declared in (see [Interface Extensions](#interface-extensions)).
 
 **Only a declaration the file can see counts**, for every kind of name. A project type named like a
 primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.

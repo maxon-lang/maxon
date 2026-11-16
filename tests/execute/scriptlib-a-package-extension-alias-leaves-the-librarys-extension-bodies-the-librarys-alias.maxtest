@@ -1,0 +1,24 @@
+let PackageExtensionAliasCaseLabel = "scriptlib-a-package-extension-alias"
+let PackageExtensionAliasPackageSource = "public extension Iterable\n\tpublic typealias ElementArray = Array with String\n\n\tpublic function firstWords() returns ElementArray\n\t\treturn ElementArray.create(0)\n\tend 'firstWords'\nend 'Iterable'\n"
+let PackageExtensionAliasScriptSource = "function main() returns ExitCode\n\tlet words = \"x y\".split(\" \")\n\tlet mapped = words.map(function(s String) gives s)\n\tlet held = words.firstWords()\n\tlet first = try held.get(0) otherwise \"none\"\n\tprint(\"\{mapped.count()\} \{held.count()\} \{first\}\\n\")\n\treturn 0\nend 'main'\n"
+let PackageExtensionAliasAnswer = "2 0 none"
+
+test 'a scriptlib package extension alias named like the library extension alias leaves the library bodies their own'
+	let staged = stageScriptlibCase(PackageExtensionAliasCaseLabel)
+	writeScriptlibPackageFile(stagedTier(PackageExtensionAliasCaseLabel), package: MintProbePackageName, fileName: MintProbePackageFileName, content: PackageExtensionAliasPackageSource)
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: PackageExtensionAliasScriptSource)
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a script calling the library `map` did not run beside a package whose `extension Iterable` declares an `ElementArray` alias of its own. A library file never sees a package declaration, so `map` builds the library `ElementArray`. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{PackageExtensionAliasAnswer}{LineFeed}", message: "the script did not print what each layer's own alias gives")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, and neither the script nor the package writes anything there")
+
+	discardStagedDir(caseRootOf(staged.sources))
+end 'a scriptlib package extension alias named like the library extension alias leaves the library bodies their own'

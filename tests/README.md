@@ -158,6 +158,7 @@ tests/
     diagnostics-project-a-hygiene-finding-is-withheld-beside-a-whole-program-claim-after-the-project-check.maxtest   the same buffer through the project check publishes the same E3010 alone
     diagnostics-project-an-extension-edited-to-store-a-binding-reports-at-the-conformer-in-another-file.maxtest   an `extension` edited on disk to store an associated type as a container element publishes E2015 at the conformer's interface binding in another file
     diagnostics-project-an-extension-edited-to-stop-storing-a-binding-clears-the-conformer-in-another-file.maxtest   an `extension` edited on disk to stop storing it clears the E2015 at the conformer's binding in another file
+    diagnostics-project-a-hash-a-sibling-file-declares-on-a-library-enum-is-published-on-that-file-and-not-at-the-call-in-this-one.maxtest   a `hash` a sibling file's `extension` declares on a library enum is E3006 on that file, and the call in the open buffer publishes nothing
   ladders/                       hand-built scaling generators + the README indexing them
     index.maxtest                the README's rows against the scripts beside it
   parallelCompile/
@@ -590,6 +591,11 @@ tests/
     library-cache-a-program-declaring-a-generic-alias-the-library-declares-is-served-the-library-parses-of-another-program-declaring-that-alias.maxtest   a program declaring a `StringArray` alias beside the library `StringArray` a `split` returns loads the baseline, and a program declaring it over another element type parses no library file after it, each byte-identical to cold
     library-cache-a-program-declaring-another-library-alias-than-the-program-before-it-parses-the-library-itself.maxtest   a program declaring a `Byte` alias, built after a program declaring a `Count` alias, loads the baseline and parses the library itself, byte-identical to cold
     library-cache-a-program-declaring-an-alias-named-like-a-library-type-sweeps-cold-and-builds-the-cold-bytes.maxtest   a program declaring an alias under a library type's name sweeps the library itself, leaves the baseline unused and builds the bytes a cold build writes
+    library-cache-a-program-that-adds-an-extension-method-named-like-a-function-a-library-method-calls-is-served-the-library-parses-of-the-program-before-it.maxtest   a program adding an extension method named like a function a library method calls parses no library file after the program before it, and the library method keeps calling the library's
+    library-cache-a-program-that-adds-an-extension-method-with-the-signature-of-a-function-a-library-method-calls-is-served-the-library-parses-of-the-program-before-it.maxtest   the same with the library function's signature: warm equals cold, and the library method's answer is the library's
+    library-cache-a-program-that-adds-a-hash-method-to-a-library-enum-is-refused-the-same-cold-and-warm-in-either-build-order.maxtest   an `extension` declaring `hash` on a library enum is E3006 cold and warm, before or after a plain program under one cache root, and the plain program is unaffected
+    library-cache-a-program-that-adds-clone-or-tostring-to-int-is-refused-when-no-library-file-declares-it-the-same-cold-and-warm.maxtest   with no library file declaring them, `clone` or `toString` on `int` from a program's `extension` is E3006, the same warm and cold
+    library-cache-a-program-that-adds-a-clone-default-to-an-interface-leaves-every-clone-the-compilers-the-same-cold-and-warm-in-either-build-order.maxtest   an interface extension's `clone` default leaves a library body's and the program's clones the compiler's, in either build order and cold
     library-cache-a-build-the-front-end-refuses-still-keeps-the-library.maxtest   a refused build still reports and keeps the library entries it produced, and the next build loads them
     library-cache-is-per-target.maxtest                     a build for another target loads none of the baseline another target wrote
     library-cache-rejects-a-damaged-entry.maxtest           a damaged entry is rejected and rewritten, and the build is the cold one
@@ -770,6 +776,9 @@ tests/
     scriptlib-a-package-names-another-packages-type-by-its-qualified-name.maxtest   a package builds `scriptlib.shapes.Square` from another package, and the script prints `9`
     scriptlib-a-script-shadowing-a-package-type-leaves-the-package-whole.maxtest   a script declaring `type Widget` beside a package whose `use()` reads its own `Widget.make()` prints `7`
     scriptlib-an-unreached-package-var-that-is-reassigned-compiles.maxtest   a package function the script never calls keeps a `var` a `let` could not replace, and the script still runs
+    scriptlib-a-package-extension-alias-leaves-the-librarys-extension-bodies-the-librarys-alias.maxtest   a package `extension Iterable` declaring a nested alias named like the library's leaves the library's default bodies reading the library's
+    scriptlib-a-script-a-package-and-the-library-each-read-their-own-extension-alias.maxtest   the library, a package and a script each declare a nested extension alias of one name, and each layer's bodies read their own
+    scriptlib-a-package-naming-a-member-only-the-scripts-primitive-extension-declares-is-refused.maxtest   a package body calling a method only the script's `extension int` declares is refused in the package file
     fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
   consoleWrite/
     console-write-imports.maxtest           which console API an emitted x64-windows image imports
