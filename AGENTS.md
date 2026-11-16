@@ -55,8 +55,11 @@ checkout.
   carries `Fixes #<n>` for the issue it was assigned.
 - **A message is one line of kind, then the body:** `READY` · `REQUEST <goal>` ·
   `QUESTION <task> <question, the options, your recommendation>` · `FOUND <task>` + issue fields ·
-  `PROGRESS <task> <state>` · `BLOCKED <task> <why>` · `DONE <task> <sha>`. It sends `ASSIGN`,
-  `RULING`, `STOP`, `PAUSE`, `RESUME` and `PING`; answer a `PING` with `PROGRESS`.
+  `PROGRESS <task> <state>` · `BLOCKED <task> <why>` · `DONE <task> <sha>` · `ARCHIVING`. It sends
+  `ASSIGN`, `RULING`, `STOP`, `RETIRE`, `PAUSE`, `RESUME` and `PING`; answer a `PING` with `PROGRESS`.
+- **`RETIRE`:** your work is finished and your session ends. If you have the desktop app's
+  `archive_session` tool, send `ARCHIVING`, then archive yourself (`session_id: "self"`). Without it,
+  heartbeat `--state idle`, tell the user the session can be archived, and stop.
 - **Nothing about the fleet goes in this repository**, which is public: no session id, machine, account or
   usage figure in a commit, a file, a public issue or a comment on one.
 - **No answer from the orchestrator within 30 minutes:** tell the user, and fall back to the user and
