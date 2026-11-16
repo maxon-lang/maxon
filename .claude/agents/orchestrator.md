@@ -126,7 +126,7 @@ unknown work surfaces before you assign anything; start the `wait`.
 ## Sizing the fleet to the plans
 
 **The user's budget is the whole of both plans**: every usage window an account has may be spent to
-~98% by the time it resets, and no further. Both accounts are on Ultra plans, which have no 5-hour window,
+~95% by the time it resets, and no further. Both accounts are on Ultra plans, which have no 5-hour window,
 so the binding window is each account's weekly one — and the two reset on different days. An account
 whose reset is near can carry more workers, because what it does not spend by then is lost; `budget`
 already weighs that, since each account is paced against its own reset. `budget` reads every heartbeat's usage sample, keeps
@@ -137,13 +137,14 @@ resets, with an `action`:
 - **`start N`** — assign tasks to N of that account's idle or paused workers. `budget` never proposes
   more than one extra worker per wake, so the rate it measures keeps up with the change; ramp over
   several wakes.
-- **`pause N`** — send `PAUSE` to N of that account's workers, those whose task is nearest a step
-  boundary first. A paused worker keeps its task and its tree, stops at its next step boundary, and
-  waits at no cost until `RESUME`. Never pause a worker in the middle of its §8 gates or its push.
+- **`pause N`** — the account will not reach its reset at the current burn. Start no new worker and
+  assign no new task on it; a worker already on a task finishes it. Pause a working session only when
+  the user asks: a paused worker keeps its task and its tree, stops at its next step boundary, and
+  waits at no cost until `RESUME`, never in the middle of its §8 gates or its push.
 - **`hold`** — change nothing. `hold (no usage sample)` means no live session on that account has
   reported usage yet; it is not a licence to start workers there.
 
-A window at its target pauses every worker on that account until it resets; the other account carries
+A window at its target takes no new work on that account until it resets; the other account carries
 the work meanwhile. When the weekly window is the binding one, prefer Sonnet workers for contained work
 on that account. The fleet can only grow into sessions the user has started: when `budget` wants more
 workers than an account has, ask the user once whether to start that many more sessions on it.

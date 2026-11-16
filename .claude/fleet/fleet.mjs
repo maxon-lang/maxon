@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 
-const TARGET_PERCENT = 98;
+const TARGET_PERCENT = 95;
 const STATUS_LINE_LIMIT_KINDS = { five_hour: 'session', seven_day: 'weekly_all' };
 const USAGE_COMMAND = '/usage';
 const LIVE_HEARTBEAT_MINUTES = 30;
