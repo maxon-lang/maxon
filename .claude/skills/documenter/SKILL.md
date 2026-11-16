@@ -126,9 +126,12 @@ documentation in the same commit.
 8. Docs prose carries no exact count of anything that grows with the code (files, functions, cases,
    passes), no line number, and a source path only where the reader has to open or type it. A size
    that matters is approximate (`~100`).
-9. A change that can break existing code, scripts or workflows adds a bullet under `## Unreleased` ›
-   `### Breaking changes` in `RELEASE_NOTES.md` with an indented `Fix: …` line (`docs/RELEASING.md`).
-   Nothing else goes there per change.
+9. A change that breaks what the latest release shipped (the newest `## X.Y.Z` heading in
+   `RELEASE_NOTES.md`) — code, scripts or workflows that release accepted — adds a bullet under
+   `## Unreleased` › `### Breaking changes` with an indented `Fix: …` line (`docs/RELEASING.md`). A
+   change to something added since that release adds none, and when it changes or removes a surface an
+   `## Unreleased` bullet describes, that bullet is rewritten or deleted to match. Nothing else goes
+   there per change.
 
 ## Verification
 

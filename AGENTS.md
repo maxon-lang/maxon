@@ -99,9 +99,12 @@ written with agents, which fix what a release breaks. Make the better design: ke
 compatibility shim, no deprecation period, and never reject a design because existing code would have to
 change. Because Maxon's authors are agents, a compile error costs one round trip: prefer a deterministic
 error that names the deficit and the fix over silently slower or degraded code. The error must be a
-property of the program, not of a heuristic search, so the author's rewrite loop converges. A change that makes Maxon source which compiled with the previous release fail to compile owes its
+property of the program, not of a heuristic search, so the author's rewrite loop converges. A change that breaks what the latest
+release shipped — Maxon source that release compiled now fails to compile or runs differently — owes its
 entry under `## Unreleased` in `RELEASE_NOTES.md` — the change and its `Fix:` — in the same commit
-(`docs/RELEASING.md`, "The release notes"). A change to a command, flag, tool output or event stream is
+(`docs/RELEASING.md`, "The release notes"). The latest release is the newest `## X.Y.Z` heading there.
+A change to something added since that release owes none, even when it breaks code written against
+`main`: no released program can meet it. A change to a command, flag, tool output or event stream is
 not such an entry; it updates its `docs/` source.
 
 **A syntax error gets the parser's generic error, never a dedicated diagnostic.** A word the grammar does
