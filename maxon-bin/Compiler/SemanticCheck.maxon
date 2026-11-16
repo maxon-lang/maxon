@@ -17,16 +17,17 @@
 // function whose bare name is declared in two directories is registered under its
 // minted `<dir>~name` spelling; `main` is the one exception, and the exclusion is written where the
 // exclusion happens (`Parser.recordScannedSignature`) against this constant — not against a second
-// `b"main"` that could drift from the name `checkMainFunction` looks the entry point up by.
+// `b"main"` that could drift from the name `checkEntryFunctions` looks the entry point up by.
 export let MainFunctionName = b"main"
 
-// ⚠ **E3001's AND E3002's TEXT IS BUILT AT ITS ONE SITE (`checkMainFunction`) RATHER THAN HELD IN A
-// CONSTANT HERE, BECAUSE THE SENTENCES NAME THE ENTRY AND THE ENTRY IS A PER-BUILD FACT.** It
-// is spec-gated text (`specs/basics.md`) and byte-identical for
-// every build that enters at `main` — which is every build a person types. A generated-entry build
-// (`maxon test`) would otherwise report a missing `main` for a project whose entry is
-// `__maxon_test_main`, naming the one function it was never going to look for. A constant cannot say that,
-// so there is no constant: one producer, at the one place the name is in hand.
+// ⚠ **THE ENTRY DIAGNOSTICS' TEXT (E3001, E3002, E3054, E3225) IS BUILT WHERE IT IS REPORTED
+// (`checkEntryFunctions`, `checkEntryShape`) RATHER THAN HELD IN A CONSTANT HERE, BECAUSE THE
+// SENTENCES NAME THE ENTRY AND THE ENTRY IS A PER-BUILD FACT.** For a plain program it is pinned
+// byte-for-byte by the basics spec, for every build that enters at `main` — which is every build a
+// person types. A generated-entry build (`maxon test`) would otherwise report a missing
+// `main` for a project whose entry is `__maxon_test_main`, naming the one function it was never going
+// to look for. A constant cannot say that, so there is no constant: one producer, at the one place
+// the name is in hand.
 
 function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
 	try requireStillWanted(project)
@@ -114,8 +115,7 @@ function semanticCheck(project Project, module MaxonModule, signatures ProgramSi
 
 	// After every check that stands down on a prior error (`checkDiscardedResults` among them), so a
 	// program with no `main` still gets its E3064 beside the E3001.
-	checkMainFunction(project)
-	checkMainCannotThrow(project, module: module)
+	try checkEntryFunctions(project, funcNames: funcNames)
 
 	// ⭐ **THE ONE REWRITE THIS PASS MAKES, AND IT IS LAST ON PURPOSE.**
 	// A byte record handed to a parameter the callee WRITES — a `String` literal, or a MERGE whose edges
@@ -222,24 +222,6 @@ function valueIdArrayContains(values ValueIdArray, value ValueId) returns bool
 
 	return false
 end 'valueIdArrayContains'
-
-// E3054 — the ENTRY function cannot declare `throws`: there is no caller left to handle the error. Scans
-// the merged module for it (whose `throwsTypeName` the parser stamped), positioned at its name token.
-//
-// ⚠ **IT IS ASKED OF `project.entryFunctionName`, NOT OF `main`, AND THE TWO ARE THE SAME ANSWER FOR EVERY
-// ORDINARY BUILD.** The rule is about the function nothing calls, which is whatever this build enters at —
-// a `main` some other entry has displaced is an ordinary function with an ordinary caller and is no longer
-// the subject. The message names it for the same reason, so its text is byte-identical whenever the entry
-// is `main`.
-function checkMainCannotThrow(project Project, module MaxonModule)
-	let entryName = String.from(project.entryFunctionName)
-
-	for func in module.functions 'eachFunc'
-		if func.name == project.entryFunctionName and throwsClauseIsThrowing(func.throwsTypeName) 'entryThrows'
-			reportAtFunctionName(project, func: func, code: ErrorCode.mainCannotThrow, message: "{entryName} cannot throw: '{entryName}'")
-		end 'entryThrows'
-	end 'eachFunc'
-end 'checkMainCannotThrow'
 
 // E3113: a function's own `throws` clause names a declared enum or union. The throw site derives the
 // error-flag shape from the value it throws, while the catch site derives it from the declared clause. A
@@ -7072,26 +7054,96 @@ function reportArgError(project Project, code ErrorCode, message String, argRang
 	reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: filePath)
 end 'reportArgError'
 
-// E3001 / E3002: the ENTRY function must exist and return ExitCode — the builtin, or an author's integer
-// alias named `ExitCode` whose range fits the builtin's.
-function checkMainFunction(project Project)
-	let entryName = String.from(project.entryFunctionName)
+let EntryFunctionParamCount = 0
 
-	if not project.funcReturnTypes.contains(project.entryFunctionName) 'noEntry'
-		if project.poison.holdsAFailedFile() or project.poison.holdsADeclarationNamed(project.entryFunctionName) or project.poison.holdsALostHeadNamed(project.entryFunctionName) 'aRefusedDeclarationMayBeIt'
-			return
-		end 'aRefusedDeclarationMayBeIt'
+function checkEntryFunctions(project Project, funcNames FunctionNameIndex) throws CompileError
+	let entries = try entryPointsOf(project, userFiles: splitSourcePaths(project).userFiles)
 
-		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.noMainFunction, message: "No '{entryName}' function found"))
+	for entry in entries 'eachEntry'
+		if project.funcReturnTypes.contains(entry.name) 'declared'
+			checkEntryShape(project, funcNames: funcNames, entry: entry)
+			continue
+		end 'declared'
+
+		if entry.entered and not aRefusedDeclarationMayBe(project, name: entry.name) 'noEntry'
+			reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.noMainFunction, message: "No '{String.from(entry.name)}' function found"))
+		end 'noEntry'
+	end 'eachEntry'
+end 'checkEntryFunctions'
+
+function aRefusedDeclarationMayBe(project Project, name ByteArray) returns bool
+	return project.poison.holdsAFailedFile() or project.poison.holdsADeclarationNamed(name) or project.poison.holdsALostHeadNamed(name)
+end 'aRefusedDeclarationMayBe'
+
+function checkEntryShape(project Project, funcNames FunctionNameIndex, entry EntryPoint)
+	let named = String.from(entry.name)
+	let position = try funcNames.byName.get(entry.name) otherwise 'notInTheModule'
+		if not aRefusedDeclarationMayBe(project, name: entry.name) 'unexplained'
+			panic("checkEntryShape: '{named}' is declared but the merged module holds no such function, and no refused declaration explains it")
+		end 'unexplained'
+
 		return
-	end 'noEntry'
+	end 'notInTheModule'
 
-	let returnType = try project.funcReturnTypes.get(project.entryFunctionName) otherwise panic("checkMainFunction: contains({entryName}) true but get({entryName}) failed")
+	let func = try funcNames.functions.get(position) otherwise panic("checkEntryShape: byName holds index {position} for '{named}', past the {funcNames.functions.count()} functions it indexes")
 
-	if not returnsExitCode(returnType) and not entryReturnsAnExitCodeDeclaration(project) 'wrongReturn'
-		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.mainWrongReturnType, message: "Function '{entryName}' must return ExitCode"))
+	let driverExport = driverExportModifierOf(entry, visibility: func.visibility)
+
+	let aMethodNamedByTokens = match driverExport 'unmarked'
+		spelled gives false
+		unspelled gives not entry.entered
+	end 'unmarked'
+
+	// The roster is a token-level over-approximation (a method written at the left margin is on it), so
+	// a roster name whose function here is not exported is skipped, not reported.
+	if aMethodNamedByTokens 'skipped'
+		return
+	end 'skipped'
+
+	let returnType = try project.funcReturnTypes.get(entry.name) otherwise panic("checkEntryShape: contains({named}) true but get({named}) failed")
+	let signature = try project.funcSignatures.get(entry.name) otherwise panic("checkEntryShape: '{named}' names a function parsed from source, which always has a signature")
+
+	let atTheName = match driverExport 'position'
+		spelled gives true
+		unspelled gives false
+	end 'position'
+
+	if signature.paramCount() != EntryFunctionParamCount 'takesParameters'
+		reportEntryShape(project, func: func, code: ErrorCode.entryFunctionTakesParameters, message: entryShapeMessage("Function '{named}' must take no parameters", fix: "give it no parameters", driverExport: driverExport), positioned: atTheName)
+	end 'takesParameters'
+
+	if not returnsExitCode(returnType) and not entryReturnsAnExitCodeDeclaration(project, signature: signature) 'wrongReturn'
+		reportEntryShape(project, func: func, code: ErrorCode.mainWrongReturnType, message: entryShapeMessage("Function '{named}' must return ExitCode", fix: "make it return ExitCode", driverExport: driverExport), positioned: atTheName)
 	end 'wrongReturn'
-end 'checkMainFunction'
+
+	if throwsClauseIsThrowing(func.throwsTypeName) 'throws'
+		reportEntryShape(project, func: func, code: ErrorCode.mainCannotThrow, message: entryShapeMessage("{named} cannot throw: '{named}'", fix: "remove its `throws` clause", driverExport: driverExport), positioned: true)
+	end 'throws'
+end 'checkEntryShape'
+
+function reportEntryShape(project Project, func IrFunction, code ErrorCode, message String, positioned bool)
+	if positioned 'atTheName'
+		reportAtFunctionName(project, func: func, code: code, message: message)
+		return
+	end 'atTheName'
+
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(code, message: message))
+end 'reportEntryShape'
+
+function driverExportModifierOf(entry EntryPoint, visibility Visibility) returns VisibilityModifier
+	if not entry.onRoster 'notOnTheRoster'
+		return VisibilityModifier.unspelled
+	end 'notOnTheRoster'
+
+	return visibilityModifierWordOf(visibility)
+end 'driverExportModifierOf'
+
+function entryShapeMessage(plain String, fix String, driverExport VisibilityModifier) returns String
+	return match driverExport 'form'
+		unspelled gives plain
+		spelled(word) gives "{plain}; every exported function of this file is a target or task, so {fix}, or remove `{visibilityModifierText(word)}` if it is a helper"
+	end 'form'
+end 'entryShapeMessage'
 
 // True when a return type is exactly the resolved ExitCode type. A void return
 // (no `returns` clause) is false — that is the E3002 case.
@@ -7102,14 +7154,12 @@ function returnsExitCode(returnType MaxonReturnType) returns bool
 	end 'r'
 end 'returnsExitCode'
 
-function entryReturnsAnExitCodeDeclaration(project Project) returns bool
-	let sig = try project.funcSignatures.get(project.entryFunctionName) otherwise return false
-
-	if not sourceSpelledAliasName(sig.returnAggregateName).equals(ExitCodeBuiltinName) 'notNamedExitCode'
+function entryReturnsAnExitCodeDeclaration(project Project, signature FuncSignature) returns bool
+	if not sourceSpelledAliasName(signature.returnAggregateName).equals(ExitCodeBuiltinName) 'notNamedExitCode'
 		return false
 	end 'notNamedExitCode'
 
-	return programSignaturesIn(project, asker: "entryReturnsAnExitCodeDeclaration").declaresAnExitStatusRange(sig.returnAggregateName)
+	return programSignaturesIn(project, asker: "entryReturnsAnExitCodeDeclaration").declaresAnExitStatusRange(signature.returnAggregateName)
 end 'entryReturnsAnExitCodeDeclaration'
 
 function isExitCodeType(t MaxonType) returns bool

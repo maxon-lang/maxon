@@ -40,7 +40,12 @@ for the host, runs the chosen target, and performs the build that target describ
 well as spell it out.
 
 **Its targets are its exported (or `public`) functions of no parameters returning `ExitCode`.** A
-non-zero return or a crash fails the build before anything is compiled.
+non-zero return or a crash fails the build before anything is compiled. Every build checks every
+target when the project file compiles, before it runs: one that declares a parameter, a defaulted one
+included, is **E3225**, one that does not return `ExitCode` is **E3002**, and one that throws is
+**E3054**, whichever target is asked for. A helper function in the project file drops its `export`
+(or `public`), which makes it no target. A function an inactive `#if` excludes is no target of the
+build.
 
 ```maxon
 // hello.maxproj

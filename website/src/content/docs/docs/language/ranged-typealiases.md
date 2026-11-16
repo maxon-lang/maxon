@@ -281,7 +281,7 @@ end 'bump'
 Windows and `int(0 to 255)` on Linux, macOS and WASI. A literal outside it is a compile error, and a
 computed value outside it panics at the `return`. A program's own `typealias ExitCode` may be `main`'s
 declared return type when it is an integer alias whose range lies within the builtin's; any other is
-**E3002**.
+**E3002**. A `main` that declares a parameter is **E3225**, reported beside E3002 when both apply.
 
 Integers are plain values: `var pos = start` copies, and advancing `pos` never changes `start`, so a ranged
 alias makes a safe loop cursor:

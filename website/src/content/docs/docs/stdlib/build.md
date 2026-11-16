@@ -6,7 +6,11 @@ sidebar:
 ---
 
 `Build` is how a target of a `.maxproj` project file, or a task of a `.maxtasks` file, describes what
-`maxon build` compiles. A target is an exported function of no parameters returning `ExitCode`; these
+`maxon build` compiles. A target is an exported function of no parameters returning `ExitCode`, and every build checks every
+exported function of the file for that shape
+([E3225](/docs/cli/error-codes/#e3225--entryfunctiontakesparameters),
+[E3002](/docs/cli/error-codes/#e3002--mainwrongreturntype),
+[E3054](/docs/cli/error-codes/#e3054--maincannotthrow)); these
 calls write the description as JSON to the file the driver names in `MAXON_BUILD_DESCRIPTION`, and the
 compiler reads it back. With that variable unset the description goes to stdout, so a project file run
 by hand can be inspected. A target describes one build, and a second description in the same run is

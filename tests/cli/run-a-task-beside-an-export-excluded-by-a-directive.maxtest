@@ -1,0 +1,18 @@
+let RunBesideAnExcludedExportCaseDirName = "run-a-task-beside-an-export-excluded-by-a-directive"
+let RunBesideAnExcludedExportTaskFileName = "tasks.maxtasks"
+let RunBesideAnExcludedExportAskedFor = "report"
+
+let RunBesideAnExcludedExportTasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function report() returns ExitCode\n\treturn 0\nend 'report'\n\n#if testing(true)\nexport function helper(code ExitCode) returns ExitCode\n\treturn code\nend 'helper'\n#endif\n"
+
+test 'a task runs beside an export an inactive directive excludes, whose shape is not checked'
+	let dir = freshCaseDir(RunBesideAnExcludedExportCaseDirName)
+	let tasks = dir.join(RunBesideAnExcludedExportTaskFileName)
+	writeStagedFile(tasks, content: RunBesideAnExcludedExportTasksSource)
+
+	let ran = spawnCompiler([RunCommandWord, RunBesideAnExcludedExportAskedFor], staged: dir)
+	let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+	Expect.equal(ran.exitCode(), expected: 0, message: "`maxon {RunCommandWord} {RunBesideAnExcludedExportAskedFor}` failed beside an export that `#if testing(true)` excludes from every build. {said}")
+
+	discardStagedDir(dir)
+end 'a task runs beside an export an inactive directive excludes, whose shape is not checked'

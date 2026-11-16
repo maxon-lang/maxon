@@ -959,6 +959,15 @@ release's version as its heading when the release is cut.
   E2015.
   Fix: give that type argument a concrete type, or pass the value it wraps as a type parameter of its own.
 
+- An entry function that declares a parameter, a parameter with a default value included, is E3225
+  (`Function 'main' must take no parameters`). In a `.maxproj` or `.maxtasks` every exported or `public`
+  function is a target or task, and every build or run of that file checks all of them: one that takes
+  parameters (E3225), does not return `ExitCode` (E3002) or throws (E3054) refuses `maxon build <target>`
+  or `maxon run <task>` whichever target or task is asked for, so an exported helper beside the targets
+  refuses them all.
+  Fix: remove `export` (or `public`) from a helper, or give it the entry shape: no parameters, returning
+  `ExitCode`, no `throws`. A program's `main` reads its command-line arguments with `CommandLine.args()`.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

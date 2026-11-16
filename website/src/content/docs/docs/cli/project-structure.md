@@ -67,7 +67,12 @@ the chosen target, and performs the build that target describes.
 build can compute what it compiles (read a directory, choose by host, derive a version from git) as well
 as list it. **Its targets are its exported (or `public`) functions of no parameters returning
 `ExitCode`**, declared at the left margin. A non-zero return or a crash fails the build and nothing is
-compiled.
+compiled. Every exported or `public` function of the file is a target, and every build checks all of
+them when the project file compiles, before anything runs: one that declares a parameter, a defaulted
+one included, is [E3225](/docs/cli/error-codes/#e3225--entryfunctiontakesparameters), one that does not return `ExitCode` is
+[E3002](/docs/cli/error-codes/#e3002--mainwrongreturntype), and one that throws is [E3054](/docs/cli/error-codes/#e3054--maincannotthrow).
+So `maxon build app` is refused when another export `helper` has the wrong shape; a helper drops its
+`export` (or `public`). A function an inactive `#if` excludes is no target of the build.
 
 ```maxon
 // myapp.maxproj

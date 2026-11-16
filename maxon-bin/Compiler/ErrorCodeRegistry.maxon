@@ -507,10 +507,22 @@ export enum ErrorCode
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
 
-	// 'main' declares a return type other than ExitCode. A program's own `typealias ExitCode` is accepted
-	// as the return type when it is an integer alias whose range fits the builtin ExitCode's (`0 to 255`,
-	// `0 to u32.max` on Windows).
+	// An entry function declares a return type other than ExitCode: a program's `main`, or any exported
+	// or `public` function of a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked
+	// on every build or run of that file. A program's own `typealias ExitCode` is accepted as the return
+	// type when it is an integer alias whose range fits the builtin ExitCode's (`0 to 255`, `0 to u32.max`
+	// on Windows). Make the function return ExitCode; in a `.maxproj` or `.maxtasks`, a function that is a
+	// helper rather than a target or task drops its `export` (or `public`) instead.
 	mainWrongReturnType = "E3002"
+
+	// An entry function declares parameters: a program's `main`, or any exported or `public` function of
+	// a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked on every build or run
+	// of that file, so `maxon build app` is refused when another export `helper` takes a parameter. An
+	// entry is called with no arguments, so a parameter with a default value is refused too:
+	// `function main(code ExitCode = 0)`. Remove the parameters and obtain the values another way; a
+	// program reads its command-line arguments with `CommandLine.args()`. In a `.maxproj` or `.maxtasks`,
+	// a function that is a helper drops its `export` (or `public`) instead.
+	entryFunctionTakesParameters = "E3225"
 
 	// A call names a function that does not exist -- a typo, or a callee not visible from here.
 	// A dotted call, whether written as an expression, a statement, under `try` or `async`, or in a
@@ -714,7 +726,10 @@ export enum ErrorCode
 	// Two arguments of one call target the same parameter.
 	callDuplicateArg = "E3038"
 
-	// 'main' is declared 'throws'. There is no caller left to handle the error.
+	// An entry function is declared 'throws': a program's `main`, or any exported or `public` function of
+	// a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked on every build or run
+	// of that file. There is no caller left to handle the error. Remove the `throws` clause; in a
+	// `.maxproj` or `.maxtasks`, a function that is a helper drops its `export` (or `public`) instead.
 	mainCannotThrow = "E3054"
 
 	// 'try' is applied to a call that cannot throw. A `/` or `mod` whose divisor is proven non-zero and a

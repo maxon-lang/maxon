@@ -21,6 +21,9 @@ The value `main` returns is the process exit code. `ExitCode`'s range depends on
 `u32.max` on Windows, `0` to `255` on Linux, macOS and WASI. A literal outside that range is a compile error,
 and a computed one panics at the `return`. A project run with [`maxon test`](#testing)
 needs no `main`; a program compiled with `maxon build` or `maxon execute` without one is **E3001**.
+`main` takes no parameters, since it is called with no arguments: `function main(code ExitCode = 0)` is
+**E3225**, a parameter with a default value included. A program reads its command-line arguments with
+[`CommandLine.args()`](STDLIB_REFERENCE.md#commandline).
 
 On Linux and macOS a program started with its standard input, output or error closed finds that stream open
 on `/dev/null`: reads see end of input, writes are discarded, and a child that inherits the stream gets the
@@ -996,7 +999,7 @@ end 'bump'
 Windows and `int(0 to 255)` on Linux, macOS and WASI. A literal outside it is a compile error, and a
 computed value outside it panics at the `return`. A program's own `typealias ExitCode` may be `main`'s
 declared return type when it is an integer alias whose range lies within the builtin's; any other is
-**E3002**.
+**E3002**. A `main` that declares a parameter is **E3225**, reported beside E3002 when both apply.
 
 Integers are plain values: `var pos = start` copies, and advancing `pos` never changes `start`, so a ranged
 alias makes a safe loop cursor:
@@ -6273,7 +6276,12 @@ for the host, runs the chosen target, and performs the build that target describ
 well as spell it out.
 
 **Its targets are its exported (or `public`) functions of no parameters returning `ExitCode`.** A
-non-zero return or a crash fails the build before anything is compiled.
+non-zero return or a crash fails the build before anything is compiled. Every build checks every
+target when the project file compiles, before it runs: one that declares a parameter, a defaulted one
+included, is **E3225**, one that does not return `ExitCode` is **E3002**, and one that throws is
+**E3054**, whichever target is asked for. A helper function in the project file drops its `export`
+(or `public`), which makes it no target. A function an inactive `#if` excludes is no target of the
+build.
 
 ```maxon
 // hello.maxproj

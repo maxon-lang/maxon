@@ -1,0 +1,14 @@
+let MaxprojExportExcludedByADirectiveCaseDirName = "maxproj-export-excluded-by-a-directive-is-not-checked"
+let ExcludedByADirectiveAskedFor = "app"
+
+test 'an export an inactive directive excludes is not a target of the build, so its shape is not checked'
+	let staged = stagedProject(MaxprojExportExcludedByADirectiveCaseDirName, fixture: MaxprojHelperExportExcludedByADirectiveFixtureName)
+
+	let build = spawnManifestBuild(staged, options: [ExcludedByADirectiveAskedFor])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode(), expected: 0, message: "`maxon build {ExcludedByADirectiveAskedFor}` failed beside an export that `#if testing(true)` excludes from every build. {said}")
+	Expect.isTrue(File.exists(executableIn(staged.join(ProjectProductsDirName), stem: ProjectName)), message: "the build wrote no `{ProjectProductsDirName}/{ProjectName}`. {said}")
+
+	discardStagedDir(caseRootOf(staged))
+end 'an export an inactive directive excludes is not a target of the build, so its shape is not checked'

@@ -1,0 +1,14 @@
+let MaxprojMethodAtTheLeftMarginCaseDirName = "maxproj-method-at-the-left-margin-is-not-checked-as-a-target"
+let MethodAtTheLeftMarginAskedFor = "app"
+
+test 'an exported method written at the left margin of a type is not a free function of the build, so a target beside it builds'
+	let staged = stagedProject(MaxprojMethodAtTheLeftMarginCaseDirName, fixture: MaxprojMethodAtTheLeftMarginFixtureName)
+
+	let build = spawnManifestBuild(staged, options: [MethodAtTheLeftMarginAskedFor])
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode(), expected: 0, message: "`maxon build {MethodAtTheLeftMarginAskedFor}` failed beside a type whose exported method starts at the left margin. {said}")
+	Expect.isTrue(File.exists(executableIn(staged.join(ProjectProductsDirName), stem: ProjectName)), message: "the build wrote no `{ProjectProductsDirName}/{ProjectName}`. {said}")
+
+	discardStagedDir(caseRootOf(staged))
+end 'an exported method written at the left margin of a type is not a free function of the build, so a target beside it builds'

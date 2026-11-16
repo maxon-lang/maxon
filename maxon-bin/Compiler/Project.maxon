@@ -170,12 +170,29 @@ export enum VisibilityModifierWord
 	wordPublic
 end 'VisibilityModifierWord'
 
+union VisibilityModifier
+	spelled(word VisibilityModifierWord)
+	unspelled
+end 'VisibilityModifier'
+
+function visibilityModifierWordOf(visibility Visibility) returns VisibilityModifier
+	return match visibility 'tier'
+		global gives VisibilityModifier.spelled(VisibilityModifierWord.wordExport)
+		public gives VisibilityModifier.spelled(VisibilityModifierWord.wordPublic)
+		unexported gives VisibilityModifier.unspelled
+	end 'tier'
+end 'visibilityModifierWordOf'
+
+function visibilityModifierText(word VisibilityModifierWord) returns String
+	match word 'word'
+		wordExport then return "export"
+		wordPublic then return "public"
+	end 'word'
+end 'visibilityModifierText'
+
 // The quoted spelling a diagnostic prints. The words themselves are reserved in `Lexer.KeywordTable`.
 function visibilityModifierSpelling(word VisibilityModifierWord) returns String
-	match word 'word'
-		wordExport then return "'export'"
-		wordPublic then return "'public'"
-	end 'word'
+	return "'{visibilityModifierText(word)}'"
 end 'visibilityModifierSpelling'
 
 function visibilitySpelledBy(kind TokenKind) returns Visibility

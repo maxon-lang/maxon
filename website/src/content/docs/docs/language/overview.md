@@ -26,6 +26,9 @@ The value `main` returns is the process exit code. `ExitCode`'s range depends on
 `u32.max` on Windows, `0` to `255` on Linux, macOS and WASI. A literal outside that range is a compile error,
 and a computed one panics at the `return`. A project run with [`maxon test`](/docs/language/testing/)
 needs no `main`; a program compiled with `maxon build` or `maxon execute` without one is **E3001**.
+`main` takes no parameters, since it is called with no arguments: `function main(code ExitCode = 0)` is
+**E3225**, a parameter with a default value included. A program reads its command-line arguments with
+[`CommandLine.args()`](/docs/stdlib/io/#commandline).
 
 On Linux and macOS a program started with its standard input, output or error closed finds that stream open
 on `/dev/null`: reads see end of input, writes are discarded, and a child that inherits the stream gets the

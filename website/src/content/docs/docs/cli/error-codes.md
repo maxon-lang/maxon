@@ -253,7 +253,7 @@ The program declares no 'main' function.
 
 ### E3002 — `mainWrongReturnType`
 
-'main' declares a return type other than ExitCode. A program's own `typealias ExitCode` is accepted as the return type when it is an integer alias whose range fits the builtin ExitCode's (`0 to 255`, `0 to u32.max` on Windows).
+An entry function declares a return type other than ExitCode: a program's `main`, or any exported or `public` function of a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked on every build or run of that file. A program's own `typealias ExitCode` is accepted as the return type when it is an integer alias whose range fits the builtin ExitCode's (`0 to 255`, `0 to u32.max` on Windows). Make the function return ExitCode; in a `.maxproj` or `.maxtasks`, a function that is a helper rather than a target or task drops its `export` (or `public`) instead.
 
 ### E3004 — `callUnknownFunction`
 
@@ -345,7 +345,7 @@ Two arguments of one call target the same parameter.
 
 ### E3054 — `mainCannotThrow`
 
-'main' is declared 'throws'. There is no caller left to handle the error.
+An entry function is declared 'throws': a program's `main`, or any exported or `public` function of a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked on every build or run of that file. There is no caller left to handle the error. Remove the `throws` clause; in a `.maxproj` or `.maxtasks`, a function that is a helper drops its `export` (or `public`) instead.
 
 ### E3055 — `tryRequiresThrowingFunction`
 
@@ -932,6 +932,10 @@ A linear value is not consumed exactly once. A type with a finalizer, a method t
 ### E3224 — `semanticLinearRefused`
 
 A linear value is used where it cannot be consumed exactly once. It lives only in locals, parameters and message arguments: a field, a container or other type argument, a tuple item, a closure capture, a promise payload, a message reply, a union stored in a field, an argument of an `async` call, the result of an `async` call and an argument of an interface or function value call are refused. A linear value lent to code that does not own it (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`) is not consumed there, returned or built into a union. `consuming self` belongs to a method of a `type` that declares a finalizer, and `destruct self` is written in a method that takes `consuming self`, on a `type` that holds fields. A `match` over a union with a linear payload binds the payload in every arm that covers its case and consumes it there, and a `default` arm cannot cover such a case. Carry the value in a local or a message argument, and consume it where it is received.
+
+### E3225 — `entryFunctionTakesParameters`
+
+An entry function declares parameters: a program's `main`, or any exported or `public` function of a `.maxproj` or `.maxtasks`, each of which is a target or task and is checked on every build or run of that file, so `maxon build app` is refused when another export `helper` takes a parameter. An entry is called with no arguments, so a parameter with a default value is refused too: `function main(code ExitCode = 0)`. Remove the parameters and obtain the values another way; a program reads its command-line arguments with `CommandLine.args()`. In a `.maxproj` or `.maxtasks`, a function that is a helper drops its `export` (or `public`) instead.
 
 ## Intermediate Representation (E4xxx)
 

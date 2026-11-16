@@ -283,9 +283,14 @@ maxon run                     # list the tasks
 maxon run <task> [args...]    # run one
 ```
 
-A task is an exported (or `public`) function of no parameters returning `ExitCode`. It is asked for by
-its name with each `_` written `-`: `maxon run build-extension` runs `build_extension`. The `.maxtasks`
-file is an ordinary Maxon program with the whole standard library available, and it stands apart from
+A task is an exported (or `public`) function of no parameters returning `ExitCode`. Every exported or
+`public` function of the file is a task, and every run checks all of them when the tasks file compiles,
+before anything runs: one that declares a parameter, a defaulted one included, is [E3225](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3225), one that
+does not return `ExitCode` is [E3002](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3002), and one that throws is
+[E3054](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3054). So `maxon run report` is refused beside an exported `helper` of the wrong shape; a helper
+drops its `export` (or `public`). A function an inactive `#if` excludes is no task of the run. A task is
+asked for by its name with each `_` written `-`: `maxon run build-extension` runs `build_extension`. The
+`.maxtasks` file is an ordinary Maxon program with the whole standard library available, and it stands apart from
 every build: it marks no project, and a build compiles `.maxon` files only. See
 [The task file](#the-task-file).
 
@@ -1230,7 +1235,12 @@ the chosen target, and performs the build that target describes.
 build can compute what it compiles (read a directory, choose by host, derive a version from git) as well
 as list it. **Its targets are its exported (or `public`) functions of no parameters returning
 `ExitCode`**, declared at the left margin. A non-zero return or a crash fails the build and nothing is
-compiled.
+compiled. Every exported or `public` function of the file is a target, and every build checks all of
+them when the project file compiles, before anything runs: one that declares a parameter, a defaulted
+one included, is [E3225](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3225), one that does not return `ExitCode` is
+[E3002](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3002), and one that throws is [E3054](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3054).
+So `maxon build app` is refused when another export `helper` has the wrong shape; a helper drops its
+`export` (or `public`). A function an inactive `#if` excludes is no target of the build.
 
 ```maxon
 // myapp.maxproj

@@ -67,9 +67,11 @@ export function printEntryWords(declared TaskNameArray)
 end 'printEntryWords'
 
 function taskNamesIn(source String) returns TaskNameArray throws LexerError
-	let names = TaskNameArray.create(0)
+	return taskNamesInTokens(try tokenize(source, keywords: KeywordTable.create()))
+end 'taskNamesIn'
 
-	let tokens = try tokenize(source, keywords: KeywordTable.create())
+function taskNamesInTokens(tokens TokenArray) returns TaskNameArray
+	let names = TaskNameArray.create(0)
 	let count = tokens.count()
 
 	if count < 4 'tooShortToDeclareOne'
@@ -89,7 +91,7 @@ function taskNamesIn(source String) returns TaskNameArray throws LexerError
 	end 'scan'
 
 	return names
-end 'taskNamesIn'
+end 'taskNamesInTokens'
 
 union TaskScanError implements Error
 	notATaskDeclaration

@@ -5040,7 +5040,11 @@ at once. It is what `scripts/multicore-stress/cown-multi-torture.maxon` runs.
 ## Build
 
 `Build` is how a target of a `.maxproj` project file, or a task of a `.maxtasks` file, describes what
-`maxon build` compiles. A target is an exported function of no parameters returning `ExitCode`; these
+`maxon build` compiles. A target is an exported function of no parameters returning `ExitCode`, and every build checks every
+exported function of the file for that shape
+([E3225](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3225),
+[E3002](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3002),
+[E3054](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3054)); these
 calls write the description as JSON to the file the driver names in `MAXON_BUILD_DESCRIPTION`, and the
 compiler reads it back. With that variable unset the description goes to stdout, so a project file run
 by hand can be inspected. A target describes one build, and a second description in the same run is

@@ -1,0 +1,24 @@
+let RunBesideAHelperReturningAStringCaseDirName = "run-refuses-a-task-beside-a-helper-export-returning-a-string"
+let RunBesideAHelperReturningAStringTaskFileName = "tasks.maxtasks"
+let RunBesideAHelperReturningAStringAskedFor = "report"
+let RunBesideAHelperReturningAStringCode = "E3002"
+let RunBesideAHelperReturningAStringNamed = "'helper'"
+let RunBesideAHelperReturningAStringFix = "remove `export`"
+
+let RunBesideAHelperReturningAStringTasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function report() returns ExitCode\n\treturn 0\nend 'report'\n\nexport function helper() returns String\n\treturn \"report\"\nend 'helper'\n"
+
+test 'a task is refused when another export of the tasks file does not return ExitCode, naming that export and the fix'
+	let dir = freshCaseDir(RunBesideAHelperReturningAStringCaseDirName)
+	let tasks = dir.join(RunBesideAHelperReturningAStringTaskFileName)
+	writeStagedFile(tasks, content: RunBesideAHelperReturningAStringTasksSource)
+
+	let refused = spawnCompiler([RunCommandWord, RunBesideAHelperReturningAStringAskedFor], staged: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode(), expected: 1, message: "`maxon {RunCommandWord} {RunBesideAHelperReturningAStringAskedFor}` ran beside an export that does not return ExitCode. {said}")
+	Expect.contains(refused.stderr, needle: RunBesideAHelperReturningAStringCode, message: "the refusal did not carry {RunBesideAHelperReturningAStringCode}. {said}")
+	Expect.contains(refused.stderr, needle: RunBesideAHelperReturningAStringNamed, message: "the refusal did not name the offending export. {said}")
+	Expect.contains(refused.stderr, needle: RunBesideAHelperReturningAStringFix, message: "the refusal did not give the fix for a helper. {said}")
+
+	discardStagedDir(dir)
+end 'a task is refused when another export of the tasks file does not return ExitCode, naming that export and the fix'

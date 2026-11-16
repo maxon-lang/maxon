@@ -1,0 +1,24 @@
+let RunBesideAHelperWithAParameterCaseDirName = "run-refuses-a-task-beside-a-helper-export-with-a-parameter"
+let RunBesideAHelperWithAParameterTaskFileName = "tasks.maxtasks"
+let RunBesideAHelperWithAParameterAskedFor = "report"
+let RunBesideAHelperWithAParameterCode = "E3225"
+let RunBesideAHelperWithAParameterNamed = "'helper'"
+let RunBesideAHelperWithAParameterFix = "remove `export`"
+
+let RunBesideAHelperWithAParameterTasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function report() returns ExitCode\n\treturn 0\nend 'report'\n\nexport function helper(code ExitCode) returns ExitCode\n\treturn code\nend 'helper'\n"
+
+test 'a task is refused when another export of the tasks file takes a parameter, naming that export and the fix'
+	let dir = freshCaseDir(RunBesideAHelperWithAParameterCaseDirName)
+	let tasks = dir.join(RunBesideAHelperWithAParameterTaskFileName)
+	writeStagedFile(tasks, content: RunBesideAHelperWithAParameterTasksSource)
+
+	let refused = spawnCompiler([RunCommandWord, RunBesideAHelperWithAParameterAskedFor], staged: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode(), expected: 1, message: "`maxon {RunCommandWord} {RunBesideAHelperWithAParameterAskedFor}` ran beside an export that takes a parameter. {said}")
+	Expect.contains(refused.stderr, needle: RunBesideAHelperWithAParameterCode, message: "the refusal did not carry {RunBesideAHelperWithAParameterCode}. {said}")
+	Expect.contains(refused.stderr, needle: RunBesideAHelperWithAParameterNamed, message: "the refusal did not name the offending export. {said}")
+	Expect.contains(refused.stderr, needle: RunBesideAHelperWithAParameterFix, message: "the refusal did not give the fix for a helper. {said}")
+
+	discardStagedDir(dir)
+end 'a task is refused when another export of the tasks file takes a parameter, naming that export and the fix'

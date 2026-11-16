@@ -390,31 +390,82 @@ function namesWithinAUnionCasesCompanion(signatures ProgramSignatures, name Byte
 	return namesWithinAUnionCasesCompanion(signatures, name: owner)
 end 'namesWithinAUnionCasesCompanion'
 
+type EntryPoint
+	let name as immutable ByteArray
+	let entered as bool
+	let onRoster as bool
+
+	static function create(name immutable ByteArray, entered bool, onRoster bool) returns Self
+		return Self{name: name, entered: entered, onRoster: onRoster}
+	end 'create'
+end 'EntryPoint'
+
+typealias EntryPointArray = Array with EntryPoint
+
 // The functions nothing in the source calls. The entry is `Project.entryFunctionName` rather than
 // the literal `main`: a `main` that another entry has displaced needs a caller like any other
 // export. Every target of a `.maxproj` and every task of a `.maxtasks` counts, not only the one
 // this build enters at: the driver compiles the file with one of them as the entry and reaches the
-// others by name. They are read through the driver's own `taskNamesIn`, so the two cannot disagree
-// on what one is.
+// others by name. They are found by the driver's own scan rule (`taskNameAt`), so the two cannot
+// disagree on what one is.
 function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
 	let names = EntryPointNameSet.create()
-	names.insert(project.entryFunctionName)
+	let entries = try entryPointsOf(project, userFiles: userFiles)
+
+	for entry in entries 'eachEntry'
+		names.insert(entry.name)
+	end 'eachEntry'
+
+	return names
+end 'entryPointNamesOf'
+
+function entryPointsOf(project Project, userFiles FilePathArray) returns EntryPointArray throws CompileError
+	let entered = project.entryFunctionName
+	let roster = try driverTaskNamesOf(project, userFiles: userFiles)
+	let listed = EntryPointNameSet.create()
+	let entries = EntryPointArray.create(0)
+	var enteredIsOnRoster = false
+
+	for task in roster 'eachTask'
+		let name = freeze task.toByteArray()
+
+		if name == entered 'theEntered'
+			enteredIsOnRoster = true
+			continue
+		end 'theEntered'
+
+		if listed.contains(name) 'alreadyListed'
+			continue
+		end 'alreadyListed'
+
+		listed.insert(name)
+		entries.push(EntryPoint.create(name, entered: false, onRoster: true))
+	end 'eachTask'
+
+	entries.insert(0, value: EntryPoint.create(entered, entered: true, onRoster: enteredIsOnRoster))
+
+	return entries
+end 'entryPointsOf'
+
+function driverTaskNamesOf(project Project, userFiles FilePathArray) returns TaskNameArray throws CompileError
+	let names = TaskNameArray.create(0)
 
 	for path in userFiles 'eachFile'
 		if not isDriverFileName(path.filename()) 'notADriverFile'
 			continue
 		end 'notADriverFile'
 
-		let entry = try sourceEntryOf(project, path: path)
-		let declared = try taskNamesIn(entry.content) otherwise continue
+		// Active tokens, unlike the driver's roster over the raw source: an export an inactive `#if`
+		// excludes is no target of this build (maxproj-export-excluded-by-a-directive-is-not-checked).
+		let tokens = try queryActiveTokens(project, path: path)
 
-		for task in declared 'eachTask'
-			names.insert(freeze task.toByteArray())
+		for task in taskNamesInTokens(tokens) 'eachTask'
+			names.push(task)
 		end 'eachTask'
 	end 'eachFile'
 
 	return names
-end 'entryPointNamesOf'
+end 'driverTaskNamesOf'
 
 function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPoints EntryPointNameSet, tracked TrackedDecls)
 	for func in module.functions 'eachFunc'

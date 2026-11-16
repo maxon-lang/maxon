@@ -211,6 +211,13 @@ tests/
     maxproj-named-target-runs-its-underscored-function.maxtest   `build <dashed-name>` runs the target whose underscored name it spells
     maxproj-public-target-is-a-target.maxtest                 a `public` function is a target exactly as an exported one is
     maxproj-target-describing-two-builds-refused.maxtest      a target that describes two builds is refused, naming the count
+    maxproj-target-with-a-parameter-refused.maxtest           a target that takes a parameter is refused with E3225 when the project file compiles, before it runs
+    maxproj-helper-export-with-a-parameter-refuses-another-target.maxtest   an exported helper that takes a parameter refuses a build of another target (E3225), naming the fix
+    maxproj-helper-export-returning-a-string-refuses-another-target.maxtest   an exported helper that does not return `ExitCode` refuses a build of another target (E3002)
+    maxproj-helper-export-that-throws-refuses-another-target.maxtest   an exported helper that throws refuses a build of another target (E3054)
+    maxproj-public-helper-export-names-public-in-the-fix.maxtest   the refusal of a `public` helper tells it to remove `public`
+    maxproj-export-excluded-by-a-directive-is-not-checked.maxtest   an export an inactive `#if` excludes is no target, and the build succeeds beside it whatever its shape
+    maxproj-method-at-the-left-margin-is-not-checked-as-a-target.maxtest   an exported method written at a type's left margin is no target, and the build succeeds beside it
     maxproj-two-in-one-directory-refused.maxtest              two `.maxproj` files in one directory are refused, naming both
     maxproj-nested-below-another-project-refused.maxtest      a `.maxproj` below the project root is refused by the outer build (E2074)
     maxproj-built-from-inside-a-nested-project-refused.maxtest   a bare `build` inside that nested project is refused too, naming both project files
@@ -469,6 +476,11 @@ tests/
     run-a-task-whose-name-leads-with-an-underscore.maxtest  a task whose name leads with `_` is listed by a word that runs it
     run-beside-an-unlexable-tasks-file-reports-the-lexer-error.maxtest   a task file that fails to lex is reported as a lexer error
     run-beside-only-an-old-tasks-maxon-is-refused.maxtest   a directory holding a `tasks.maxon` and no `.maxtasks` has no tasks
+    run-refuses-a-task-that-takes-a-parameter.maxtest       a task that takes a parameter is refused with E3225 when the tasks file compiles, before it runs
+    run-refuses-a-task-beside-a-helper-export-with-a-parameter.maxtest   a task beside an exported helper that takes a parameter is refused (E3225)
+    run-refuses-a-task-beside-a-helper-export-returning-a-string.maxtest   a task beside an exported helper that does not return `ExitCode` is refused (E3002)
+    run-refuses-a-task-beside-a-helper-export-that-throws.maxtest   a task beside an exported helper that throws is refused (E3054)
+    run-a-task-beside-an-export-excluded-by-a-directive.maxtest   a task runs beside an export an inactive `#if` excludes
     census-by-tag-reports-a-table.maxtest                   `--census-by-tag` prints the residency census's per-tag table, and nothing prints it without the flag
     interner-presize-never-regrows.maxtest                  every source file's type-name interner reports itself under `--log=compiler:debug`, and none of them regrew
     a-later-fold-round-re-merges-only-the-files-after-the-first-that-moved.maxtest   a program calling `URL.parse` folds the front end at least twice under `--log=compiler:debug`, and every round after the first reports `R of N file(s) re-merged` with R below N
@@ -1343,10 +1355,11 @@ so it is held to the same rules as a path build — the sidecar the target turne
 `--coverage` without the sidecar is refused whichever of the two turned it off, a busy checkout refuses
 it, and a description field the driver cannot use is refused, with no default put in its place. The
 `maxproj-*` cases hold the project file's own rules: the default output, target selection by dashed
-word, one build per target, one `.maxproj` per directory, and one project per tree (E2074). The `a-*`
-cases hold the compiler-version record a project build keeps under the case's own cache root, and the
-breaking-change report a build gives over an older release's record. The shared
-half lives in `BuildManifestHarness.maxon`; see the note under `debug/`. A fixture may hold
+word, one build per target, every export of the file holds the target shape on every build (E3225,
+E3002, E3054), one `.maxproj` per directory, and one project per tree (E2074). The `a-*` cases hold the
+compiler-version record a project build keeps under the case's own cache root, and the breaking-change
+report a build gives over an older release's record. The shared half lives in
+`BuildManifestHarness.maxon`; see the note under `debug/`. A fixture may hold
 subdirectories, which is how the nested-project cases stage a project inside another.
 
 ⛔ **THE REFUSAL CASES ASSERT THE ABSENCE OF AN EXECUTABLE BESIDE THE EXIT CODE.** An instrumented binary

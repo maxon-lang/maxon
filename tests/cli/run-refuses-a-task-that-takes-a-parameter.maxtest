@@ -1,0 +1,22 @@
+let RunRefusesATaskThatTakesAParameterCaseDirName = "run-refuses-a-task-that-takes-a-parameter"
+let RunRefusesATaskThatTakesAParameterTaskFileName = "tasks.maxtasks"
+let RunRefusesATaskThatTakesAParameterAskedFor = "helper"
+let RunRefusesATaskThatTakesAParameterCode = "E3225"
+let RunRefusesATaskThatTakesAParameterWording = "Function 'helper' must take no parameters"
+
+let RunRefusesATaskThatTakesAParameterTasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function helper(code ExitCode) returns ExitCode\n\treturn code\nend 'helper'\n"
+
+test 'a task that takes a parameter is refused when the tasks file compiles, before it runs'
+	let dir = freshCaseDir(RunRefusesATaskThatTakesAParameterCaseDirName)
+	let tasks = dir.join(RunRefusesATaskThatTakesAParameterTaskFileName)
+	writeStagedFile(tasks, content: RunRefusesATaskThatTakesAParameterTasksSource)
+
+	let refused = spawnCompiler([RunCommandWord, RunRefusesATaskThatTakesAParameterAskedFor], staged: dir)
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode(), expected: 1, message: "`maxon {RunCommandWord}` ran a task that takes a parameter. {said}")
+	Expect.contains(refused.stderr, needle: RunRefusesATaskThatTakesAParameterCode, message: "the refusal did not carry {RunRefusesATaskThatTakesAParameterCode}. {said}")
+	Expect.contains(refused.stderr, needle: RunRefusesATaskThatTakesAParameterWording, message: "the refusal did not state that a task takes no parameters. {said}")
+
+	discardStagedDir(dir)
+end 'a task that takes a parameter is refused when the tasks file compiles, before it runs'

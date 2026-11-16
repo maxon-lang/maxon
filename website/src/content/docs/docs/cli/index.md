@@ -286,9 +286,14 @@ maxon run                     # list the tasks
 maxon run <task> [args...]    # run one
 ```
 
-A task is an exported (or `public`) function of no parameters returning `ExitCode`. It is asked for by
-its name with each `_` written `-`: `maxon run build-extension` runs `build_extension`. The `.maxtasks`
-file is an ordinary Maxon program with the whole standard library available, and it stands apart from
+A task is an exported (or `public`) function of no parameters returning `ExitCode`. Every exported or
+`public` function of the file is a task, and every run checks all of them when the tasks file compiles,
+before anything runs: one that declares a parameter, a defaulted one included, is [E3225](/docs/cli/error-codes/#e3225--entryfunctiontakesparameters), one that
+does not return `ExitCode` is [E3002](/docs/cli/error-codes/#e3002--mainwrongreturntype), and one that throws is
+[E3054](/docs/cli/error-codes/#e3054--maincannotthrow). So `maxon run report` is refused beside an exported `helper` of the wrong shape; a helper
+drops its `export` (or `public`). A function an inactive `#if` excludes is no task of the run. A task is
+asked for by its name with each `_` written `-`: `maxon run build-extension` runs `build_extension`. The
+`.maxtasks` file is an ordinary Maxon program with the whole standard library available, and it stands apart from
 every build: it marks no project, and a build compiles `.maxon` files only. See
 [The task file](/docs/cli/project-structure/#the-task-file).
 
