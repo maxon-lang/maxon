@@ -128,7 +128,7 @@ Three things pin what the compiler emits:
 
 - **A `TargetIr:<target>` block** holds the Target IR the compiler renders for the case on that lane: every
   function of the case's own source that the build keeps out of line, plus the withheld bodies a
-  `RequiredRuntime` block names. It is a gate on
+  `RequiredFunctions` block names. It is a gate on
   the lane it names. When the run's lane has a block, a compile that renders different text fails the case
   and the failure shows the first differing line; only the block for the run's own lane is compared. The
   fence is always qualified, and the target is one of `x64-windows`, `x64-linux`, `arm64-macos` or `arm64-linux`: an
@@ -150,7 +150,7 @@ Three things pin what the compiler emits:
   none either, so the case names that lane in its `unsupported-targets` marker. A run with `--update-required`
   proceeds past an owed lane: it writes the one lane it is for, so the lanes still owed are named by the next
   plain run.
-- **A `RequiredRuntime` block**, one name per line, which names every function the case's subject lives
+- **A `RequiredFunctions` block**, one name per line, which names every function the case's subject lives
   in: a body the Target IR would otherwise withhold — an emitted runtime function, or a `stdlib/` body the
   program reaches — or one of the program's own functions. The compiler keeps a named function out of
   line and refuses a build that does not render every name, so the pin of a named program function shows
@@ -161,7 +161,7 @@ Three things pin what the compiler emits:
   `ir-specs/emitted-runtime-body.md` is the subject and the canonical example. It says nothing about the
   run, so it does not satisfy `pinsAnyResult` — a case carrying it still owes an exit code, a stdout or a
   stderr block.
-- **A `tests/` case over `--emit-ir` or `--emit-ir-runtime=<name>` output**, which spawns the compiler at
+- **A `tests/` case over `--emit-ir` or `--emit-ir-function=<name>` output**, which spawns the compiler at
   a fixture and reads the printed IR itself. This is where an emitted-code property that must go RED
   belongs; `tests/emittedRuntime/` is the corpus, and `tests/README.md` states what each one costs.
 
@@ -349,7 +349,7 @@ line:
 A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode `, one each of the portable
 ` ```stdout `, ` ```stderr ` and ` ```maxoncstderr `, one target-qualified block per target, and one
 ` ```mm-trace ` or ` ```log-trace ` block. ` ```RequiredData `, ` ```RequiredRdata ` and
-` ```RequiredRuntime ` blocks accumulate. A block closes on a line holding only ` ``` `.
+` ```RequiredFunctions ` blocks accumulate. A block closes on a line holding only ` ``` `.
 
 Prose blocks, a bare ` ``` ` fence or ` ```text `, are skipped whole wherever they sit in the region, so
 a marker or fence quoted inside one reads as prose.
@@ -598,7 +598,7 @@ counts as run alone either way, and a batched PASS stands.
 These cases always compile and run on their own: a compile-error case; a case pinning `stderr`; an `Args`
 marker; a `stdin`, `procs`, `preempt`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
 `AsyncTrace` or `DebugInfo` marker; a stdlib-overlay or runtime-file section; a multi-file case;
-`__file__` or `__line__` in the source; a `TargetIr`, `RequiredRuntime`, `RequiredData` or
+`__file__` or `__line__` in the source; a `TargetIr`, `RequiredFunctions`, `RequiredData` or
 `RequiredRdata` block; a top-level `export` declaration, which the lint rules refuse in a multi-file
 program when no file outside its directory uses it (E3092); and a `main` that is not exactly
 `function main() returns ExitCode` or `function main()` with one `end 'main'`. So does a case whose source

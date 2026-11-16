@@ -18,7 +18,7 @@ argument sits at `[rbp + 0x30]`: 16 bytes for the return address and the saved
 parameter — therefore lands at exactly `[rbp + 128]`.
 
 ⚠ **The pins are the authority for those numbers**: `sum22` is kept out of line by its
-`RequiredRuntime` block, and on both x64 lanes its `func @sum22` loads `a16` from `[rbp + 120]`
+`RequiredFunctions` block, and on both x64 lanes its `func @sum22` loads `a16` from `[rbp + 120]`
 and `a17` from `[rbp + 128]`, so the boundary parameter is `a17`. The Target IR names a
 displacement, not its encoding: the encoder writes `120` as a disp8 and `128` as a disp32, so a
 wrong encoding shows in the exit code, not in the pin. **So each program sums EVERY parameter and
@@ -42,7 +42,7 @@ exhibit the bug this spec exists to catch.
 
 ## Tests
 
-<!-- test: twenty-second-param-at-rbp-128 -->
+<!-- test: seventeenth-param-at-rbp-128 -->
 <!-- unsupported-targets: arm64-macos, arm64-linux -->
 ⚠ **THE SUBJECT IS THE x64 ENCODING**: an operand past `rbp-128` needs a disp32 rather than a disp8. That
 boundary is this ISA's; arm64 addresses a frame slot differently and the case would assert nothing there.
@@ -63,7 +63,7 @@ end 'main'
 200
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 sum22
 ```
 ```TargetIr:x64-windows
@@ -212,7 +212,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at twenty-second-param-at-rbp-128.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventeenth-param-at-rbp-128.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -370,7 +370,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at twenty-second-param-at-rbp-128.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventeenth-param-at-rbp-128.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -407,7 +407,7 @@ end 'main'
 150
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 sum22
 ```
 ```TargetIr:x64-windows

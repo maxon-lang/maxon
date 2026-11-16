@@ -50,14 +50,6 @@ let ChunkByteSeparator = " "
 let OpenBrace = "\{"
 let CloseBrace = "\}"
 
-// The functions a rendering names — a withheld one (the compiler's emitted runtime, a `stdlib/`
-// body) or one of the program's own, which the inliner then keeps out of line — as a
-// `--emit-ir-runtime=` list, which a spec case writes as a ```RequiredRuntime block. EMPTY is the
-// ordinary case and is not a sentinel: it is the literal count of names the caller gave. (The alias
-// keeps the `Runtime` spelling the flag and the fence are both named by; what is withheld unless
-// named is stated at `isSuppliedFunction`, which is the one rule deciding it.)
-export typealias RuntimeFunctionNameArray = Array with String
-
 // The `.data` section a module carries, rendered first by `printTargetModule` — which is the reason
 // `globalData` is a parameter there.
 //
@@ -120,7 +112,7 @@ end 'printDataSection'
 // second answer to a question that already has one, and would misfile a user's own `String`-named
 // method the moment one existed.
 //
-// ⭐⭐ **`runtimeNames` IS THE ONLY WAY A WITHHELD BODY REACHES A `TargetIr` PIN, AND IT IS OPT-IN
+// ⭐⭐ **`requiredFunctions` IS THE ONLY WAY A WITHHELD BODY REACHES A `TargetIr` PIN, AND IT IS OPT-IN
 // PER BUILD.** The emitted-runtime/entry functions (`mrt_start`, `__slab_*`/`__mm_*`/`__destruct_*`,
 // the `__str_*`/`__managed_*` families) are skipped by default because the shared scaffolding is
 // identical in every test and would be pure noise in all of them.
@@ -152,7 +144,7 @@ end 'printDataSection'
 // rather than hoped for — the panic runtime, the scheduler's context switch and the stack-growth
 // trampoline have no OTHER gate of ANY kind, being the one part of an emitted program that neither an
 // exit code, nor the leak gate, nor a section pin, nor a fragment can see.
-export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, libraryFunctions FunctionNameSet, runtimeTier FunctionNameSet) returns String throws CompileError
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, requiredFunctions RequiredFunctionRoster, codeChunks FunctionCodeChunkArray, libraryFunctions FunctionNameSet, runtimeTier FunctionNameSet) returns String throws CompileError
 	let body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -165,19 +157,19 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// own) name their operands against the right register file. See `moduleTargetCpu`.
 	let cpu = moduleTargetCpu(module)
 
-	// ⭐⭐ **THE REFUSAL IS DERIVED FROM THE RENDER, not computed beside it.** One flag per requested
-	// name, and the ONLY thing that raises a flag is the very test the loop below uses to decide
+	// ⭐⭐ **THE REFUSAL IS DERIVED FROM THE RENDER, not computed beside it.** One set of rendered
+	// names, and the ONLY thing that adds a name to it is the very test the loop below uses to decide
 	// whether to print a function. Asking the question twice — a pre-pass that scans the module for each
 	// name, plus a predicate the print loop consults — is this project's signature bug in miniature: two
 	// readers of one question, nothing making them agree, and a divergence that reports a WRONG ANSWER
 	// rather than a compile error: the check says the name will render, the skip rule renders nothing, the
 	// pin is minted without the body, and the test claiming the gate goes green for ever. An edit to
 	// the skip rule cannot bypass the refusal, because there is no second rule to bypass.
-	let rendered = FixedBoolArray.create(runtimeNames.count())
+	let rendered = FunctionNameSet.create()
 	let chunkPositions = chunkPositionsByName(codeChunks)
 
 	for func in module.functions 'eachFunc'
-		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
+		let named = markNamedBy(requiredFunctions, name: func.name, rendered: rendered)
 
 		if isSuppliedFunction(func, libraryFunctions: libraryFunctions, runtimeTier: runtimeTier) and not named 'skipSupplied'
 			continue
@@ -194,12 +186,11 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// ⚠ **THE CHUNK PASS RUNS SECOND, AND THE ORDER IS WHAT MAKES "HAND-ASSEMBLED" DERIVED RATHER THAN
 	// RECORDED.** EVERY module function also has a chunk (`emitFunctionChunk` built it), so "is this
 	// chunk hand-assembled?" is exactly "did no function of this name already answer the request?" —
-	// which the flag column above has just finished recording. Asking it that way means nothing has to
+	// which the rendered set above has just finished recording. Asking it that way means nothing has to
 	// carry a `isHandAssembled` bit that a new chunk producer could forget to set, and a name can never
-	// be rendered twice: `markNamedBy` reports a match as NEW only when at least one of its flags was
-	// still down.
+	// be rendered twice: `markNamedBy` reports a match as NEW only when the set did not yet hold it.
 	for chunk in codeChunks 'eachChunk'
-		if not markNamedBy(runtimeNames, name: chunk.funcName, rendered: rendered) 'notNamedOrAlreadyRendered'
+		if not markNamedBy(requiredFunctions, name: chunk.funcName, rendered: rendered) 'notNamedOrAlreadyRendered'
 			continue
 		end 'notNamedOrAlreadyRendered'
 
@@ -211,45 +202,28 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 		afterFirst = true
 	end 'eachChunk'
 
-	try requireEveryNameRendered(runtimeNames, rendered: rendered)
+	try requireEveryNameRendered(requiredFunctions, rendered: rendered)
 
 	return body.build()
 end 'printTargetModule'
 
-// Raise `rendered[k]` for every requested name equal to `name`, and answer whether that introduced
-// anything NEW — i.e. whether at least one of the flags it raised had been down. THE one place a
-// ```RequiredRuntime name is matched against something renderable: the function loop's skip rule, the
-// chunk loop's hand-assembled test, and the refusal below all read this column and nothing else.
+// Add `name` to `rendered` when the roster names it, and answer whether that introduced anything NEW.
+// THE one place a ```RequiredFunctions name is matched against something renderable: the function
+// loop's skip rule, the chunk loop's hand-assembled test, and the refusal below all read this set and
+// nothing else.
 //
-// ⚠ **THE TWO HALVES OF THAT ANSWER ARE BOTH LOAD-BEARING, and they are not the same question.** Every
-// matching flag is RAISED, because a case listing one name twice has asked for one body and must not
-// be refused for the second mention. But the answer REPORTED is "was anything still down?", because
-// that is what the chunk loop needs: a chunk whose name a function already answered must not render
-// its bytes underneath that function's IR.
+// The answer is "newly rendered", not "named", because the chunk loop needs it: a chunk whose name a
+// function already answered must not render its bytes underneath that function's IR.
 //
 // It takes the NAME rather than the `IrFunction`, so the chunk pass — which has no function — matches
 // through this and not through a second, driftable copy of "does this list select this name?".
-//
-// A linear scan over a list a spec author typed by hand (one or two entries, never more), against the
-// caller's own `ByteArray`.
-function markNamedBy(runtimeNames RuntimeFunctionNameArray, name ByteArray, rendered FixedBoolArray) returns bool
-	var isNew = false
+function markNamedBy(requiredFunctions RequiredFunctionRoster, name immutable ByteArray, rendered FunctionNameSet) returns bool
+	if not requiredFunctions.names(name) or rendered.contains(name) 'notNamedOrAlreadyRendered'
+		return false
+	end 'notNamedOrAlreadyRendered'
 
-	for (iter, requested) in runtimeNames.withIterator() 'each'
-		if not name.equals(requested.toByteArray()) 'noMatch'
-			continue
-		end 'noMatch'
-
-		let alreadyRendered = try rendered.get(iter.index()) otherwise panic("markNamedBy: flag read at {iter.index()} is outside a column sized by the same list")
-
-		if not alreadyRendered 'firstAnswer'
-			isNew = true
-		end 'firstAnswer'
-
-		try rendered.set(iter.index(), value: true) otherwise panic("markNamedBy: flag write at {iter.index()} is outside a column sized by the same list")
-	end 'each'
-
-	return isNew
+	rendered.insert(name)
+	return true
 end 'markNamedBy'
 
 // ⭐ **ONE HAND-ASSEMBLED CHUNK, AS BYTES** — `chunk @<name> {`, then sixteen bytes a line prefixed by
@@ -490,7 +464,7 @@ function escapedPayloadByte(b MachineWord) returns String
 end 'escapedPayloadByte'
 
 // ⭐ **A NAME THAT RENDERED NOTHING IS REFUSED, because the alternative is a test that claims a gate
-// it does not have.** A ```RequiredRuntime block exists to put ONE body under a `TargetIr` pin; a
+// it does not have.** A ```RequiredFunctions block exists to put ONE body under a `TargetIr` pin; a
 // typo in it would add nothing to the render, the pin would be minted without the body, and the
 // case would pass for ever while pinning exactly what it pinned before — the "a gate that cannot
 // see its own property must not report PASS" rule, arriving through a spelling mistake.
@@ -503,14 +477,12 @@ end 'escapedPayloadByte'
 //
 // ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" IS NOT A CAUSE.** A chunk has no IR body, but it is rendered as
 // BYTES rather than refused (see `printChunkBytes`). Every reason a name renders nothing is repairable
-// — a different spelling, or a program whose runtime includes the piece — and the message must not
+// — a different spelling, or a program that contains the piece — and the message must not
 // send a reader after a spelling that will never work.
-function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendered FixedBoolArray) throws CompileError
-	for (iter, name) in runtimeNames.withIterator() 'eachName'
-		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
-
-		if not didRender 'noSuchFunction'
-			throw CompileError.runtimeIrNameAbsent(name)
+function requireEveryNameRendered(requiredFunctions RequiredFunctionRoster, rendered FunctionNameSet) throws CompileError
+	for name in requiredFunctions.requested 'eachName'
+		if not rendered.contains(name.toByteArray()) 'noSuchFunction'
+			throw CompileError.requiredFunctionAbsent(name)
 		end 'noSuchFunction'
 	end 'eachName'
 end 'requireEveryNameRendered'

@@ -68,7 +68,7 @@ builder never paid.
 **What it may never waive** is every judgement about what inlining would BREAK, and each still refuses:
 `splicingWouldWidenTheSafePoint`, a by-reference parameter, the green-thread stack guard, `ownFrame` (a
 contradiction, refused at the declaration as E3157), an `isUnsupportedInInlineBody` op, and a
-`RequiredRuntime` request for the body itself.
+`RequiredFunctions` request for the body itself.
 
 **A refusal is never silent.** `requireAlwaysSplicedBodiesAreGone` reads the SURVIVING module in
 `BackendDispatch.buildBackend` and reports **E3158** at the body's declaration, naming the reference that

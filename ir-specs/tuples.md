@@ -7430,7 +7430,7 @@ func @main {
 ```
 
 <!-- test: a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element -->
-The ```RequiredRuntime block asks for `WithIterIterator.current`'s body, and a body a request names is spliced
+The ```RequiredFunctions block asks for `WithIterIterator.current`'s body, and a body a request names is spliced
 by neither inlining rule, so each of the two loops reading `withIterator()` pairs receives its pair from a call
 to the one shared `current`. That body returns the pair in registers, and the pair's drop, on the early
 `return` and at the end of the step alike, becomes the releases of its slots: neither loop nor `current` holds
@@ -7478,7 +7478,7 @@ end 'main'
 ```stdout
 count=6 sum=61
 ```
-```RequiredRuntime
+```RequiredFunctions
 WithIterIterator.current
 ```
 ```TargetIr:x64-windows

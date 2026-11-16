@@ -23,7 +23,7 @@ buffer and no failure path, so the only thing the shape can say is that the call
 what the function answers; a lowering that dropped the call would leave a plausible number in the result
 register and every property case above would still pass.
 
-⚠ **WHAT THIS CASE CANNOT SAY.** A `RequiredRuntime` block ALSO marks the function it names
+⚠ **WHAT THIS CASE CANNOT SAY.** A `RequiredFunctions` block ALSO marks the function it names
 never-inline for that one compile (`InlineLeaves.goldenRequestedFunctions`), so a rendered body here is
 no evidence about what survives inlining; `main` reads the id twice, and
 `StdOp.osGetPid.isUnsupportedInInlineBody` is what keeps the call standing in every other case's emitted code.
@@ -44,7 +44,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __proc_pid
 ```
 

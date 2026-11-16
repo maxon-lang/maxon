@@ -165,9 +165,10 @@ it is answered by four instruments, none of which is a single command:
   standing read on emitted-code debris. ⚠ Its unit changed on 2026-08-29 when `--emit-ir` stopped
   emitting library bodies; they are now opt-in BY NAME, so a count taken before that date is not
   comparable with one taken after.
-- **`--emit-ir --emit-ir-runtime=<name>,<name>`** — renders named withheld bodies as Target IR, the same
-  text a spec's ```RequiredRuntime block pins. This is the instrument when the subject is a SPECIFIC
-  body rather than the corpus: point two compilers at one program and diff the sidecars.
+- **`--emit-ir --emit-ir-function=<name>,<name>`** — renders the named functions (withheld bodies or the
+  program's own) as Target IR, the same text a spec's ```RequiredFunctions block pins. This is the
+  instrument when the subject is a SPECIFIC body rather than the corpus: point two compilers at one
+  program and diff the sidecars.
 - **`scripts/sample_profile.py`** — a standalone sampling profiler for Maxon-compiled executables, for
   function-level attribution when you need to know WHERE the emitted code spends its time. It resolves
   samples against the `__symtable` every backend embeds, so it needs no `.mxdbg`, and it reads both the
@@ -235,7 +236,7 @@ and the RATIO between rungs is the growth. There is no verdict and no exponent t
 
 **Do NOT claim codegen neutrality from the `ir-specs/` pins alone.** They cover the corpus's emitted-code
 cases, not every program. If you need to show that a pass changed how the compiler RUNS without
-changing what it EMITS, disassemble or use `--emit-ir-runtime=<names>` and say what you read.
+changing what it EMITS, disassemble or use `--emit-ir-function=<names>` and say what you read.
 
 **Never claim a measurement you did not take** — and if you could not make something faster, say so
 rather than shipping a change that only looks like an optimization.

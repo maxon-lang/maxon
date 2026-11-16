@@ -340,7 +340,7 @@ type JobRun
 		project.asyncTrace = request.asyncTrace
 		project.poisonFreed = request.poisonFreed
 		project.debugInfo = request.debugInfo
-		project.requestedRuntimeBodies = request.runtimeIrNames.clone()
+		project.requiredFunctions = RequiredFunctionRoster.of(request.requiredFunctionNames.clone())
 		project.rendersTargetIr = request.emitIr
 		project.compilesOnceAndExits = true
 		project.coverage = request.coverage
@@ -1506,7 +1506,7 @@ function renderTargetIr(project Project, codeResult CodeResult) returns String t
 		panic("renderTargetIr: this compile left `project.rendersTargetIr` false, so `releaseEncodedTargetModule` released the Target module's body after the encode and the backend kept no `codeChunks` — the render would be silently EMPTY. A caller that wants this text must set `project.rendersTargetIr` before `compileToCodeResult` runs.")
 	end 'nothingWasKeptToRender'
 
-	return try printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: project.requestedRuntimeBodies, codeChunks: codeResult.codeChunks, libraryFunctions: project.libraryFacts.libraryFunctions, runtimeTier: project.libraryFacts.runtimeTier)
+	return try printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, requiredFunctions: project.requiredFunctions, codeChunks: codeResult.codeChunks, libraryFunctions: project.libraryFacts.libraryFunctions, runtimeTier: project.libraryFacts.runtimeTier)
 end 'renderTargetIr'
 
 // Publish the already-rendered Target IR beside the produced exe as `<output>.ir`, for

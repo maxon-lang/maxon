@@ -238,11 +238,11 @@ function coverageNeedsDebugInfoMessage() returns String
 	return "{CoverageFlag} requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a {MxcovDataExtension} written by this binary could never be interpreted. Drop {NoDebugInfoFlag} (or `debugInfo: false` in the `{ProjectFileExtension}` target), or drop {CoverageFlag}."
 end 'coverageNeedsDebugInfoMessage'
 
-// Names withheld functions the IR sidecar must also render: the sidecar otherwise shows only functions
-// parsed from the program's own source, so `mrt_start`, the allocator, the `__str_*`/`__managed_*`
-// families and `stdlib/` bodies are absent from it (see `TargetPrinter.printTargetModule`). Opt-in per
-// build, so a build that does not ask is unchanged.
-let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
+// Names functions the IR sidecar must also render: a withheld one (`mrt_start`, the allocator, the
+// `__str_*`/`__managed_*` families, a `stdlib/` body), which the sidecar otherwise omits, or one of
+// the program's own, which the inliner then keeps out of line. Opt-in per build, so a build that does
+// not ask is unchanged.
+let EmitIrFunctionFlagPrefix = "--emit-ir-function="
 
 // One leading dash makes an argument an option.
 let OptionPrefix = "-"
@@ -267,7 +267,7 @@ let EmitCorpusFlagPrefix = "--emit-corpus="
 
 // Comma, like the `<!-- unsupported-targets: … -->` marker: one separator for every list this
 // project reads.
-let RuntimeNameSeparator = ","
+let RequiredFunctionNameSeparator = ","
 
 enum DefinePairError implements Error
 	noSeparator
@@ -442,7 +442,7 @@ function runProjectBuild(args MaxonArgs) returns ExitCode
 end 'runProjectBuild'
 
 function withoutAProjectFile() returns ExitCode
-	printError("Usage: maxon build <file|directory|target>... [{OutputFlagPrefix}<output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
+	printError("Usage: maxon build <file|directory|target>... [{OutputFlagPrefix}<output>] [--emit-ir] [--emit-ir-function=<name>,...] [--target=<cpu>-<os>]\n")
 	printError("\n")
 	printError("With no path, `maxon build` builds a target of the `{ProjectFileExtension}` file in the current directory. There is none here.\n")
 	return OwnFailureExit
@@ -888,7 +888,7 @@ end 'acquireBuildTreeLock'
 function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session DriverSession) returns BuildOutcome
 	compilerLogger(CompilerLogGroup.compiler).info("compiling {subject}: {reason}")
 
-	let request = freeze CompileRequest.create(DriverWork.build(LintRules.skipped), origin: ProjectOrigin.sources, target: job.target, session: session, inputPaths: job.inputPaths, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines).clone()
+	let request = freeze CompileRequest.create(DriverWork.build(LintRules.skipped), origin: ProjectOrigin.sources, target: job.target, session: session, inputPaths: job.inputPaths, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, requiredFunctionNames: job.args.requiredFunctionNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines).clone()
 	let product = try compile(freshCompileDriver(), request: request, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
@@ -1970,7 +1970,7 @@ function reportCompileError(e CompileError, sink DiagnosticSink = DiagnosticSink
 		sourceOrderUnrecognized or
 		sourceNotReorderable or
 		runtimeTierIsNotAProgram or
-		runtimeIrNameAbsent or
+		requiredFunctionAbsent or
 		unidentifiablePath then sink.emit("error: {driverErrorSentence(e)}")
 	end 'report'
 end 'reportCompileError'
@@ -1994,7 +1994,7 @@ function driverErrorSentence(e CompileError) returns String
 		sourceNotReorderable(p, line) gives "{p}:{line}: {SourceOrderVariable}={ReversedSourceOrderValue} reverses top-level declarations, and it cannot place the top-level declaration at this line: a declaration is a line's first token and its block closes with an `end` in the same column as that first token. Align them, or unset {SourceOrderVariable}"
 		sourceOrderUnrecognized(text) gives "{SourceOrderVariable} is '{text}', and its only value is 'reversed'. Unset it, or set it to 'reversed'"
 		runtimeTierIsNotAProgram(r) gives "{r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it"
-		runtimeIrNameAbsent(name) gives "this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrRuntimeFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, an unreached stdlib body is eliminated, and so is a function of the program that nothing calls — call it, or drop the name"
+		requiredFunctionAbsent(name) gives "this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredFunctions block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrFunctionFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, an unreached stdlib body is eliminated, and so is a function of the program that nothing calls — call it, or drop the name"
 		unidentifiablePath(reason) gives reason
 		compileError or
 		abandoned panic("driverErrorSentence: a compile that raised {e.name} has no sentence of its own: its diagnostics were already emitted")
@@ -2279,7 +2279,7 @@ end 'commandReference'
 enum HelpOption
 	output
 	emitIr
-	emitIrRuntime
+	emitIrFunction
 	target
 	noDebugInfo
 	rebuild
@@ -2380,7 +2380,7 @@ function optionReference(option HelpOption) returns OptionReference
 	return match option 'whichOption'
 		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
 		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(EmitIrFlag)])
-		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these functions in that IR too: compiler-emitted ones, standard-library ones, or the program's own, which is then kept out of line. A name the program does not render is refused. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrRuntimeFlagPrefix)])
+		emitIrFunction gives OptionReference.create("{EmitIrFunctionFlagPrefix}<a>,<b>", description: "Render these functions in that IR too: compiler-emitted ones, standard-library ones, or the program's own, which is then kept out of line. A name the program does not render is refused. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrFunctionFlagPrefix)])
 		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it where this host has a runner: wasm32-wasi under the vendored wasmtime, a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine {OrbMachineName} (natively for the Mac's own CPU, x64-linux under Rosetta on Apple silicon); a target this host cannot execute, x64-windows off Windows included, is compiled and reported as not run. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run. For {CheckStdlibCommandName} it checks that one target instead of every one. For {LintCommandName} it lints the program as that target, and a manifest, which is compiled for the host that runs it, refuses it.", commands: [MaxonCommand.build, MaxonCommand.checkStdlib, MaxonCommand.lint, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
 		debugBatch gives OptionReference.create(BatchOption, description: "Drive the session from {CommandsOptionPrefix} instead of a prompt, and write one JSON object per line on stdout. The program's own stdout and stderr both go to this driver's STDERR, so stdout stays pure JSON. The driver exits 0 when the session completed - the program's own code is DATA in the `exit` event - and 1 on a timeout, a refused session or a crash.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(BatchOption)])
 		debugCommands gives OptionReference.create("{CommandsOptionPrefix}<cmd;cmd;...|@file>", description: "The commands {BatchOption} runs, separated by `;`, or `@<path>` to read them from a file one per line.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CommandsOptionPrefix)])
@@ -2744,7 +2744,7 @@ export type MaxonArgs
 	export var rebuildRequested as bool
 
 	// Empty is the ordinary build, not a sentinel. Implies `emitIr` (see `parse`).
-	export var runtimeIrNames as RuntimeFunctionNameArray
+	export var requiredFunctionNames as RequiredFunctionNameArray
 
 	export var filterPatterns as FilterPatternArray
 
@@ -2844,7 +2844,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, lintsTests: false, fixesLint: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, requiredFunctionNames: RequiredFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, lintsTests: false, fixesLint: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2883,7 +2883,7 @@ export type MaxonArgs
 
 	function observedCompileFlag() returns StatedText
 		if self.emitIr 'emitsIr'
-			return StatedText.stated(EmitIrFlag if self.runtimeIrNames.isEmpty() else EmitIrRuntimeFlagPrefix)
+			return StatedText.stated(EmitIrFlag if self.requiredFunctionNames.isEmpty() else EmitIrFunctionFlagPrefix)
 		end 'emitsIr'
 
 		if self.metrics.isStated() 'measures'
@@ -3037,24 +3037,24 @@ export type MaxonArgs
 				parsed.coverage = true
 			end 'coverageFlag' else if arg == RebuildFlag 'rebuildFlag'
 				parsed.rebuildRequested = true
-			end 'rebuildFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
+			end 'rebuildFlag' else if arg.startsWith(EmitIrFunctionFlagPrefix) 'emitIrFunctionFlag'
 				// Not swallowed by `--emit-ir`'s arm, which tests `==`.
 				//
-				// Checked on the parsed names, not the raw value: `--emit-ir-runtime=,` carries a non-empty
-				// value naming no function, and an empty list would render a sidecar with no runtime body under
+				// Checked on the parsed names, not the raw value: `--emit-ir-function=,` carries a non-empty
+				// value naming no function, and an empty list would render a sidecar with no named body under
 				// a command line that asked for one. Every such spelling is a bad option.
-				let named = splitRuntimeNames(optionValueOf(arg))
+				let named = splitRequiredFunctionNames(optionValueOf(arg))
 
-				if named.count() == 0 'noRuntimeNames'
+				if named.count() == 0 'noRequiredFunctions'
 					parsed.refusedOptions.push(OptionRefusal.badValue(arg))
-				end 'noRuntimeNames' else 'hasRuntimeNames'
-					parsed.runtimeIrNames = named
+				end 'noRequiredFunctions' else 'hasRequiredFunctions'
+					parsed.requiredFunctionNames = named
 
 					// A list of functions to print is a request for the printing; otherwise the flag would be
 					// inert whenever `--emit-ir` was forgotten.
 					parsed.emitIr = true
-				end 'hasRuntimeNames'
-			end 'emitIrRuntimeFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
+				end 'hasRequiredFunctions'
+			end 'emitIrFunctionFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
 				let pattern = optionValueOf(arg)
 
 				// Every label contains the empty string, so one empty member would widen a union to the
@@ -3227,10 +3227,10 @@ function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpel
 	return tail
 end 'monitorTail'
 
-function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
-	let names = RuntimeFunctionNameArray.create(0)
+function splitRequiredFunctionNames(value String) returns RequiredFunctionNameArray
+	let names = RequiredFunctionNameArray.create(0)
 
-	for part in value.split(RuntimeNameSeparator) 'eachName'
+	for part in value.split(RequiredFunctionNameSeparator) 'eachName'
 		let trimmed = part.trim()
 
 		if not trimmed.isEmpty() 'nonEmpty'
@@ -3239,4 +3239,4 @@ function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
 	end 'eachName'
 
 	return names
-end 'splitRuntimeNames'
+end 'splitRequiredFunctionNames'

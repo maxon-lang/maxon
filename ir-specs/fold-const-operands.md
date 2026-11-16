@@ -30,7 +30,7 @@ end 'main'
 ```exitcode
 7
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_fill
 __managed_get
 ```

@@ -343,7 +343,7 @@ body is E3157.
   whose product is its frame disappears. `permitsTailCalls` also refuses it, so none of its calls becomes
   a tail jump that removes the frame. `__parallel_boundary` and `maxon_force_segfault` declare it.
   `ir-specs/builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the checkpoint body;
-  a ```` ```RequiredRuntime ```` block keeps a body un-inlined for its own compile, so what guards the rule
+  a ```` ```RequiredFunctions ```` block keeps a body un-inlined for its own compile, so what guards the rule
   is the `call __parallel_boundary` in every other `TargetIr` pin that reaches it.
 - **`__Raw.splicedAtEverySite()`** sets `IrFunction.mustBeSplicedAtEverySite`: the inliner splices the body
   into every call site whatever its size, so a family a builder emitted inline can be tier source and still
@@ -352,7 +352,7 @@ body is E3157.
   leaf rule's "no call" for a call into another body declaring the row (spliced callees-first). The
   correctness refusals still apply: `splicingWouldWidenTheSafePoint`, a by-reference parameter
   (`reassignedParamMask`), `needsGreenThreadStackGuard`, `keepsItsOwnFrame`, the
-  `isUnsupportedInInlineBody` ops, and a `RequiredRuntime` request for the body.
+  `isUnsupportedInInlineBody` ops, and a `RequiredFunctions` request for the body.
 
   A refusal is never silent. `InlineLeaves.requireAlwaysSplicedBodiesAreGone` reads the surviving module in
   `BackendDispatch.buildBackend`, after the last splice round and elimination and beside

@@ -46,7 +46,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __clock_now_unix_s
 ```
 

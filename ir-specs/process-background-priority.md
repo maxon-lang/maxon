@@ -24,7 +24,7 @@ exit code.
 ⚠ The unit of the answer is platform-defined, so the assertions here are the two properties both scales
 share: the reading is live rather than zero, and asking twice does not drift.
 
-⚠ **WHAT THIS CASE CANNOT SAY.** A `RequiredRuntime` block ALSO marks the function it names
+⚠ **WHAT THIS CASE CANNOT SAY.** A `RequiredFunctions` block ALSO marks the function it names
 never-inline for that one compile (`InlineLeaves.goldenRequestedFunctions`), so a rendered body here is
 no evidence about what survives inlining; `StdOp.osEnterBackgroundPriority.isUnsupportedInInlineBody` is
 what keeps the call standing in every other case's emitted code.
@@ -45,7 +45,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __proc_bg_priority
 ```
 

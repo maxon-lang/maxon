@@ -40,7 +40,7 @@ forbid (a value defined while an argument register is pending may not be coloure
   this file and that one stays RIGHT. The forbid catches it.
 - **Forbid removed, two-phase order intact** — the emitted code is BYTE-IDENTICAL, in both files. With the
   stores first the forbid has nothing to forbid.
-- **BOTH removed** — three cases go red at once: `x64-stack-arg-disp32/twenty-second-param-at-rbp-128` returns **400 instead of 200**,
+- **BOTH removed** — three cases go red at once: `x64-stack-arg-disp32/seventeenth-param-at-rbp-128` returns **400 instead of 200**,
   `params-straddling-rbp-128-boundary` 210 instead of 150, and `every-argument-of-a-wide-call-is-distinct`
   below 272 instead of 253.
 

@@ -38,14 +38,14 @@ function noteUnpoisoned(findings StringArray, staged FilePath, target String)
 
 	let extra = StringArray.create(0)
 	extra.push("{TargetOptionPrefix}{target}")
-	extra.push("{EmitIrRuntimeOptionPrefix}{FreedBoxDoorName}")
+	extra.push("{EmitIrFunctionOptionPrefix}{FreedBoxDoorName}")
 
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join("{OutputFileStem}-{label}-door-{target}"), label: label, extraArguments: extra)
 
 	if build.exitCode() == 0 'builtTheDoor'
 		findings.push("on {target}, a default build carries `{FreedBoxDoorName}`")
 	end 'builtTheDoor' else if not "{build.stdout}{build.stderr}".contains("{AbsentFunctionPhrase}'{FreedBoxDoorName}'") 'refusedForAnotherReason'
-		findings.push("on {target}, a default build refused `{EmitIrRuntimeOptionPrefix}{FreedBoxDoorName}` without saying the program contains nothing named it. It said: {oneLine(build.stdout)}{oneLine(build.stderr)}")
+		findings.push("on {target}, a default build refused `{EmitIrFunctionOptionPrefix}{FreedBoxDoorName}` without saying the program contains nothing named it. It said: {oneLine(build.stdout)}{oneLine(build.stderr)}")
 	end 'refusedForAnotherReason'
 end 'noteUnpoisoned'
 

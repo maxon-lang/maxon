@@ -1,7 +1,7 @@
 ---
 feature: x64-large-frame-arg7
 status: stable
-keywords: [function, parameters, calling-convention, prologue, chkstk, stack]
+keywords: [function, parameters, calling-convention, prologue, page-walk, stack]
 category: functions
 ---
 
@@ -24,7 +24,7 @@ carries no argument and is caller-saved. The **seventh** parameter arrives on th
 through `rbp`, which the walk does not move, after the prologue.
 
 `wide` takes seven parameters and is forced past a page by 800 values that are all live at its final
-sum. Each is `opaque(N)`, and the case's `RequiredRuntime` block names both `opaque` and `wide`, so
+sum. Each is `opaque(N)`, and the case's `RequiredFunctions` block names both `opaque` and `wide`, so
 both stay out of line: each value is the result of a real call that the folder cannot evaluate, and
 each one a callee-saved register cannot hold takes a stack slot. On both x64 lanes the pin's `wide`
 holds 800 `callDirect opaque`s and 796 `storeSlotReg`/`loadRegSlot` pairs, and opens with
@@ -41,7 +41,7 @@ case's subject. The `wasm32-wasi` lane checks the sum, not a prologue.
 
 ## Tests
 
-<!-- test: seventh-param-survives-chkstk-prologue -->
+<!-- test: seventh-param-survives-the-page-walk-prologue -->
 <!-- unsupported-targets: arm64-macos, arm64-linux -->
 ⚠ **THE SUBJECT IS THE x64 FRAME**: a frame past the touch threshold takes the page-walking prologue, and
 the claim is that the seventh argument survives it. arm64 walks its pages with another encoder, so the
@@ -869,7 +869,7 @@ end 'main'
 7
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 opaque
 wide
 ```
@@ -897,7 +897,7 @@ func @opaque {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventh-param-survives-chkstk-prologue.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:4: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -4978,7 +4978,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -4990,7 +4990,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5002,7 +5002,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5014,7 +5014,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5026,7 +5026,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5038,7 +5038,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5050,7 +5050,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5062,7 +5062,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#23:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at seventh-param-survives-chkstk-prologue.test:813: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:813: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -5118,7 +5118,7 @@ func @opaque {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventh-param-survives-chkstk-prologue.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:4: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -9199,7 +9199,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9211,7 +9211,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9223,7 +9223,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9235,7 +9235,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9247,7 +9247,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9259,7 +9259,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9271,7 +9271,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-chkstk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:8: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9283,7 +9283,7 @@ func @wide {
     x64.popReg rbp
     x64.ret
   __rc_panic#23:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at seventh-param-survives-chkstk-prologue.test:813: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:813: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 6408
@@ -9320,7 +9320,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at seventh-param-survives-chkstk-prologue.test:817: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at seventh-param-survives-the-page-walk-prologue.test:817: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 48

@@ -44,7 +44,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __cpu_count
 ```
 
@@ -293,7 +293,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __sched_processor_count
 ```
 

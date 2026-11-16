@@ -120,7 +120,7 @@ i8 0
 i8 0
 i8 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __sched_max_active_workers
 ```
 

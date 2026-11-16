@@ -11,12 +11,12 @@ The cases of `specs/pass-by-reference.md` whose subject is the emitted code. Eac
 
 ## Tests
 
-<!-- test: a-function-value-handed-a-bare-local-takes-no-heap-cell -->
+<!-- test: a-function-value-handed-a-bare-local-takes-no-cell -->
 `adder` is a function value of arity 3 and no free function of arity 3 marks a parameter `mutable`, so `base`
 handed to it as argument 0 is read as a value and `main` allocates no cell for it. `Ledger.addInto` is a `static`
 method of three parameters whose first is `mutable`: it makes the program one that takes a parameter by
 reference, so `main`'s locals are scanned for a cell, and it takes no part in the answer for `base`, because a
-method is never a function value (E2078). `add3` is kept out of line by the `RequiredRuntime` block, so the call
+method is never a function value (E2078). `add3` is kept out of line by the `RequiredFunctions` block, so the call
 through `adder` stays a call: `base` reaches `add3` as the value 4 in its first argument register. `spare`,
 handed to the method's `mutable` position, is the cell in the same `main`: a `leaRegSlot` of a stack slot that is
 initialised, passed to `Ledger.addInto` by address and read back. No `__mm_alloc` appears for either.
@@ -52,7 +52,7 @@ end 'main'
 0
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 add3
 ```
 ```TargetIr:x64-windows
@@ -83,13 +83,13 @@ func @Ledger.addInto {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
@@ -113,14 +113,14 @@ func @add3 {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -207,13 +207,13 @@ func @Ledger.addInto {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
@@ -237,14 +237,14 @@ func @add3 {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -326,12 +326,12 @@ func @Ledger.addInto {
     arm64.epilogue 16
     arm64.ret
   __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
   __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
@@ -351,13 +351,13 @@ func @add3 {
     arm64.epilogue 16
     arm64.ret
   __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -436,12 +436,12 @@ func @Ledger.addInto {
     arm64.epilogue 16
     arm64.ret
   __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
   __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:6: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
@@ -461,13 +461,13 @@ func @add3 {
     arm64.epilogue 16
     arm64.ret
   __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-heap-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-value-handed-a-bare-local-takes-no-cell.test:11: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

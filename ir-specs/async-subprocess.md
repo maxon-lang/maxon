@@ -43,7 +43,7 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 7
 ```
-```RequiredRuntime
+```RequiredFunctions
 __np_child_open
 ```
 

@@ -40,7 +40,7 @@ end 'main'
 ```stdout
 102
 ```
-```RequiredRuntime
+```RequiredFunctions
 __cpufeat_aes_cipher_encrypt_block
 mrt_aes_encrypt_block
 ```
@@ -1087,7 +1087,7 @@ end 'main'
 ```stdout
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 Aes.encryptBlockInto
 Aes.decryptBlockInto
 ```
@@ -2867,7 +2867,7 @@ end 'main'
 ```stdout
 102
 ```
-```RequiredRuntime
+```RequiredFunctions
 Aes.encryptBlockInto
 ```
 ```TargetIr:x64-windows
@@ -5425,7 +5425,7 @@ end 'main'
 ```stdout
 102
 ```
-```RequiredRuntime
+```RequiredFunctions
 __cpufeat_aes_cipher_ctr_xor
 mrt_aes_ctr_blocks_4
 ```
@@ -7259,7 +7259,7 @@ end 'main'
 ```stdout
 true 80
 ```
-```RequiredRuntime
+```RequiredFunctions
 __cpufeat_aes_cipher_gcm_init
 __cpufeat_aes_cipher_gcm_seal
 __cpufeat_aes_cipher_gcm_open

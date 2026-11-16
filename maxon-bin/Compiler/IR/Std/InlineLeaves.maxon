@@ -869,7 +869,7 @@ function buildLeafPlan(project Project, module StdModule, namedByIrRequest Fixed
 			end 'leftDeadOps'
 		end 'hasABody'
 
-		// Splicing every site of a leaf a ```RequiredRuntime block names would drop the body that block
+		// Splicing every site of a leaf a ```RequiredFunctions block names would drop the body that block
 		// asks the printer for; a callee this round does not admit is not a leaf here either
 		// (`roundAdmitsCallee`).
 		let scan = leafBodyScanOf(module, func: func, funcIndex: funcIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe, joins: joins, standing: StandingCallees.unknown)
@@ -1737,22 +1737,23 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 	let def = StdDefinedValues.create()
 	let cloner = StdOpCloner.create()
 	let meta = StdOpMetaMemo.create()
-	let namedByIrRequest = irRequestedFunctions(project, module: module, byName: byName)
+	let namedByIrRequest = irRequestedFunctions(project, module: module)
 	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 	spliceLeaves(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 end 'inlineWithNameIndex'
 
-// ⭐ **A BODY A ```RequiredRuntime REQUEST NAMES IS A REFERENCE NEITHER RULE MAY SPLICE AWAY.**
-// `--emit-ir-runtime=` (a ```RequiredRuntime block) asks the printer for that body after the
+// ⭐ **A BODY A ```RequiredFunctions REQUEST NAMES IS A REFERENCE NEITHER RULE MAY SPLICE AWAY.**
+// `--emit-ir-function=` (a ```RequiredFunctions block) asks the printer for that body after the
 // pipeline; a callee whose every site was spliced is dropped by dead-function elimination, and the
 // printer would then have nothing to render. Function index -> named by the request.
-function irRequestedFunctions(project Project, module StdModule, byName FunctionNameIndex) returns FixedBoolArray
+function irRequestedFunctions(project Project, module StdModule) returns FixedBoolArray
 	let named = FixedBoolArray.create(module.funcCount())
 
-	for name in project.requestedRuntimeBodies 'eachRequested'
-		let funcIndex = try byName.byName.get(name.toByteArray()) otherwise continue
-		try named.set(funcIndex, value: true) otherwise panic("irRequestedFunctions: function index {funcIndex} is outside the {named.count()}-function module")
-	end 'eachRequested'
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		if project.requiredFunctions.names(module.getFunc(funcIndex).name) 'requested'
+			try named.set(funcIndex, value: true) otherwise panic("irRequestedFunctions: function index {funcIndex} is outside the {named.count()}-function module")
+		end 'requested'
+	end 'eachFunc'
 
 	return named
 end 'irRequestedFunctions'
@@ -2215,7 +2216,7 @@ end 'followTableChains'
 // IT UNBYPASSABLE.** `__Raw.splicedAtEverySite()` is a body saying it must not exist as a function, and
 // every rule the row does NOT override still refuses it: the safe-point boundary, a by-reference
 // parameter, the green-thread stack guard (outside a witness-slot adapter), an op the dialect will
-// not copy, a ```RequiredRuntime
+// not copy, a ```RequiredFunctions
 // request for the body itself. What must never happen is that one of them refuses QUIETLY — the
 // family would then ship at exactly the cost the port was written to remove, with a call where its
 // author promised none and nothing anywhere saying so.
@@ -2349,7 +2350,7 @@ function whyTheSpliceWasRefused(project Project, module StdModule, calleeIndex E
 		return calledOnceRefusalText(CalledOnceRefusal.safePointProvenance)
 	end 'wouldWidenTheSafePoint'
 
-	if anIrRequestNames(project, name: module.getFunc(calleeIndex).name) 'anIrRequestWantsTheBody'
+	if project.requiredFunctions.names(module.getFunc(calleeIndex).name) 'anIrRequestWantsTheBody'
 		return calledOnceRefusalText(CalledOnceRefusal.namedByIrRequest)
 	end 'anIrRequestWantsTheBody'
 
@@ -2419,18 +2420,6 @@ function refusedOpText(op StdOp, role InlineOpRole, module StdModule, byName Fun
 	return calledOnceRefusalText(CalledOnceRefusal.unsupportedOp)
 end 'refusedOpText'
 
-// Does a ```RequiredRuntime request name this body? The same roster `irRequestedFunctions` builds its
-// column from, read the other way round for a one-off sentence.
-function anIrRequestNames(project Project, name ByteArray) returns bool
-	for requested in project.requestedRuntimeBodies 'eachRequested'
-		if requested.toByteArray().equals(name) 'named'
-			return true
-		end 'named'
-	end 'eachRequested'
-
-	return false
-end 'anIrRequestNames'
-
 // ══════════════════════════════════════════════════════════════════════════
 // The called-once rule
 // ══════════════════════════════════════════════════════════════════════════
@@ -2462,7 +2451,7 @@ enum CalledOnceRefusal
 	widensCallerFrame
 	nestsTooDeep
 
-	// A ```RequiredRuntime block asks the printer for this body after the pipeline; spliced away, it
+	// A ```RequiredFunctions block asks the printer for this body after the pipeline; spliced away, it
 	// would be dropped and the `TargetIr` pin would hold nothing of it.
 	namedByIrRequest
 

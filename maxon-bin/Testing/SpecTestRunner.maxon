@@ -2388,7 +2388,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 end 'compileStagedTest'
 
 function rendersTargetIr(test SpecTest, action IrAction, effectiveTarget Target) returns bool
-	return action.needsIr() or (not test.runtimeNames.isEmpty() and emitsTargetIr(effectiveTarget))
+	return action.needsIr() or (not test.requiredFunctions.isEmpty() and emitsTargetIr(effectiveTarget))
 end 'rendersTargetIr'
 
 function preparedFrom(compiled CompiledTest, specName String, action IrAction, effectiveTarget Target, via RunVia) returns PreparedTest
@@ -2435,14 +2435,13 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	let session = DriverSession.capturing()
 
 	// The target is stated EXPLICITLY even when it IS the host — the runner says what it is testing
-	// rather than trusting a default to agree with it, exactly as the old `--target=` argument did.
+	// rather than trusting a default to agree with it.
 	//
-	// `runtimeIrNames` rides unconditionally rather than behind the `pinnable` gate the old
-	// `--emit-ir-runtime=` flag sat behind: `emitIr` already gates it, because with no render there is
-	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
+	// `requiredFunctionNames` rides unconditionally: `emitIr` already gates it, because with no render
+	// there is no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let request = freeze CompileRequest.create(DriverWork.build(LintRules.enforced), origin: ProjectOrigin.sources, target: effectiveTarget, session: session, inputPaths: staged.buildTargets, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), poisonFreed: test.buildsWithFreedBoxPoison(), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), scriptlib: ScriptlibLoad.omitted).clone()
+	let request = freeze CompileRequest.create(DriverWork.build(LintRules.enforced), origin: ProjectOrigin.sources, target: effectiveTarget, session: session, inputPaths: staged.buildTargets, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, requiredFunctionNames: test.requiredFunctions, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), poisonFreed: test.buildsWithFreedBoxPoison(), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), scriptlib: ScriptlibLoad.omitted).clone()
 	let product = try compileToProduct(driver, request: request, session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: StatedText.unstated, exePath: exePath)

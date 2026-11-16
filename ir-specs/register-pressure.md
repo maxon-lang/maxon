@@ -458,7 +458,7 @@ typealias Integer = int(i64.min to i64.max)
 65
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 sink
 hotCall
 ```
@@ -840,7 +840,7 @@ typealias Integer = int(i64.min to i64.max)
 146
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 rescued
 ```
 ```TargetIr:x64-windows
@@ -1340,7 +1340,7 @@ typealias Integer = int(i64.min to i64.max)
 63
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 sink
 wide
 ```
@@ -2499,7 +2499,7 @@ typealias Integer = int(i64.min to i64.max)
 146
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 relievable
 ```
 ```TargetIr:x64-windows
@@ -2912,7 +2912,7 @@ typealias Integer = int(i64.min to i64.max)
 105
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 f
 ```
 ```TargetIr:x64-windows
@@ -3320,7 +3320,7 @@ typealias Integer = int(i64.min to i64.max)
 91
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 f
 ```
 ```TargetIr:x64-windows
@@ -3706,7 +3706,7 @@ typealias Integer = int(i64.min to i64.max)
 210
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 f
 ```
 ```TargetIr:x64-windows
@@ -4447,7 +4447,7 @@ func @main {
 A REUSE DEF is confined by its OWN admissible set, and the pressure analysis has to see it.
 
 Two sequential loops over an `Array`, the first carrying a `carry` across its back edge. `keep` is
-named in the `RequiredRuntime` block, which keeps it out of line, so each of its two calls in the
+named in the `RequiredFunctions` block, which keeps it out of line, so each of its two calls in the
 first loop is a real call, in a `normal` block, so it confines (the managed accesses' own slow arms
 are cold and confine nothing; see `cold-call-spilling`). `limbs`, `s`, `n`, `i` and `carry` are live
 across the first call, and `limbs`, `s`, `n`, `i` and `next` across the second: five at each call,
@@ -4512,7 +4512,7 @@ end 'main'
 31
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 keep
 shift
 ```
@@ -5214,7 +5214,7 @@ func @main {
 ⛔⛔ **THE SAME REUSE-DEF CONFINEMENT AS ABOVE, IN STRAIGHT-LINE CODE.**
 
 Eleven ints cross the `m = sink(n)` call: `a0`..`a9`, read again by `s`, and `q`, read by the
-multiply. `sink` is named in the `RequiredRuntime` block, so it stays out of line and its result `m`
+multiply. `sink` is named in the `RequiredFunctions` block, so it stays out of line and its result `m`
 is an unknown to the folder. `b = w * q` crosses the `c = sink(s)` call, so it may hold only
 callee-saved registers. On x64 the multiply is a two-address `imulRegReg` reuse def over `w`,
 and `w = m + 1` crosses no call, so `b` cannot count on inheriting its register. At the multiply `b`
@@ -5269,7 +5269,7 @@ end 'main'
 0
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 sink
 ```
 ```TargetIr:x64-windows
@@ -5651,7 +5651,7 @@ end 'main'
 0
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 fsink
 ```
 ```TargetIr:x64-windows
@@ -5930,7 +5930,7 @@ end 'main'
 0
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 fsink
 ```
 ```TargetIr:x64-windows
@@ -6192,7 +6192,7 @@ end 'main'
 0
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 sink
 ```
 ```TargetIr:x64-windows
@@ -6352,7 +6352,7 @@ end 'main'
 0
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 __gt_timer_check
 ```
 ```TargetIr:x64-windows

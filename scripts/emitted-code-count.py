@@ -12,7 +12,7 @@ bodies came too. Same tree, same compiler, nbody read 8,587 ops before and 837
 after -- that is the instrument's unit changing, not codegen improving. Every
 figure in docs/emitted-code-roadmap.md dated before 2026-08-29, and every one in
 the EC11..EC18 commit messages, is on the OLD unit. Library bodies are opt-in by
-name now (--emit-ir-runtime=<a>,<b>), so a row whose subject lives in the stdlib
+name now (--emit-ir-function=<a>,<b>), so a row whose subject lives in the stdlib
 -- refcount traffic in container methods, for one -- cannot be sized from this
 corpus at all and belongs on the self-compile.
 

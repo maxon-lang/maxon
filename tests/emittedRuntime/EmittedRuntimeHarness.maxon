@@ -9,7 +9,7 @@ let CensusDuringScavengeFixtureName = "census-during-scavenge"
 let CensusDuringRemoteFreesFixtureName = "census-during-remote-frees"
 
 let TargetOptionPrefix = "--target="
-let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+let EmitIrFunctionOptionPrefix = "--emit-ir-function="
 let DebugStreamOption = "--debugstream"
 let PoisonFreedOption = "--poison-freed"
 let EmittedNameSeparator = ","
@@ -120,7 +120,7 @@ function stagedIrPath(staged FilePath, caseLabel String, target String) returns 
 end 'stagedIrPath'
 
 function stagedIrBuildSpelling(target String, functionName String) returns String
-	return "`{BuildCommandName} … {TargetOptionPrefix}{target} {EmitIrRuntimeOptionPrefix}{functionName}`"
+	return "`{BuildCommandName} … {TargetOptionPrefix}{target} {EmitIrFunctionOptionPrefix}{functionName}`"
 end 'stagedIrBuildSpelling'
 
 function spawnStagedIrBuild(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false, poisonFreed bool = false) returns CollectedOutput
@@ -128,7 +128,7 @@ function spawnStagedIrBuild(staged FilePath, caseLabel String, target String, fu
 
 	let extraArguments = StringArray.create(0)
 	extraArguments.push("{TargetOptionPrefix}{target}")
-	extraArguments.push("{EmitIrRuntimeOptionPrefix}{functionName}")
+	extraArguments.push("{EmitIrFunctionOptionPrefix}{functionName}")
 
 	if debugStream 'withTheProducer'
 		extraArguments.push(DebugStreamOption)
@@ -191,7 +191,7 @@ function functionBody(lines StringArray, functionName String, target String) ret
 	end 'eachLine'
 
 	if not found 'neverRendered'
-		panic("emitted-runtime tests: the gate could not run — the {target} Target IR holds no `{header}`, so that runtime body was never rendered. `{EmitIrRuntimeOptionPrefix}{functionName}` is what opts a withheld runtime body into that text, and a name nothing emits is refused rather than skipped.")
+		panic("emitted-runtime tests: the gate could not run — the {target} Target IR holds no `{header}`, so that runtime body was never rendered. `{EmitIrFunctionOptionPrefix}{functionName}` is what opts a withheld runtime body into that text, and a name nothing emits is refused rather than skipped.")
 	end 'neverRendered'
 
 	if body.isEmpty() 'renderedEmpty'

@@ -43,7 +43,7 @@ TOTAL                 2889   88          0        0         3          1     2  
 ```
 
 ⚠ **AND THE CORPUS CAN NO LONGER SEE A ROW WHOSE SUBJECT IS IN THE STDLIB.** Library bodies are
-opt-in by name (`--emit-ir-runtime=<a>,<b>`), so `EC2` — refcount traffic inside container methods —
+opt-in by name (`--emit-ir-function=<a>,<b>`), so `EC2` — refcount traffic inside container methods —
 must be sized on the **self-compile**, not here. This is the fourth time in this workstream that a
 corpus could not express a row's shape; the other three are recorded in the END-TO-END section.
 
@@ -1857,7 +1857,7 @@ cost this one only redistributed.
 prologues and epilogues, the argument moves, the call-crossing spills and each callee's entry re-running the array
 shape guards. `inlineLeaves` now has a second admission: a function named by exactly one direct `call` in the module —
 and by nothing else: no `tryCall`, `funcAddr`, `.rdata` slot, entry, test, compiler-owned root, function-value thunk
-target or ` ```RequiredRuntime ` request — is spliced into its caller whatever its size, in post-order waves over the direct-call graph
+target or ` ```RequiredFunctions ` request — is spliced into its caller whatever its size, in post-order waves over the direct-call graph
 (a cycle's members are all refused before any retires), unless it throws, takes a by-reference parameter, carries the
 green-thread stack guard, or its live set plus the caller's live-across set at the site exceeds the unswitcher's
 register budget. The splice reuses the leaf splicer (`SiteSplicer`); a spliced body is emptied so no later pass walks
@@ -2137,7 +2137,7 @@ landed by rows in this document, none of them visible to the spec suite:
 ⇒ **A row that changes a pass owes a self-compile, not only a suite run.** All three are repaired and
 the fixpoint holds byte-identically; this is filed here rather than in a row because it is about the
 instrument. To show what a rung did to emitted code, **disassemble or use `--emit-ir` /
-`--emit-ir-runtime`** and count; `ir-specs/` pins only the cases that carry a `TargetIr` block.
+`--emit-ir-function`** and count; `ir-specs/` pins only the cases that carry a `TargetIr` block.
 
 ### Reproducing this document's measurements
 

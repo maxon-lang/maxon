@@ -5,7 +5,7 @@ feature: harness-gate-a-named-called-once-program-function-renders-out-of-line
 
 Both cases hold the same program, whose `helper` is called once. The gate plants a wrong host-lane `TargetIr` pin
 on the last case and a placeholder pin for each other lane beneath both markers, and `--update-required` mints the
-host lane's pin of each. The first case names `helper` in a ```RequiredRuntime block, so its pin must show it as a
+host lane's pin of each. The first case names `helper` in a ```RequiredFunctions block, so its pin must show it as a
 function of its own, ahead of `main`, and `main` must still call it; the second names nothing, so `helper` is spliced
 into `main` and its pin must show `main` alone, with no call.
 
@@ -28,7 +28,7 @@ typealias Integer = int(i64.min to i64.max)
 7
 ```
 
-```RequiredRuntime
+```RequiredFunctions
 helper
 ```
 

@@ -87,7 +87,7 @@ timedOut=true prompt=true
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __np_pd_mark_timed_out
 ```
 
@@ -3093,7 +3093,7 @@ reported=3 timeouts=0 heard=xyz
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __ms_send_from
 ```
 

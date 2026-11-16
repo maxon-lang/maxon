@@ -64,9 +64,8 @@
 //     disturbing the relation this bullet states, which is the check every added fence owes.
 //   • **THE `Required*` FAMILY**, which is the one group the capitalization rule does not separate from
 //     the qualified fences, because it is capitalized at byte 3 as well: "```RequiredData",
-//     "```RequiredRdata" and "```RequiredRuntime" all differ from "```Maxoncstderr:", "```Stderr:" and
-//     "```Stdout:" at byte 3 (`R` vs `M`/`S`), and from each other at byte 11 (`D`/`R`) and byte 12
-//     (`d`/`u`).
+//     "```RequiredRdata" and "```RequiredFunctions" all differ from "```Maxoncstderr:", "```Stderr:" and
+//     "```Stdout:" at byte 3 (`R` vs `M`/`S`), and from each other at byte 11 (`D`/`R`/`F`).
 //
 // ⇒ no arm can swallow another, and the order every arm but the compiler-error/source pair is matched in
 // stays free. Each fence constant below names what it PINS; none of them restates this relation.
@@ -511,7 +510,7 @@ let RequiredRdataFence = "```RequiredRdata"
 //
 // ⚠ It is NOT a result block: it says nothing about the RUN, so it does not satisfy
 // `pinsAnyResult` — a case carrying only this would compile, render Target IR and check no behaviour.
-let RequiredRuntimeFence = "```RequiredRuntime"
+let RequiredFunctionsFence = "```RequiredFunctions"
 
 // A pin is always qualified by its lane, because one lane's Target IR means nothing on another; the
 // bare fence is recognised only to be refused. A mismatch fails the case, and `--update-required`
@@ -629,10 +628,6 @@ type SpecSectionPin
 end 'SpecSectionPin'
 
 typealias SpecSectionPinArray = Array with SpecSectionPin
-
-// (The emitted-runtime names a ```RequiredRuntime block lists are carried in
-// `RuntimeFunctionNameArray`, declared by the printer that consumes them — `TargetPrinter.maxon`.
-// It is the same list all the way from the fence to the render, so it is named once.)
 
 // ⭐⭐ **WHAT A SPEC PINS ABOUT THE EXIT CODE, AND THE "UNPINNED" STATE IS THE WHOLE POINT — WITHOUT
 // IT WHOLE TEST CASES DROP SILENTLY.** An exit code that is the one half of a run expectation with
@@ -892,14 +887,14 @@ type SpecTest
 	// WAS selected, WAS compiled and was refused by the target; that one is counted and reported.
 	export let unsupportedTargets as TargetKeyArray
 
-	// The emitted runtime functions this test's Target IR renders (a ```RequiredRuntime block). It rides
+	// The functions this test's Target IR must render (a ```RequiredFunctions block). It rides
 	// on the TEST rather than on the expectation because it is not something the run is checked
 	// against: it changes what the COMPILE is asked to print, which is a property of how this test is
 	// built (like `targets`), not of what its execution must do.
-	export let runtimeNames as RuntimeFunctionNameArray
+	export let requiredFunctions as RequiredFunctionNameArray
 
 	// The arguments this case's program is SPAWNED with (an `<!-- Args: … -->` marker), or EMPTY for
-	// the ordinary test that reads no argv. Like `targets` and `runtimeNames` it rides on the TEST
+	// the ordinary test that reads no argv. Like `targets` and `requiredFunctions` it rides on the TEST
 	// rather than on the expectation: it changes how the run is PERFORMED, not what the run must
 	// produce.
 	export let programArgs as ProgramArgArray
@@ -907,7 +902,7 @@ type SpecTest
 	// Whether this case asserts the green-thread async TRACE (an `<!-- AsyncTrace -->` marker). It sits HERE
 	// rather than on `SpecExpectation` because it is not part of what the run must PRODUCE — it changes how the
 	// program is BUILT (`--async-trace`) and how its stderr is COMPARED, which is the same reason `targets`,
-	// `runtimeNames` and `programArgs` live here. Carrying it on the expectation as well would be one fact
+	// `requiredFunctions` and `programArgs` live here. Carrying it on the expectation as well would be one fact
 	// in two places.
 	export let asyncTrace as bool
 
@@ -972,9 +967,9 @@ type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
+	static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, requiredFunctions RequiredFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, poisonFreed bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinnedLanes TargetKeyArray) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinnedLanes: pinnedLanes}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinnedLanes: pinnedLanes}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1286,7 +1281,7 @@ function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerL
 	let closed = closedOpening(testOpening, markerIndex: markerIndex, specPath: specPath)
 	let builder = CaseBuilder.create(markerValueOf(closed), markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
 	let unsupportedTargets = TargetKeyArray.create(0)
-	let runtimeNames = RuntimeFunctionNameArray.create(0)
+	let requiredFunctions = RequiredFunctionNameArray.create(0)
 	let programArgs = ProgramArgArray.create(0)
 	let pinnedLanes = TargetKeyArray.create(0)
 	builder.refuseCrowdedLine(markerOpenings, line: markerLine, lineIndex: markerIndex)
@@ -1312,10 +1307,10 @@ function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerL
 			continue
 		end 'directiveLine'
 
-		i = builder.readLine(lines, index: i, fenceLine: line.trim(), runtimeNames: runtimeNames, pinnedLanes: pinnedLanes)
+		i = builder.readLine(lines, index: i, fenceLine: line.trim(), requiredFunctions: requiredFunctions, pinnedLanes: pinnedLanes)
 	end 'blocks'
 
-	tests.push(builder.build(lines, caseEnd: i, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, pinnedLanes: pinnedLanes))
+	tests.push(builder.build(lines, caseEnd: i, unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, pinnedLanes: pinnedLanes))
 	return i
 end 'scanTestFromMarker'
 
@@ -1513,9 +1508,9 @@ type CaseBuilder
 		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
 	end 'refuseUnreadDirective'
 
-	function readLine(lines StringArray, index ElementIndex, fenceLine String, runtimeNames RuntimeFunctionNameArray, pinnedLanes TargetKeyArray) returns ElementIndex
+	function readLine(lines StringArray, index ElementIndex, fenceLine String, requiredFunctions RequiredFunctionNameArray, pinnedLanes TargetKeyArray) returns ElementIndex
 		// Asked before the fence arms: they match by prefix, so a prose line such as
-		// `` ```RequiredRuntime block, one name per line: `` would be consumed as a block and its words
+		// `` ```RequiredFunctions block, one name per line: `` would be consumed as a block and its words
 		// read as function names.
 		refuseFenceShapedProse(fenceLine, lineIndex: index, specPath: specPath)
 
@@ -1577,9 +1572,9 @@ type CaseBuilder
 			end 'aTargetIrPin'
 		end 'targetIrBlock'
 
-		if fenceLine.startsWith(RequiredRuntimeFence) 'runtimeBlock'
-			return pushRuntimeNames(lines, openIndex: index, testName: name, names: runtimeNames, specPath: specPath)
-		end 'runtimeBlock'
+		if fenceLine.startsWith(RequiredFunctionsFence) 'requiredFunctionsBlock'
+			return pushRequiredFunctionNames(lines, openIndex: index, testName: name, names: requiredFunctions, specPath: specPath)
+		end 'requiredFunctionsBlock'
 
 		// The two capture blocks. Either is a result check in its own right (see `MmTraceFence`), and either
 		// puts the case into capture mode on its own — the matching marker beside it is then a second
@@ -1653,7 +1648,7 @@ type CaseBuilder
 		claimedBlocks.push(kind)
 	end 'claimBlock'
 
-	function build(lines StringArray, caseEnd ElementIndex, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, pinnedLanes TargetKeyArray) returns SpecTest
+	function build(lines StringArray, caseEnd ElementIndex, unsupportedTargets TargetKeyArray, requiredFunctions RequiredFunctionNameArray, programArgs ProgramArgArray, pinnedLanes TargetKeyArray) returns SpecTest
 		let source = match program 'program'
 			absent panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' has no ```maxon block, so there is no program to run and the case would run nowhere with nothing reported. Add its source under the marker, or delete the marker")
 			read(text) gives text
@@ -1664,7 +1659,7 @@ type CaseBuilder
 		end 'poisonWithoutAPin'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames, pinnedLanes: pinnedLanes), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinnedLanes: pinnedLanes)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, requiredFunctions: requiredFunctions, pinnedLanes: pinnedLanes), unsupportedTargets: unsupportedTargets, requiredFunctions: requiredFunctions, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, poisonFreed: poisonFreed, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin.clone(), runs: runs, process: process, tier: tier.clone(), targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinnedLanes: pinnedLanes)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -1696,15 +1691,15 @@ type CaseBuilder
 		return SpecTraceCapture.pinned(blockFamily, trace: trace, span: span)
 	end 'agreeingCapture'
 
-	function expectationFor(traceCapture SpecTraceCapture, runtimeNames RuntimeFunctionNameArray, pinnedLanes TargetKeyArray) returns SpecExpectation
+	function expectationFor(traceCapture SpecTraceCapture, requiredFunctions RequiredFunctionNameArray, pinnedLanes TargetKeyArray) returns SpecExpectation
 		// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
 		// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 		// program it never produced could also be true of.
 		if compilerError.isPinned() 'rejected'
 			// `SpecExpectation.compilerError` has nowhere to carry these, so without the refusal they would
 			// be dropped and the case would pass over them.
-			if sectionPins.count() > 0 or runtimeNames.count() > 0 or not pinnedLanes.isEmpty() 'pinsOnARejectedCase'
-				panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence}/{TargetIrQualifiedFencePrefix}<target> block. A case that never links produces no image to read a section out of and no IR to render or compare, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
+			if sectionPins.count() > 0 or requiredFunctions.count() > 0 or not pinnedLanes.isEmpty() 'pinsOnARejectedCase'
+				panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredFunctionsFence}/{TargetIrQualifiedFencePrefix}<target> block. A case that never links produces no image to read a section out of and no IR to render or compare, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 			end 'pinsOnARejectedCase'
 
 			match traceCapture 'traceCaptureOnARejectedCase'
@@ -1814,13 +1809,13 @@ function pushSectionPin(lines StringArray, openIndex ElementIndex, testName Stri
 	return block.nextIndex
 end 'pushSectionPin'
 
-// Consume a ```RequiredRuntime fence and record the emitted-function names it lists — one per line,
+// Consume a ```RequiredFunctions fence and record the function names it lists — one per line,
 // blank lines skipped, exactly as `parseTypedSectionValues` skips them in a section pin.
 //
 // ⚠ Names ACCUMULATE across blocks, for `pushSectionPin`'s reason and one more: an ASSIGN would make a
-// case carrying two ```RequiredRuntime blocks silently render only the second one's bodies while
+// case carrying two ```RequiredFunctions blocks silently render only the second one's bodies while
 // reading as though it had asked for both.
-function pushRuntimeNames(lines StringArray, openIndex ElementIndex, testName String, names RuntimeFunctionNameArray, specPath FilePath) returns ElementIndex
+function pushRequiredFunctionNames(lines StringArray, openIndex ElementIndex, testName String, names RequiredFunctionNameArray, specPath FilePath) returns ElementIndex
 	let block = readFence(lines, openIndex: openIndex, specPath: specPath)
 
 	// What THIS block contributed is the difference the accumulator itself reports — not a counter
@@ -1836,16 +1831,16 @@ function pushRuntimeNames(lines StringArray, openIndex ElementIndex, testName St
 	end 'eachLine'
 
 	// ⚠ **THE REFUSAL THE COMPILER'S OWN CANNOT REACH.** `TargetPrinter.requireEveryNameRendered`
-	// catches a MISSPELLED name, but it only ever runs on a `--emit-ir-runtime=` the runner emitted —
+	// catches a MISSPELLED name, but it only ever runs on a `--emit-ir-function=` the runner emitted —
 	// and the runner emits nothing for a block that listed nothing. An empty block therefore renders
-	// the same IR a test WITHOUT the block renders, for ever, while claiming a gate on an emitted
-	// body. See `refuseVacuousDirective`.
+	// the same IR a test WITHOUT the block renders, for ever, while claiming a gate on a body. See
+	// `refuseVacuousDirective`.
 	if names.count() == before 'noNames'
-		refuseVacuousDirective(testName, fence: RequiredRuntimeFence, remedy: "name the emitted functions it renders (`__str_bytes_view`, `mrt_start`, one per line), or delete the block. An empty one renders no body at all, so the IR is byte-identical to a test that never asked")
+		refuseVacuousDirective(testName, fence: RequiredFunctionsFence, remedy: "name the functions it must render (`__str_bytes_view`, `mrt_start`, one per line), or delete the block. An empty one renders no body at all, so the IR is byte-identical to a test that never asked")
 	end 'noNames'
 
 	return block.nextIndex
-end 'pushRuntimeNames'
+end 'pushRequiredFunctionNames'
 
 // ⭐⭐ **A DIRECTIVE THAT PINS NOTHING IS REFUSED, and it is `pinsAnyResult`'s rule aimed one level
 // down.** That guard asks whether a case pinned ANY result and panics when it pinned none; this asks

@@ -1,7 +1,7 @@
 ---
-feature: harness-refusal-runtime-name-of-an-uncalled-program-function
+feature: harness-refusal-a-required-program-function-nothing-calls
 ---
-# A ```RequiredRuntime name of a program function nothing calls
+# A ```RequiredFunctions name of a program function nothing calls
 
 `TargetPrinter.requireEveryNameRendered` refuses it: `spare` is the PROGRAM's own function, but nothing
 calls it, so dead-function elimination removes it and the block would pin nothing. The refusal says
@@ -9,7 +9,7 @@ the fix: call it, or drop the name.
 
 ## Tests
 
-<!-- test: runtime-name-of-an-uncalled-program-function -->
+<!-- test: a-required-program-function-nothing-calls -->
 
 ```maxon
 public function spare() returns ExitCode
@@ -23,6 +23,6 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 spare
 ```

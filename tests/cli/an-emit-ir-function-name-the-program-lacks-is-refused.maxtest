@@ -1,0 +1,22 @@
+let AnEmitIrFunctionNameTheProgramLacksIsRefusedCaseDirName = "an-emit-ir-function-name-the-program-lacks-is-refused"
+let EmitIrFunctionOptionPrefix = "--emit-ir-function="
+let UnknownFunctionName = "noSuchFunction"
+let AnEmitIrFunctionNameTheProgramLacksIsRefusedPanicMarker = "panic at"
+let StackTraceMarker = "Stack trace:"
+
+test 'an --emit-ir-function= name the program does not contain is refused, not a panic'
+	let dir = freshCaseDir(AnEmitIrFunctionNameTheProgramLacksIsRefusedCaseDirName)
+	let source = dir.join(StagedProgramFileName)
+	writeStagedFile(source, content: MainSource)
+
+	let option = "{EmitIrFunctionOptionPrefix}{UnknownFunctionName}"
+	let build = spawnCompiler([BuildCommandWord, source.toString(), option], staged: dir)
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode(), expected: 1, message: "`maxon {BuildCommandWord} main.maxon {option}` did not exit 1. {said}")
+	Expect.contains(build.stderr, needle: UnknownFunctionName, message: "the refusal does not name the `{EmitIrFunctionOptionPrefix}` value it refused. {said}")
+	Expect.isFalse(build.stderr.contains(AnEmitIrFunctionNameTheProgramLacksIsRefusedPanicMarker), message: "the refusal is a panic rather than an error. {said}")
+	Expect.isFalse(build.stderr.contains(StackTraceMarker), message: "the refusal carries a stack trace. {said}")
+
+	discardStagedDir(dir)
+end 'an --emit-ir-function= name the program does not contain is refused, not a panic'

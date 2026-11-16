@@ -397,7 +397,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_create_sized
 ```
 ```TargetIr:x64-windows
@@ -1345,7 +1345,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_create_fixed
 ```
 ```TargetIr:x64-windows
@@ -2017,7 +2017,7 @@ end 'main'
 ```exitcode
 16
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_mem_create
 ```
 ```TargetIr:x64-windows
@@ -2428,7 +2428,7 @@ end 'main'
 ```exitcode
 8
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_set_length
 __managed_shrink_length
 __managed_release

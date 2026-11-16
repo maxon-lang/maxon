@@ -35,7 +35,7 @@ end 'main'
 ```stdout
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_decref
 __managed_release
 ```
@@ -880,7 +880,7 @@ end 'main'
 ```stdout
 1
 ```
-```RequiredRuntime
+```RequiredFunctions
 __mm_decref
 __mm_release
 ```
@@ -1486,7 +1486,7 @@ end 'main'
 ```stdout
 16
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_decref
 ```
 ```TargetIr:x64-windows

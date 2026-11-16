@@ -237,7 +237,7 @@ To look at what the compiler emits for a program:
 
 ```bash
 maxon build problem.maxon --emit-ir                          # writes problem.ir
-maxon build problem.maxon --emit-ir-runtime=__managed_get    # plus a compiler-emitted function
+maxon build problem.maxon --emit-ir-function=__managed_get   # plus a compiler-emitted function
 maxon build problem.maxon --metrics=temp/phases.tsv          # where the compile time went
 ```
 

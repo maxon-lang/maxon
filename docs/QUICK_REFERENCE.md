@@ -1273,7 +1273,7 @@ Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 | `--output=PATH` | Output executable path |
 | `--target=ARCH-OS` | Compile for another target (default: the host) |
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir` |
-| `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted, `stdlib/` or program functions; a named program function is kept out of line (implies `--emit-ir`) |
+| `--emit-ir-function=<a>,<b>` | Also render these compiler-emitted, `stdlib/` or program functions; a named program function is kept out of line (implies `--emit-ir`) |
 | `--log=LEVEL` | Set log level (none, error, info, debug, trace) |
 | `--log=CAT:LEVEL` | Set log level per category |
 

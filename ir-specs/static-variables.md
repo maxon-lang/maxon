@@ -40,7 +40,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 churn
 ```
 ```TargetIr:x64-windows

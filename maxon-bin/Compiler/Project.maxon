@@ -12619,6 +12619,33 @@ export type UnknownTypeReports
 	end 'reportedUnknownName'
 end 'UnknownTypeReports'
 
+// The functions a rendering names — a withheld one (the compiler's emitted runtime, a `stdlib/`
+// body) or one of the program's own, which the inliner then keeps out of line — as a
+// `--emit-ir-function=` list, which a spec case writes as a ```RequiredFunctions block. EMPTY is the
+// ordinary case and is not a sentinel: it is the literal count of names the caller gave.
+export typealias RequiredFunctionNameArray = Array with String
+
+// `names` is the one answer to "does this build require this function": the printer's render and
+// refusal and the inliner's splice refusal all ask it, so they cannot disagree on a body.
+export type RequiredFunctionRoster
+	let requested as RequiredFunctionNameArray
+	let requestedNames as FunctionNameSet
+
+	static function of(requested RequiredFunctionNameArray) returns RequiredFunctionRoster
+		let requestedNames = FunctionNameSet.create()
+
+		for name in requested 'eachRequested'
+			requestedNames.insert(freeze name.toByteArray())
+		end 'eachRequested'
+
+		return Self{requested: requested, requestedNames: requestedNames}
+	end 'of'
+
+	function names(name ByteArray) returns bool
+		return self.requestedNames.contains(name)
+	end 'names'
+end 'RequiredFunctionRoster'
+
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
@@ -12828,10 +12855,10 @@ export type Project
 	export var editorCallSites as CalledParametersByCallee
 	export var editorFinalizers as FinalizerNamesByType
 
-	// The functions this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime
+	// The functions this build was asked to print (`--emit-ir-function=`, a ```RequiredFunctions
 	// block's request). A name here is a REFERENCE the inliner's census must see: a called-once callee
 	// spliced away is dropped by dead-function elimination, and the printer has no body to render.
-	export var requestedRuntimeBodies as RuntimeFunctionNameArray
+	export var requiredFunctions as RequiredFunctionRoster
 
 	// A caller that wants the Target IR text must set this before `CompileRun` runs; the backends
 	// keep their `codeChunks` and `releaseEncodedTargetModule` keeps the module's body only where it holds.
@@ -13239,7 +13266,7 @@ export type Project
 			editorFunctions: FunctionFactMap.create(),
 			editorCallSites: CalledParametersByCallee.create(),
 			editorFinalizers: FinalizerNamesByType.create(),
-			requestedRuntimeBodies: RuntimeFunctionNameArray.create(0),
+			requiredFunctions: RequiredFunctionRoster.of(RequiredFunctionNameArray.create(0)),
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
 			lintRules: LintRules.enforced,

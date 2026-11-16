@@ -21,7 +21,7 @@ op appearing here is a row that stopped being a directive, and a body with a fra
 checkpoint that has started paying for storage it does not use.
 
 ⚠ **AND IT CANNOT, BY ITSELF, CATCH A REGRESSION IN `ownFrame` — READ THIS BEFORE TRUSTING IT.** A
-`RequiredRuntime` block ALSO marks the function it names never-inline for that one compile
+`RequiredFunctions` block ALSO marks the function it names never-inline for that one compile
 (`InlineLeaves.goldenRequestedFunctions`), so this body would be rendered here even by a compiler that had
 stopped honouring `IrFunction.keepsItsOwnFrame` and spliced the checkpoint away everywhere else. What
 shows the rule holds is the `call __parallel_boundary` standing in the emitted code of every OTHER case that
@@ -47,7 +47,7 @@ end 'main'
 ```exitcode
 4
 ```
-```RequiredRuntime
+```RequiredFunctions
 __parallel_boundary
 ```
 

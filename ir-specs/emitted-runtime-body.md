@@ -26,10 +26,10 @@ counts a reference on the allocation those bytes live in; getting that count wro
 use-after-free that BALANCES — the matching release disappears with it — so neither the
 exit code, nor the leak gate, nor a pin of the program's own functions can see it.
 
-### Naming a body to render: ```RequiredRuntime
+### Naming a body to render: ```RequiredFunctions
 
 A test opts one or more withheld functions INTO its own `TargetIr` pin with a
-`RequiredRuntime` block, one name per line:
+`RequiredFunctions` block, one name per line:
 
 ```
 __str_bytes_view
@@ -59,7 +59,7 @@ half: the text is the printer's own rendering of a lowered, register-allocated b
 moves on any change to lowering, allocation or block structure, and is BLIND to anything
 below it. An instruction encoder that emits different bytes for the same mnemonic and
 operands leaves this pin identical. ```RequiredData / ```RequiredRdata are the gates
-that read the linked image back; ```RequiredRuntime is not one of them.
+that read the linked image back; ```RequiredFunctions is not one of them.
 
 ### A hand-assembled chunk: the same block, rendered as BYTES
 
@@ -68,7 +68,7 @@ backtrace walker), the green-thread pieces (`__gt_context_switch`, `__gt_trampol
 `__gt_morestack`) and arm64's entry stub are assembled as raw machine bytes, so they never
 enter the module's function list and there is no body to print for them.
 
-They are still named, and the same ```RequiredRuntime block reaches them: a name no IR
+They are still named, and the same ```RequiredFunctions block reaches them: a name no IR
 function answers is offered to the emitted chunks, and the one bearing it renders a hex dump
 instead of a body.
 
@@ -115,7 +115,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __str_bytes_view
 ```
 
@@ -9880,7 +9880,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredRuntime
+```RequiredFunctions
 __mm_alloc
 __mm_free
 ```
@@ -11489,7 +11489,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredRuntime
+```RequiredFunctions
 __mm_alloc
 __mm_free
 __slab_alloc
@@ -14731,7 +14731,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredRuntime
+```RequiredFunctions
 __mm_free
 __slab_free_box
 ```
@@ -16687,7 +16687,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_set
 ```
 
@@ -17847,7 +17847,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 mrt_start
 ```
 
@@ -17980,7 +17980,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 mrt_panic
 ```
 
@@ -18101,7 +18101,7 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 200
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_morestack
 ```
 
@@ -18819,7 +18819,7 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 42
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_context_switch
 ```
 ```TargetIr:arm64-macos
@@ -19490,7 +19490,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __rtlock_enter_slow
 __rtlock_release
 ```
@@ -20884,7 +20884,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 mrt_host_spin_pause
 ```
 ```TargetIr:x64-windows
@@ -21973,7 +21973,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_preempt_m
 ```
 ```TargetIr:arm64-linux
@@ -22545,7 +22545,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 mrt_host_event_set
 ```
 ```TargetIr:x64-linux
@@ -23108,7 +23108,7 @@ end 'main'
 ```exitcode
 3
 ```
-```RequiredRuntime
+```RequiredFunctions
 String.trim
 ```
 
@@ -25954,7 +25954,7 @@ its only gate.
 ⚠ **THE READ IS THE BUFFER'S.** `String.byteAt` is a corpus declaration whose own
 `try managed.byteAt(index)` is the real call, so the read happens where the BUFFER's `byteAt`
 happens — one entry point with one bound, rather than two graphs to keep in step. The
-`RequiredRuntime` guard keeps the case from quietly pinning nothing: a name no program emits is a
+`RequiredFunctions` guard keeps the case from quietly pinning nothing: a name no program emits is a
 loud panic (`TargetPrinter.requireEveryNameRendered`), which is the whole reason that guard exists.
 
 ```maxon
@@ -25965,7 +25965,7 @@ end 'main'
 ```exitcode
 3
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_byte_at
 ```
 
@@ -26578,7 +26578,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_ready_locked
 ```
 ```TargetIr:x64-windows
@@ -28326,7 +28326,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __sched_init_procs
 ```
 ```TargetIr:x64-windows
@@ -29166,7 +29166,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_cell_alloc
 __gt_cell_get
 __gt_cell_put
@@ -33826,7 +33826,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __sched_wake_or_spawn
 ```
 ```TargetIr:x64-windows
@@ -35035,7 +35035,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_run_strand
 __gt_strand_next
 __gt_register_park
@@ -42059,7 +42059,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_ready
 ```
 ```TargetIr:x64-windows
@@ -43231,7 +43231,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_runner_done
 ```
 ```TargetIr:x64-windows
@@ -46641,7 +46641,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_free_get
 __gt_runner_done
 ```
@@ -51633,7 +51633,7 @@ end 'main'
 ```exitcode
 8
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_spawn
 __gt_free_get
 ```
@@ -54166,7 +54166,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_stack_alloc
 __gt_stack_free
 ```
@@ -57259,7 +57259,7 @@ end 'main'
 ```exitcode
 8
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_runner_done
 __gt_spawn
 __gt_seed_adapt
@@ -61095,7 +61095,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_free_get
 __sched_arena_carve
 ```
@@ -63913,7 +63913,7 @@ end 'main'
 ```exitcode
 8
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_runner_done
 ```
 ```TargetIr:x64-windows
@@ -66820,7 +66820,7 @@ end 'main'
 ```stdout
 done
 ```
-```RequiredRuntime
+```RequiredFunctions
 __gt_import_WriteFile
 ```
 ```TargetIr:x64-windows
@@ -67154,7 +67154,7 @@ end 'main'
 ```exitcode
 3
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_move_elems
 ```
 ```TargetIr:x64-windows
@@ -69267,7 +69267,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredRuntime
+```RequiredFunctions
 __managed_grow
 __managed_mem_grow
 ```

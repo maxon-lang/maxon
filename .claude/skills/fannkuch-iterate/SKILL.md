@@ -33,7 +33,7 @@ python scripts/bench-fannkuch.py --n 11 --runs 5 --profile
 ```
 
 Read, in this order: the ratio; the census columns; the profile's hot functions; then the IR of the
-hot functions in `bench/fannkuch/out/slot/fannkuch-redux.ir`. Rebuild with `--emit-ir-runtime=<name>`
+hot functions in `bench/fannkuch/out/slot/fannkuch-redux.ir`. Rebuild with `--emit-ir-function=<name>`
 when a library body (`__managed_*`) is where the time went. Under ~2 s at n=11, profile with
 `--profile-n 12` so the sampler has enough samples.
 

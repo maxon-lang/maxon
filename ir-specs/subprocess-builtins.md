@@ -65,7 +65,7 @@ end 'main'
 ```stdout
 timerpolls=true onpoller=true outLen=3 matches=true
 ```
-```RequiredRuntime
+```RequiredFunctions
 __np_pd_wait_any
 ```
 

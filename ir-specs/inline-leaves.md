@@ -67,7 +67,7 @@ end 'main'
 ```exitcode
 211
 ```
-```RequiredRuntime
+```RequiredFunctions
 __probe_wide_caller
 ```
 
@@ -462,7 +462,7 @@ end 'main'
 ```exitcode
 8
 ```
-```RequiredRuntime
+```RequiredFunctions
 __probe_chain_caller
 ```
 
@@ -783,7 +783,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __probe_tls_caller
 ```
 
@@ -1061,7 +1061,7 @@ element. A `get` keeps the runtime call on its SLOW ARM, reached only for an ind
 buffer on a cold `__im_detach` block that calls `__managed_cow_detach` and rejoins before the one
 store. A helper that wraps one access holds those blocks, and a call in a cold block does not refuse
 a leaf, so `elementAt` and `putElement` are spliced at both of their sites. The sites are in
-`touchAll`, which the `RequiredRuntime` block keeps out of line, so every index and value is a
+`touchAll`, which the `RequiredFunctions` block keeps out of line, so every index and value is a
 parameter the folder cannot evaluate. The pin's `touchAll` holds the fast arms with no
 `callDirect elementAt` or `callDirect putElement`, and each of the four copies keeps its bound guard
 and its cold `__im_slow` arm: each `putElement` copy's reaches `__managed_index_refused` and each
@@ -1096,7 +1096,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredRuntime
+```RequiredFunctions
 touchAll
 ```
 ```TargetIr:x64-windows
@@ -2670,7 +2670,7 @@ func @main {
 ```
 
 <!-- test: a-leaf-whose-entry-cascades-every-site-declines-is-inlined -->
-A leaf is measured WITHOUT the entry range-check cascades of its ranged parameters, and a site is spliced only where the caller proves every argument, so no cascade is copied. `blend`'s body is inside the 24-op budget and its three cascades are what push it past; both of its calls pass literals the `Stride` range contains. The calls are in `blendTwice`, which the `RequiredRuntime` block keeps out of line, so the `Word` operands are parameters the folder cannot evaluate. Both sites are spliced: the pin's `blendTwice` holds both copies of `blend`'s shifts and logic at the literal shift amounts, and no `callDirect blend` and no `__rc_panic` naming `Stride`.
+A leaf is measured WITHOUT the entry range-check cascades of its ranged parameters, and a site is spliced only where the caller proves every argument, so no cascade is copied. `blend`'s body is inside the 24-op budget and its three cascades are what push it past; both of its calls pass literals the `Stride` range contains. The calls are in `blendTwice`, which the `RequiredFunctions` block keeps out of line, so the `Word` operands are parameters the folder cannot evaluate. Both sites are spliced: the pin's `blendTwice` holds both copies of `blend`'s shifts and logic at the literal shift amounts, and no `callDirect blend` and no `__rc_panic` naming `Stride`.
 ```maxon
 typealias Word = bits(64)
 typealias Stride = int(1 to 4)
@@ -2705,7 +2705,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredRuntime
+```RequiredFunctions
 blendTwice
 ```
 ```TargetIr:x64-windows

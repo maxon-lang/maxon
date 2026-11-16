@@ -1484,7 +1484,7 @@ end 'CountedLoop'
 // entry edge — which is what makes an empty walk cost one compare rather than a guard of its own.
 //
 // `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
-// loops reads back as several loops under `--emit-ir-runtime`.
+// loops reads back as several loops under `--emit-ir-function`.
 function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create(0)) returns CountedLoop
 	let header = module.addBlock(func, label: freeze "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
 	let body = module.addBlock(func, label: freeze "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
@@ -4929,7 +4929,7 @@ end 'synthesizeStructCascade'
 // ⚠ **WHAT MAKES THAT SAFE IS THAT BOTH SIDES ARE NO-OPS ON `v` — NOT THAT SOMETHING ELSE OWNS IT. READ THE
 // EMITTED CODE BEFORE BUILDING ON THIS NOTE.** The balance is not the enclosing instance's
 // layout-descriptor protocol (`retainFunc@64` / `destroyFunc@40`), which this shape does not emit.
-// Under `--emit-ir-runtime` on `Bag with String`: `Bag.create` builds the element
+// Under `--emit-ir-function` on `Bag with String`: `Bag.create` builds the element
 // array as `__managed_create(8, __mm_decref)`, `Box.create` allocates each element box with a ZERO
 // destructor, and `__clone_Box_T<hash>` is `__mm_alloc` + blit with no incref — so `v` is neither retained on
 // the way in nor released on the way out, on EITHER side. The clone therefore takes no reference and frees

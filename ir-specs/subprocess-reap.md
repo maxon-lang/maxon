@@ -38,7 +38,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 mrt_host_proc_reap
 mrt_host_proc_await
 ```

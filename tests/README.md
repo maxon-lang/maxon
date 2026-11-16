@@ -564,7 +564,7 @@ tests/
     cache-clear-keeps-a-claim-a-build-is-still-creating-a-lock-behind.maxtest   `cache clear` keeps the fresh claim file of a lock a build is still creating, and the directory the locks live in
     help-lists-every-mcp-server-option.maxtest              `help mcp-server` lists every option the parser accepts
     an-empty-option-value-is-refused.maxtest                an option stated with an empty value (`--output=`) is refused as an invalid option value
-    an-emit-ir-runtime-name-the-program-lacks-is-refused.maxtest   `--emit-ir-runtime=` naming a function the program does not contain exits 1 naming it, with no panic and no stack trace
+    an-emit-ir-function-name-the-program-lacks-is-refused.maxtest   `--emit-ir-function=` naming a function the program does not contain exits 1 naming it, with no panic and no stack trace
     an-empty-word-is-refused.maxtest                        an empty positional argument is refused as a word that names nothing
     monitor-refuses-an-empty-filter.maxtest                 `monitor --filter=` is refused, never read as every family
     cache-reports-the-library-cache.maxtest                 bare `cache` reports the library cache under its root, with its entry count
@@ -1184,7 +1184,7 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   run that writes no `fragments/` directory and speaks of no golden, a `TargetIr` pin that fails its case
   when it differs and that `--update-required` replaces or adds without asking a compile-error case for
   one and that a run with `--update-required` mints while lanes are still owed, a program function a
-  `RequiredRuntime` block names rendering as a function of its own in the minted pin while the same called-once function
+  `RequiredFunctions` block names rendering as a function of its own in the minted pin while the same called-once function
   unnamed is spliced into its caller, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
   kept in separate programs, a case keeping a function in a module `var` and a case holding closures in a
@@ -1642,7 +1642,7 @@ program that spawns, two into every program that allocates, fifteen scheduler, t
 bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
 bodies, and the two shared-segment word accessors. Each builds a fixture — `spawn` for the first three,
 `heap` with `--debugstream` for the ring, `shared-segment` for the accessors — for `arm64-macos` and for
-`arm64-linux` with `--emit-ir-runtime=`, cut
+`arm64-linux` with `--emit-ir-function=`, cut
 `func @<function>` out of the printed Target IR, and ask how that body reads a word another thread
 published — with `ldar` or with a plain `ldr` — and how it writes one, with `stlr` or a plain `str`.
 The shared half — the build, the cut, the line scan and the plain-access reading — lives
@@ -1843,11 +1843,11 @@ rule 5 at the
 budget `parallelCompile/` prices: one spawning `test` per file, then one compile per BODY per lane for
 the two cases that ask for one body at a time — two for the steal case, four for the relist doors —
 against one compile per LANE for the published words, whose fifteen bodies are named in a single
-comma-separated `--emit-ir-runtime=`. The widest case MEASURED at 2.7 s on a Windows host, against the
+comma-separated `--emit-ir-function=`. The widest case MEASURED at 2.7 s on a Windows host, against the
 120,000 ms default deadline.
 
-⚠ **A COMMA-SEPARATED `--emit-ir-runtime=` COSTS ONE COMPILE AND TAKES ITS WHOLE LIST DOWN WITH ANY ONE
-NAME.** A name this program contains nothing of PANICS the build
+⚠ **A COMMA-SEPARATED `--emit-ir-function=` COSTS ONE COMPILE AND TAKES ITS WHOLE LIST DOWN WITH ANY ONE
+NAME.** A name this program contains nothing of fails the build
 (`TargetPrinter.requireEveryNameRendered`), so a list reports nothing about any of the bodies on it —
 which is exactly the state a door being ADDED is in while it is being added. A case naming a settled set
 of bodies takes the single compile; one being extended asks for its bodies one at a time.

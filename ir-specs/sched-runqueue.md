@@ -35,7 +35,7 @@ class.**
 ordering is a property of the OP, so the lane that needs the barrier gets it and the lane that does not
 pays nothing.
 
-⚖ **WHAT THIS CASE PINS.** Its ```RequiredRuntime block renders `__sched_steal`'s emitted body into the
+⚖ **WHAT THIS CASE PINS.** Its ```RequiredFunctions block renders `__sched_steal`'s emitted body into the
 case's Target IR, and its `TargetIr:arm64-macos` and `TargetIr:arm64-linux` pins are where a reader sees
 `arm64.ldar.word64` standing against the victim's `runqHead`, `runqTail` and `runnext`; a compile that
 renders anything else fails the case. On the x64 lanes an acquire load lowers to the same plain `mov`, so
@@ -78,7 +78,7 @@ hits=1
 ```exitcode
 0
 ```
-```RequiredRuntime
+```RequiredFunctions
 __sched_steal
 ```
 
