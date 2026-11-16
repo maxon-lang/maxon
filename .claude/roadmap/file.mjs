@@ -31,7 +31,7 @@ if (!options.title || !options['body-file'] || options.label.length === 0) fail(
 
 const accepted = options.label.includes(ACCEPTED_LABEL);
 const onRoadmap = accepted && options.label.some(label => ROADMAP_LABELS.includes(label));
-if (onRoadmap && !PRIORITIES.includes(options.priority)) fail(`an accepted ${options.label.filter(label => ROADMAP_LABELS.includes(label)).join('/')} goes on the Roadmap and needs --priority (${PRIORITIES.join(', ')})`);
+if (onRoadmap && !PRIORITIES.includes(options.priority)) fail(`an accepted ${options.label.filter(label => ROADMAP_LABELS.includes(label)).join('/')} goes on the Roadmap and needs --priority (${PRIORITIES.join(', ')}); choose it with the prioritize skill`);
 if (!onRoadmap && options.priority) fail('only an accepted bug or design goes on the Roadmap with a priority; other issues land on the Backlog, and moving one to the Roadmap is the maintainer\'s decision');
 
 const args = ['issue', 'create', '-R', REPO, '--title', options.title, '--body-file', options['body-file']];

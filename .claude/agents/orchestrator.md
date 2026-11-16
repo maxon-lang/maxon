@@ -211,7 +211,7 @@ An issue gets its priority when it goes on the Roadmap, and the tools refuse one
 - `status.mjs` refuses to set the status of a Roadmap issue that has none;
 - wake step 5 catches the rest.
 
-Take the priority from the definitions above, and send a borderline one to the `planner`.
+Choose the priority with the `prioritize` skill, which holds the judgment and worked examples, and send a borderline one to the `planner`. A hook in this checkout refuses a raw `gh issue create` on the public repository, so every filing goes through `file.mjs`.
 
 **Two open tasks never share an area.** When the only open work overlaps an active task, it waits. Take
 work by priority (`P0` first), and within one priority prefer work that unblocks other tasks, then the
