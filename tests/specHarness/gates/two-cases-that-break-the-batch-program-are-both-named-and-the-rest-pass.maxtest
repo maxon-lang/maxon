@@ -8,11 +8,7 @@ test 'two cases that each break the batch program are both failed for it and the
 	collectNotPassed(said, specName: TwoNoMainsSpecName, testNames: ["two-no-mains.first", "two-no-mains.third", "two-no-mains.fifth"], broken: broken)
 
 	for culprit in ["two-no-mains.declares-no-main-early", "two-no-mains.declares-no-main-late"] 'eachCulprit'
-		let culpritFailed = failVerdictPrefix(testLabel(TwoNoMainsSpecName, testName: culprit))
-
-		if not said.contains(culpritFailed) 'culpritDidNotFail'
-			broken.push("'{culprit}' declares no main the compiler sees, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
-		end 'culpritDidNotFail'
+		collectNotFailed(said, label: testLabel(TwoNoMainsSpecName, testName: culprit), why: "declares no main the compiler sees", broken: broken)
 	end 'eachCulprit'
 
 	if said.split(BrokeTheBatchProgram).count() != 3 'culpritsNotBothLinked'

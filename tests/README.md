@@ -134,7 +134,7 @@ tests/
     refusals/<case>.maxtest      one malformed spec `spec-test` must REFUSE, found through `__file__`
     refusals/<case>/             refusal.md  expected-refusal.txt
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
-    gates/<case>/                the gate's one or two `.md`
+    gates/<case>/                the gate's `.md` specs
     fedRuns/FedRunProbe.maxon    the shared half of the fed-run cases: the staging, the spawn of `maxon execute` over the probe, the verdict check
     fedRuns/<case>.maxtest       one fed-run scenario of `maxon-bin/Testing/SpecFedRun.maxon`, run through the probe
     fedRuns/probe/               the one program every fed-run case runs, as `main.maxon.fixture` (stored name only - see rule 1)
@@ -965,8 +965,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
   E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
-  and a refused shard naming the live-network cases the whole directory left out, and a
-  `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
+  and a refused shard naming the live-network cases the whole directory left out, a report in the spec
+  directory's listing order, then declaration order, printed byte for byte the same at `--workers=1` and
+  `--workers=4` while the spec reported first finishes last, and a `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.
 - **`fedRuns/<case>.maxtest`** runs one scenario of the fed run (`maxon-bin/Testing/SpecFedRun.maxon`),

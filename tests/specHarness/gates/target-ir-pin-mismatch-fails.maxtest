@@ -13,12 +13,10 @@ test 'a host-lane TargetIr pin that differs from the compile fails its case and 
 	discardStagedDir(staged)
 
 	let said = everythingSaid(run)
-	let failVerdict = failVerdictPrefix(testLabel(PinMismatchSpecName, testName: PinMismatchPinnedCase))
+	let pinnedLabel = testLabel(PinMismatchSpecName, testName: PinMismatchPinnedCase)
 	let broken = StringArray.create(0)
 
-	if not said.contains(failVerdict) 'pinDidNotFail'
-		broken.push("'{PinMismatchPinnedCase}' carries a {hostTargetIrFence()} pin the compile cannot match and did not FAIL. Expected '{failVerdict}', and the run said:\n{said}\n")
-	end 'pinDidNotFail'
+	collectNotFailed(said, label: pinnedLabel, why: "carries a {hostTargetIrFence()} pin the compile cannot match", broken: broken)
 
 	if not said.contains(PlantedTargetIrLine) 'differingLineUnshown'
 		broken.push("the failure does not show the first differing line, '{PlantedTargetIrLine}'. It said:\n{said}\n")

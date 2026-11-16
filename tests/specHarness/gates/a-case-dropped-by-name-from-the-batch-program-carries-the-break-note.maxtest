@@ -8,11 +8,7 @@ test 'a case the batch compile names is dropped from the batch program and carri
 
 	collectNotPassed(said, specName: NamedErrorSpecName, testNames: ["named-error.first", "named-error.second"], broken: broken)
 
-	let culpritFailed = failVerdictPrefix(testLabel(NamedErrorSpecName, testName: "named-error.binds-nothing-it-reads"))
-
-	if not said.contains(culpritFailed) 'culpritDidNotFail'
-		broken.push("'named-error.binds-nothing-it-reads' holds an unused binding, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
-	end 'culpritDidNotFail'
+	collectNotFailed(said, label: testLabel(NamedErrorSpecName, testName: "named-error.binds-nothing-it-reads"), why: "holds an unused binding", broken: broken)
 
 	if not said.contains(UnusedBindingDiagnostic) 'ownFailureUnsaid'
 		broken.push("the failure of 'named-error.binds-nothing-it-reads' does not carry its own compile error '{UnusedBindingDiagnostic}'. The run said:\n{said}\n")

@@ -32,16 +32,13 @@ test 'a wrong expectation after a crash mid-batch fails only its own case'
 	discardStagedDir(staged)
 
 	let said = everythingSaid(run)
-	let thirdFailed = failVerdictPrefix(testLabel(PanicMidBatchSpecName, testName: PanicMidBatchThree))
 	let broken = StringArray.create(0)
 
 	collectNotPassed(said, specName: PanicMidBatchSpecName, testNames: [PanicMidBatchOne], broken: broken)
 	collectCrashNotAttributed(said, broken: broken)
 	collectMissingSummary(said, expected: batchSummaryLine(1, programs: 1, alone: 2), broken: broken)
 
-	if not said.contains(thirdFailed) 'thirdDidNotFail'
-		broken.push("'{PanicMidBatchThree}' expects the wrong exit code and did not FAIL. Expected '{thirdFailed}', and the run said:\n{said}\n")
-	end 'thirdDidNotFail'
+	collectNotFailed(said, label: testLabel(PanicMidBatchSpecName, testName: PanicMidBatchThree), why: "expects the wrong exit code", broken: broken)
 
 	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
 		broken.push("the run exited {SuccessExitCode} with failing cases in it. It said:\n{said}\n")

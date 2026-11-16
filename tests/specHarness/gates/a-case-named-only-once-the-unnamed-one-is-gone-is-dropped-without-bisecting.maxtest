@@ -8,11 +8,7 @@ test 'a case a trial names after the unnamed culprit is isolated is dropped by t
 	collectNotPassed(said, specName: MixedSpecName, testNames: ["mixed.first", "mixed.second"], broken: broken)
 
 	for culprit in ["mixed.declares-no-main", "mixed.binds-nothing-it-reads"] 'eachCulprit'
-		let culpritFailed = failVerdictPrefix(testLabel(MixedSpecName, testName: culprit))
-
-		if not said.contains(culpritFailed) 'culpritDidNotFail'
-			broken.push("'{culprit}' breaks the batch program, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
-		end 'culpritDidNotFail'
+		collectNotFailed(said, label: testLabel(MixedSpecName, testName: culprit), why: "breaks the batch program", broken: broken)
 	end 'eachCulprit'
 
 	if said.split(BrokeTheBatchProgram).count() != 3 'culpritsNotBothLinked'

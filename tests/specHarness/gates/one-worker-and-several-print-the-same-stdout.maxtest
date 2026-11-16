@@ -1,0 +1,117 @@
+let SeveralWorkersFlag = "--workers=4"
+let ShortWait = "sleep(0)"
+let LongWait = "sleep(1500)"
+let WaitsCaseSuffix = ".waits"
+let AlphaSpecName = "alpha"
+let BravoSpecName = "bravo"
+let CharlieSpecName = "charlie"
+let DeltaSpecName = "delta"
+let FailingSpecName = BravoSpecName
+
+test 'spec-test prints the same stdout at one worker and at several'
+	let staged = stagedGateFixture()
+	let specs = listedSpecs(staged)
+	let firstListed = try specs.get(0) otherwise panic("spec-harness tests: the gate could not run - {staged.toString()} lists no spec")
+
+	plantLongWait(firstListed)
+
+	let oneWorker = runSpecTest(staged, includeNetwork: false, extraArguments: [OneWorkerFlag])
+	let severalWorkers = runSpecTest(staged, includeNetwork: false, extraArguments: [SeveralWorkersFlag])
+	discardStagedDir(staged)
+
+	let said = everythingSaid(oneWorker)
+	let broken = StringArray.create(0)
+
+	for specName in [AlphaSpecName, BravoSpecName, CharlieSpecName, DeltaSpecName] 'eachSpec'
+		collectNotPassed(said, specName: specName, testNames: [waitsCase(specName)], broken: broken)
+
+		if specName == FailingSpecName 'expectsAFailure'
+			collectNotFailed(said, label: testLabel(specName, testName: secondCase(specName)), why: "expects a stdout it does not print", broken: broken)
+		end 'expectsAFailure' else 'expectsAPass'
+			collectNotPassed(said, specName: specName, testNames: [secondCase(specName)], broken: broken)
+		end 'expectsAPass'
+	end 'eachSpec'
+
+	collectMissingSummary(said, expected: batchSummaryLine(3, programs: 2, alone: 4), broken: broken)
+	collectOutOfOrder(oneWorker.stdout, labels: reportOrder(specs), broken: broken)
+
+	if severalWorkers.stdout != oneWorker.stdout 'stdoutDiffers'
+		broken.push("stdout at `{SeveralWorkersFlag}` differs from stdout at `{OneWorkerFlag}`, with {firstListed.filename()}, the first spec listed, waiting longest.\nAt `{OneWorkerFlag}` it said:\n{oneWorker.stdout}\nAt `{SeveralWorkersFlag}` it said:\n{severalWorkers.stdout}\n")
+	end 'stdoutDiffers'
+
+	if severalWorkers.exitCode() != oneWorker.exitCode() 'exitDiffers'
+		broken.push("the run exited {oneWorker.exitCode()} at `{OneWorkerFlag}` and {severalWorkers.exitCode()} at `{SeveralWorkersFlag}`. At `{SeveralWorkersFlag}` it said:\n{everythingSaid(severalWorkers)}\n")
+	end 'exitDiffers'
+
+	requireNothingBroken(broken, headline: "spec-test's stdout does not depend on its worker count")
+end 'spec-test prints the same stdout at one worker and at several'
+
+function listedSpecs(staged FilePath) returns FilePathArray
+	let specs = FilePathArray.create(0)
+
+	for entry in listing(staged) 'eachEntry'
+		if entry.fileExtension() == FixtureSpecExtension 'isASpec'
+			specs.push(entry)
+		end 'isASpec'
+	end 'eachEntry'
+
+	return specs
+end 'listedSpecs'
+
+function plantLongWait(spec FilePath)
+	let text = fileText(spec)
+
+	if occurrences(text, needle: ShortWait) != 1 'waitNotPlantable'
+		panic("spec-harness tests: the gate could not run - {spec.toString()} must hold `{ShortWait}` exactly once, so that the spec listed first is the one that waits")
+	end 'waitNotPlantable'
+
+	writeStagedFile(spec, content: text.replace(ShortWait, with: LongWait))
+end 'plantLongWait'
+
+function waitsCase(specName String) returns String
+	return "{specName}{WaitsCaseSuffix}"
+end 'waitsCase'
+
+function secondCase(specName String) returns String
+	if specName == AlphaSpecName 'isAlpha'
+		return "alpha.exits-two"
+	end 'isAlpha'
+
+	if specName == BravoSpecName 'isBravo'
+		return "bravo.fails-on-its-stdout"
+	end 'isBravo'
+
+	if specName == CharlieSpecName 'isCharlie'
+		return "charlie.refused"
+	end 'isCharlie'
+
+	if specName == DeltaSpecName 'isDelta'
+		return "delta.alone"
+	end 'isDelta'
+
+	panic("spec-harness tests: the gate could not run - {specName} is not one of its specs")
+end 'secondCase'
+
+function reportOrder(specs FilePathArray) returns StringArray
+	let labels = StringArray.create(0)
+
+	for spec in specs 'eachSpec'
+		let specName = spec.stem()
+		labels.push(testLabel(specName, testName: waitsCase(specName)))
+		labels.push(testLabel(specName, testName: secondCase(specName)))
+	end 'eachSpec'
+
+	return labels
+end 'reportOrder'
+
+function collectOutOfOrder(stdout String, labels StringArray, broken StringArray)
+	for index in 1 upto labels.count() 'eachLater'
+		let earlier = try labels.get(index - 1) otherwise panic("spec-harness tests: {index - 1} is inside the report order")
+		let later = try labels.get(index) otherwise panic("spec-harness tests: {index} is inside the report order")
+		let before = try stdout.split(later).get(0) otherwise panic("spec-harness tests: a split always yields a first part")
+
+		if not before.contains(earlier) 'reportedLate'
+			broken.push("'{earlier}' is not reported before '{later}': the report is in the order the spec directory lists its specs, then declaration order. The run said:\n{stdout}\n")
+		end 'reportedLate'
+	end 'eachLater'
+end 'collectOutOfOrder'

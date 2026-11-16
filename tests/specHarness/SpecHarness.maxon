@@ -238,6 +238,8 @@ function otherNativeLanes() returns StringArray
 	return others
 end 'otherNativeLanes'
 
+let OneWorkerFlag = "--workers=1"
+
 function batchSummaryLine(batched CaseTally, programs CaseTally, alone CaseTally) returns String
 	return "{batched} run case(s) ran batched in {programs} program(s); {alone} ran alone"
 end 'batchSummaryLine'
@@ -251,6 +253,12 @@ function collectNotPassed(said String, specName String, testNames StringArray, b
 		end 'didNotPass'
 	end 'eachCase'
 end 'collectNotPassed'
+
+function collectNotFailed(said String, label String, why String, broken StringArray)
+	if not said.contains(failVerdictPrefix(label)) 'didNotFail'
+		broken.push("'{label}' {why} and did not FAIL. Expected '{failVerdictPrefix(label)}', and the run said:\n{said}\n")
+	end 'didNotFail'
+end 'collectNotFailed'
 
 function collectMissingSummary(said String, expected String, broken StringArray)
 	if not said.contains(expected) 'summaryAbsent'
@@ -269,9 +277,7 @@ function recordedProcessId(file FilePath) returns Pid
 end 'recordedProcessId'
 
 function collectLeakNotReported(said String, label String, leaker Pid, broken StringArray)
-	if not said.contains(failVerdictPrefix(label)) 'caseDidNotFail'
-		broken.push("'{label}' left process {leaker} running and did not FAIL. Expected '{failVerdictPrefix(label)}', and the run said:\n{said}\n")
-	end 'caseDidNotFail'
+	collectNotFailed(said, label: label, why: "left process {leaker} running", broken: broken)
 
 	if not said.contains("{LeakedOneProcessText}{leaker} ") 'leakerUnnamed'
 		broken.push("the failure of '{label}' does not name the process it left. Expected '{LeakedOneProcessText}{leaker} ' followed by its image name, and the run said:\n{said}\n")
