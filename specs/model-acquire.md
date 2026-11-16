@@ -5584,7 +5584,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:86:3: 'keep' holds a record from outside 'a1' and cannot be reassigned while 'a1' is open
+error E3204: <fragment>:86:3: 'keep' holds a linear value from outside 'a1' and cannot be reassigned while 'a1' is open
 ```
 
 <!-- test: model-hand-ab-s-acquire-state-mk-leaves-drop -->
@@ -5683,7 +5683,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:86:3: 'keep' holds a record from outside 'a1' and cannot be reassigned while 'a1' is open
+error E3204: <fragment>:86:3: 'keep' holds a linear value from outside 'a1' and cannot be reassigned while 'a1' is open
 ```
 
 <!-- test: model-hand-ab-s-acquire-state-mk-in-otherwise -->
@@ -5783,7 +5783,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:86:3: 'keep' holds a record from outside 'a1' and cannot be reassigned while 'a1' is open
+error E3204: <fragment>:86:3: 'keep' holds a linear value from outside 'a1' and cannot be reassigned while 'a1' is open
 ```
 
 <!-- test: model-hand-ac-hb-send-in-acquire-body -->
@@ -6862,7 +6862,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:45:3: 'out' holds a record from outside 'a1' and cannot be reassigned while 'a1' is open
+error E3204: <fragment>:45:3: 'out' holds a linear value from outside 'a1' and cannot be reassigned while 'a1' is open
 ```
 
 <!-- test: model-hand-ad-k-swap-cell-twice-via-state -->

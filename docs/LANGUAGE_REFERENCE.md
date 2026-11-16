@@ -6790,7 +6790,7 @@ it with `modify`, or take it out with `swap` ``).
 
 `modify x 'label' … end 'label'` opens an `isolated` local, parameter or field for several statements. Inside,
 `x` keeps its name and is writable; everything outside is read-only except block locals, objects made inside
-the block and outer `var`s that hold values:
+the block and outer `var`s that hold a number, `bool`, enum, payload-free union, `String` or `Character`:
 
 ```maxon
 function buildIndex(declarations DeclarationArray) returns SettledIndex
@@ -6815,7 +6815,9 @@ swapping, sending or freezing a region needs a writable holder, so one reached t
 Inside a block:
 
 - Only the region's contents are writable. The slot holding `x` cannot be reassigned or passed by reference
-  in its own block (**E3203**), and an outer `var` that holds a record cannot be reassigned (**E3204**).
+  in its own block (**E3203**). An outer `var` that holds anything but a number, `bool`, enum, payload-free
+  union, `String` or `Character` cannot be reassigned (**E3204**); the message names what it holds (``'keep' holds
+  a linear value from outside 'fill' and cannot be reassigned while 'fill' is open``).
 - A mutable value cannot leave the block by `return`, by `throw` or by an outer variable (**E3202**): what
   leaves is a value, `immutable` data or a fresh `isolated` region.
 - A nested `modify` leaves the root of every enclosing block read-only.
@@ -7204,7 +7206,7 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3201](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3201) | one statement reaching two isolated regions or two acquired states, mutable outer data beside one, or an outer `isolated` linear value moved into an open region |
 | [E3202](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3202) | a mutable value leaving a `modify` or `acquire` block, an acquired state leaving its block, a `mutable isolated` parameter moved out |
 | [E3203](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3203) | the slot of an open value reassigned in its own block |
-| [E3204](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3204) | an outer `var` holding a record reassigned in a block |
+| [E3204](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3204) | an outer `var` holding anything but a number, `bool`, enum, payload-free union, `String` or `Character` reassigned in a block |
 | [E3205](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3205) | waiting or yielding inside a `modify` or `acquire` block or a one-call open |
 | [E3206](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3206) | a parameter the body needs both mutable and immutable |
 | [E3207](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3207) | an argument whose capability the parameter refuses |

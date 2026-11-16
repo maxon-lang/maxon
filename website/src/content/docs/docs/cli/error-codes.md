@@ -851,7 +851,7 @@ The variable that names an open value is reassigned inside its own `modify` bloc
 
 ### E3204 — `semanticOuterDataWrittenInWindow`
 
-An outer `var` that holds a record is reassigned while a `modify` block is open. Inside the block only block locals, objects created in the block and outer `var`s holding values are writable, and an outer record is read-only. Reassign it before or after the block.
+An outer `var` is reassigned while a `modify` block is open. Inside the block only block locals, objects created in the block and outer `var`s holding a number, `bool`, enum, payload-free union, `String` or `Character` are writable. An outer `var` holding anything else (a record, an `isolated` value, immutable data, a linear or `unique` value, a service handle, a union with a payload, a function or interface value, a value of an opaque type, a container) is read-only. The message names what the `var` holds. Reassign it before or after the block.
 
 ### E3205 — `semanticWaitInsideWindow`
 

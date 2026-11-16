@@ -10137,10 +10137,41 @@ extension Parser
 		let bound = self.bodyState.scope.getInfo(nameTok.value).boundValue
 		let window = innermostWindowOf(windows)
 
-		if valueIsOutsideInnermostWindow(windows, value: bound) and self.valueMayNameARecord(bound) 'anOuterRecordVariable'
-			throw self.regionRefusal(ErrorCode.semanticOuterDataWrittenInWindow, message: "'{String.from(nameTok.value)}' holds a record from outside '{String.from(window.label)}' and cannot be reassigned while '{String.from(window.label)}' is open", line: nameTok.line, column: nameTok.column)
+		if valueIsOutsideInnermostWindow(windows, value: bound) and self.valueMayNameARecord(bound) and not tagIsByteRecord(self.tagOf(bound)) 'anOuterRecordVariable'
+			throw self.regionRefusal(ErrorCode.semanticOuterDataWrittenInWindow, message: "'{String.from(nameTok.value)}' holds {self.outerVariableHeldNoun(bound)} from outside '{String.from(window.label)}' and cannot be reassigned while '{String.from(window.label)}' is open", line: nameTok.line, column: nameTok.column)
 		end 'anOuterRecordVariable'
 	end 'requireAssignmentAllowedInWindows'
+
+	function outerVariableHeldNoun(value ValueId) returns String
+		let capability = self.capabilityOfValue(value)
+		let tag = self.tagOf(value)
+
+		if capability == ValueCapability.isolated 'anIsolatedValue'
+			return "an isolated value"
+		end 'anIsolatedValue' else if capability == ValueCapability.immutable 'immutableData'
+			return "immutable data"
+		end 'immutableData' else if self.valueIsLinear(value) 'aLinearValue'
+			return "a linear value"
+		end 'aLinearValue' else if self.valueHoldsAUniqueRecord(value) 'aUniqueValue'
+			return "a unique value"
+		end 'aUniqueValue' else if self.valueIsAServiceHandle(value) 'aServiceHandle'
+			return "a service handle"
+		end 'aServiceHandle' else if self.valueIsBoxedUnion(value) 'aUnion'
+			return "a union"
+		end 'aUnion' else if tag == ValueTypeTag.function 'aFunctionValue'
+			return "a function value"
+		end 'aFunctionValue' else if tag == ValueTypeTag.interfaceRef 'anInterfaceValue'
+			return "an interface value"
+		end 'anInterfaceValue' else if tag == ValueTypeTag.typeParameter 'anOpaqueValue'
+			return "a value of an opaque type"
+		end 'anOpaqueValue' else if tag == ValueTypeTag.genericInstance 'aContainer'
+			return "a container"
+		end 'aContainer' else if self.valueIsAHeapRecord(value) 'aRecord'
+			return "a record"
+		end 'aRecord'
+
+		panic("outerVariableHeldNoun: a value that may name a record is an isolated, immutable, linear, unique, service-handle, union, function, interface, opaque, container or record value")
+	end 'outerVariableHeldNoun'
 
 	function requireReturnedCapability(func IrFunction, value ValueId, retStart ElementIndex) throws SourceParseError
 		if self.valueIsDeferred(value) 'anUnknownResult'

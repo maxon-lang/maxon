@@ -3059,3 +3059,309 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: an-outer-string-var-is-assigned-inside-a-window -->
+A `String` is a value type, so an outer `var` holding one is assigned inside the window, from a literal, from an
+interpolation and from a field of the open region.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+	var label as String
+
+	static function create(n Num) returns Self
+		return Self{n: n, label: "box"}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var s = "a"
+	var t = "c"
+	var u = "e"
+
+	modify b 'm'
+		b.n = 2
+		s = "b"
+		t = "d{b.n}"
+		u = b.label
+		b.label = "lid"
+	end 'm'
+
+	print("{s} {t} {u}\n")
+	return 0
+end 'main'
+```
+```stdout
+b d2 box
+```
+```exitcode
+0
+```
+
+<!-- test: an-outer-character-var-is-assigned-inside-a-window -->
+A `Character` is a value type too.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var c = 'a'
+
+	modify b 'm'
+		b.n = 2
+		c = 'b'
+	end 'm'
+
+	print("{c}\n")
+	return 0
+end 'main'
+```
+```stdout
+b
+```
+```exitcode
+0
+```
+
+<!-- test: an-outer-immutable-var-assigned-inside-a-window-is-refused -->
+An outer `var` holding frozen data stays read-only inside the window.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var f = freeze Bx.create(5)
+
+	modify b 'm'
+		b.n = 2
+		f = freeze Bx.create(6)
+	end 'm'
+
+	print("{f.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3204: <fragment>:18:3: 'f' holds immutable data from outside 'm' and cannot be reassigned while 'm' is open
+```
+
+<!-- test: an-outer-union-var-assigned-inside-a-window-is-refused -->
+An outer `var` holding a union with a payload stays read-only inside the window.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+union Held
+	none
+	some(n Num)
+end 'Held'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var h = Held.none
+
+	modify b 'm'
+		b.n = 2
+		h = Held.some(3)
+	end 'm'
+
+	match h 'show'
+		none then print("none\n")
+		some(n) then print("{n}\n")
+	end 'show'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3204: <fragment>:23:3: 'h' holds a union from outside 'm' and cannot be reassigned while 'm' is open
+```
+
+<!-- test: an-outer-isolated-var-assigned-inside-a-window-is-refused -->
+An outer `var` holding an `isolated` value stays read-only inside the window.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var x = Bx.create(5) as isolated Bx
+
+	modify b 'm'
+		b.n = 2
+		x = Bx.create(6) as isolated Bx
+	end 'm'
+
+	modify x 'read'
+		print("{x.n}\n")
+	end 'read'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3204: <fragment>:18:3: 'x' holds an isolated value from outside 'm' and cannot be reassigned while 'm' is open
+```
+
+<!-- test: an-outer-unique-var-assigned-inside-a-window-is-refused -->
+An outer `var` holding a `unique` value stays read-only inside the window.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Ux is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Ux'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var x = Ux.create(5)
+
+	modify b 'm'
+		b.n = 2
+		x = Ux.create(6)
+	end 'm'
+
+	print("{x.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3204: <fragment>:26:3: 'x' holds a unique value from outside 'm' and cannot be reassigned while 'm' is open
+```
+
+<!-- test: an-outer-linear-var-assigned-inside-a-window-is-refused -->
+An outer `var` holding a linear value stays read-only inside the window.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Lx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Lx'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var x = Lx.create(5)
+
+	modify b 'm'
+		b.n = 2
+		x = Lx.create(6)
+	end 'm'
+
+	x.fin()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3204: <fragment>:30:3: 'x' holds a linear value from outside 'm' and cannot be reassigned while 'm' is open
+```
+
+<!-- test: an-outer-service-handle-var-assigned-inside-a-window-is-refused -->
+An outer `var` holding a service handle stays read-only inside the window.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Svc
+	var n as Num
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns bool
+		return self.n > 0
+	end 'ping'
+end 'Svc'
+
+function main() returns ExitCode
+	let b = Bx.create(1) as isolated Bx
+	var x = spawn Svc.create()
+
+	modify b 'm'
+		b.n = 2
+		x = spawn Svc.create()
+	end 'm'
+
+	let up = try await x.ping() otherwise false
+	print("{up}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3204: <fragment>:30:3: 'x' holds a service handle from outside 'm' and cannot be reassigned while 'm' is open
+```

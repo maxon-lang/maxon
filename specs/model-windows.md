@@ -1234,7 +1234,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:46:3: 'out' holds a record from outside 'm1' and cannot be reassigned while 'm1' is open
+error E3204: <fragment>:46:3: 'out' holds an isolated value from outside 'm1' and cannot be reassigned while 'm1' is open
 ```
 
 <!-- test: model-finding-ad-l-store-into-window-object -->
@@ -2399,7 +2399,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:46:3: 'out' holds a record from outside 'm1' and cannot be reassigned while 'm1' is open
+error E3204: <fragment>:46:3: 'out' holds a linear value from outside 'm1' and cannot be reassigned while 'm1' is open
 ```
 
 <!-- test: model-finding-ae-nested-modify-write-outer-root -->
@@ -2909,7 +2909,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3204: <fragment>:33:3: 'r' holds a record from outside 'm1' and cannot be reassigned while 'm1' is open
+error E3204: <fragment>:33:3: 'r' holds an isolated value from outside 'm1' and cannot be reassigned while 'm1' is open
 ```
 
 <!-- test: model-hand-ab-w-modify-nested -->
