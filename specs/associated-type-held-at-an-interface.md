@@ -1137,6 +1137,9 @@ end 'main'
 ```
 
 <!-- test: error.held-binding-whose-conformer-holds-a-function-value-is-frozen -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `StepBag` binds `Bag`'s associated type to `StepCursor`, so its `Bag` table carries `StepCursor` to `Cursor` without any widening in a body; a freeze of a value holding a `Cursor` is refused because no share walk can mark `StepCursor`'s function value.
 
 ```maxon
@@ -1272,18 +1275,6 @@ typealias HeldA = A with B
 typealias HeldB = B with A
 typealias TextNest = Nest with String
 
-type Door
-	var seen as Tally
-
-	static function create() returns Self
-		return Self{seen: 0}
-	end 'create'
-
-	export function look(n Tally)
-		self.seen = self.seen + n
-	end 'look'
-end 'Door'
-
 type Holder
 	export let a as A
 
@@ -1303,8 +1294,6 @@ function viaB(source HeldB) returns Tally
 end 'viaB'
 
 function main() returns ExitCode
-	let door = spawn Door.create()
-	door.shutdown()
 	let frozen = freeze Holder.create(TextNest.create(1, held: "held"))
 	print("{viaA(TextNest.create(1, held: "held"))} {viaB(TextNest.create(2, held: "held"))}\n")
 	_ = frozen

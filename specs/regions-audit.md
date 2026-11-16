@@ -545,6 +545,9 @@ error E3171: <fragment>:21:13: `Holder` cannot be frozen: it is a `Holder` whose
 ```
 
 <!-- test: error.a-promise-held-by-a-conformer-is-refused-without-a-service -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `async` spawn that makes the promise before the freeze is judged.
+
 No service runs, and a `freeze` of a record whose interface-typed field holds a conformer that holds a promise is still refused: a promise owns one green thread whichever way the program shares it.
 
 ```maxon

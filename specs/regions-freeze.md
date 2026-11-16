@@ -297,6 +297,9 @@ end 'main'
 ```
 
 <!-- test: error.freeze-of-an-interface-whose-converted-conformer-holds-an-os-handle -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` and `TcpListener.bind` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 The `Holder` frozen here holds a `Plain`, but `open` converts a `Port` to `Shape`, so a frozen `Holder` may reach a listening socket that no share walk can mark.
 
 ```maxon
@@ -367,6 +370,9 @@ note: <fragment>:51:9: `Port` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-reaching-an-interface-through-a-conformers-own-interface-field -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` and `TcpListener.bind` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `Wrapper` stands at `Outer` and holds an `Inner`, and `Port` stands at `Inner`, so a frozen `Holder` may reach a listening socket two interfaces down.
 
 ```maxon
@@ -458,6 +464,9 @@ note: <fragment>:67:9: `Port` is converted to `Inner` here
 ```
 
 <!-- test: error.freeze-of-an-interface-whose-generic-conformer-is-built-at-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `Wrap` converts a `Gen with T` to `Sink` in its generic body, and the program builds `Wrap with Step`, so a `Gen with Step` holding a function value stands at `Sink`.
 
 ```maxon
@@ -760,6 +769,9 @@ end 'main'
 ```
 
 <!-- test: error.freeze-in-a-generic-type-body-whose-instance-reaches-an-unwalkable-conformer -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `Froze`'s body is compiled once, and its `freeze` is judged at every instance the program builds: at `Froze with Holder` it freezes a `Cell with Holder`, whose `Shape` is a `Stepper` holding a function value.
 
 ```maxon
@@ -835,6 +847,9 @@ note: <fragment>:64:40: `Stepper` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-in-a-generic-type-body-whose-instance-holds-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 At `Froze with Stepper` the compiled-once `freeze` reaches `Stepper`'s function value with no interface in between.
 
 ```maxon
@@ -1029,6 +1044,9 @@ end 'main'
 ```
 
 <!-- test: error.freeze-through-a-generic-type-that-calls-another-generic-type-reaches-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `Outer` builds `Froze` over its own parameter, and `Froze`'s generic body converts a `Gen with T` to `Shape`; the program builds `Outer with Stepper`, so the instance that stands at `Shape` is a `Gen with Stepper` that no `Outer` body names directly.
 
 ```maxon
@@ -1112,6 +1130,9 @@ note: <fragment>:54:24: `Gen with Stepper` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-through-a-generic-type-that-names-another-by-its-bare-name-reaches-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 The same chain with `Outer` calling `Froze.run` by its bare name, so the instance is inferred from the argument rather than spelled.
 
 ```maxon
@@ -1194,6 +1215,9 @@ note: <fragment>:54:24: `Gen with Stepper` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-door-in-a-generic-type-reached-through-another-generic-types-body -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 The `freeze` sits in `Froze`'s generic body and the program reaches `Froze` only through `Outer with Holder`, so the frozen `Cell with Holder` is an instance no entry of the program names.
 
 ```maxon
@@ -1442,18 +1466,6 @@ end 'main'
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-type Door
-	var seen as Tally
-
-	static function create() returns Self
-		return Self{seen: 0}
-	end 'create'
-
-	export function look(n Tally)
-		self.seen = self.seen + n
-	end 'look'
-end 'Door'
-
 type Cell uses T
 	export let item as T
 
@@ -1480,15 +1492,13 @@ end 'Box'
 typealias TextBox = Box with String
 
 function main() returns ExitCode
-	let door = spawn Door.create()
-	door.shutdown()
 	let grown = TextBox.create("held text", seen: 1).deeper()
 	print("{grown.seen}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:35:10: Unsupported: sharing is judged at every instance the program builds of 'Box', and 'Box' names 'Box.Deeper', an instance whose type arguments nest its own type parameters deeper — so the instances a share door must judge are an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
+error E2015: <fragment>:23:10: Unsupported: sharing is judged at every instance the program builds of 'Box', and 'Box' names 'Box.Deeper', an instance whose type arguments nest its own type parameters deeper — so the instances a share door must judge are an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
 ```
 
 <!-- test: a-generic-body-widening-its-own-instance-releases-what-it-holds-runs -->
@@ -1599,6 +1609,9 @@ end 'main'
 ```
 
 <!-- test: error.freeze-of-a-generic-bodys-own-instance-holding-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `Gen`'s own body widens its instance to `Sink`, and the program builds it at a `Stepper`, which holds a function value; `Gen with Tally` beside it stays walkable.
 
 ```maxon
@@ -1671,6 +1684,9 @@ note: <fragment>:42:10: `StepGen` is converted to `Sink` here
 ```
 
 <!-- test: error.freeze-names-the-path-through-a-nested-conformer-to-the-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `W` holds a `Stepper` in a field, so the function value is `s.step`: the reason names the path to the part no walk can mark, not the field that holds a record.
 
 ```maxon
@@ -1842,6 +1858,9 @@ a root string that lives on the heap 1
 
 
 <!-- test: error.freeze-names-an-arrays-element-slot-through-the-array-field -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 A conformer's `Array with Stepper` field is a library container, so the refusal names the field that holds it and what it holds — the elements' own `step` — and not the container's private storage.
 
 ```maxon
@@ -1945,6 +1964,9 @@ note: <fragment>:84:9: `ArrShape` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-names-a-maps-values-through-the-map-field -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 A conformer's `Map with (String, Stepper)` field is named by the field and by what it holds: the `Stepper` values, whose `step` is the function value. The map's private `values` storage is not part of the path.
 
 ```maxon
@@ -2044,6 +2066,9 @@ note: <fragment>:82:9: `MapShape` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-names-a-lists-elements-through-the-list-field -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 A `List with Stepper` field reads as an `Array` and a `Map` do: the field holds `Stepper` elements, whose `step` is the function value, and the list's private chain is not part of the path.
 
 ```maxon
@@ -2143,6 +2168,9 @@ note: <fragment>:82:9: `ListShape` is converted to `Shape` here
 ```
 
 <!-- test: error.freeze-names-a-tuple-element-as-an-author-writes-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 A tuple element is named by its position as an author writes it, `pair.0`, and not by the field name the compiler gives the tuple's storage.
 
 ```maxon
@@ -2779,6 +2807,9 @@ end 'main'
 ```
 
 <!-- test: error.freeze-through-interfaces-names-tuple-and-instance-conformers -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 A conformer holding a tuple, an instance and nested arrays of tuples is named in the spelling the program wrote, each interface with its own article.
 
 ```maxon
@@ -2910,6 +2941,9 @@ note: <fragment>:115:28: `DeepBag` is converted to `I3` here
 ```
 
 <!-- test: error.a-conversion-note-points-at-the-arm-that-returned-the-conformer -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `pick` returns `plain` from one arm and `stepper` from the other, so the note naming where `Stepper` becomes a `Shape` points at the second arm.
 
 ```maxon

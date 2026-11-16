@@ -2625,6 +2625,9 @@ error E3171: <fragment>:12:24: `Config` cannot be a registry value or a `SharedV
 ```
 
 <!-- test: error.publish-of-an-interface-whose-converted-conformer-holds-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 `stepped` converts a `Stepper` to `Shape`, so a published `Config` may reach a function value. The alias is accepted, because an interface field is judged at the door that shares the value; the `create` that makes the cell is such a door too, so it is refused beside the `publish`.
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -2699,6 +2702,9 @@ note: <fragment>:54:9: `Stepper` is converted to `Shape` here
 ```
 
 <!-- test: error.a-value-default-holding-an-interface-whose-conformer-holds-a-function-value -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 The `default` holds a `Plain`, but `stepped` converts a `Stepper` to `Shape`, so the registry value may reach a function value.
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3490,6 +3496,9 @@ error E3171: <fragment>:17:9: `Config` cannot be a registry value or a `SharedVa
 ```
 
 <!-- test: error.create-of-an-interface-whose-converted-conformer-holds-an-os-handle -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` and `TcpListener.bind` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
 The cell is made holding a `Plain`, but `open` converts a `Port` to `Shape`, so a `Config` may reach a listening socket. The alias is accepted: an interface field is judged at the door that shares the value.
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3561,6 +3570,9 @@ note: <fragment>:53:9: `Port` is converted to `Shape` here
 ```
 
 <!-- test: error.register-of-an-interface-whose-converted-conformer-holds-a-promise -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn`, the `async` spawn that makes the promise and `Scheduler.yield` before the registration is judged.
+
 `later` converts a `Pending` to `Shape`, so a registered `Config` may reach a promise. The `default` is a share door too, so it is refused beside the `register`.
 ```maxon
 typealias Tally = int(0 to u64.max)
