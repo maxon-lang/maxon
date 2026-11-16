@@ -7383,27 +7383,38 @@ typealias PayloadBindingArray = Array with PayloadBinding
 type ScrutineeStanding
 	export let solelyOwned as bool
 	let slotsMayBeReadAgain as bool
-	let unaliased as bool
+	let heldIsolated as bool
+	let frozen as bool
 
-	static function create(solelyOwned bool, slotsMayBeReadAgain bool, unaliased bool) returns ScrutineeStanding
-		return Self{solelyOwned: solelyOwned, slotsMayBeReadAgain: slotsMayBeReadAgain, unaliased: unaliased}
+	static function create(solelyOwned bool, slotsMayBeReadAgain bool, heldIsolated bool, frozen bool) returns ScrutineeStanding
+		return Self{solelyOwned: solelyOwned, slotsMayBeReadAgain: slotsMayBeReadAgain, heldIsolated: heldIsolated, frozen: frozen}
 	end 'create'
 
 	function ownsTheBoxAlone() returns bool
 		return self.solelyOwned and not self.slotsMayBeReadAgain
 	end 'ownsTheBoxAlone'
 
-	function ownsItsIsolatedPayloads() returns bool
-		return (self.solelyOwned or self.unaliased) and not self.slotsMayBeReadAgain
-	end 'ownsItsIsolatedPayloads'
+	// Sole ownership of the box says nothing about the payload's region: a plain union aliases (`let v = u`),
+	// so only an `isolated` holder owns its payloads. Pinned by the regions-match-lend spec.
+	function isolatedPayloadStanding(slot ParamCapability) returns IsolatedPayloadStanding
+		if slot != ParamCapability.isolated or self.frozen 'notIsolated'
+			return IsolatedPayloadStanding.notIsolated
+		end 'notIsolated'
+
+		return IsolatedPayloadStanding.ownedHere if self.heldIsolated and not self.slotsMayBeReadAgain else IsolatedPayloadStanding.lent
+	end 'isolatedPayloadStanding'
 end 'ScrutineeStanding'
 
 enum PayloadTake
 	movedOut
-	consumed
-	partRead
 	borrowed
 end 'PayloadTake'
+
+enum IsolatedPayloadStanding
+	notIsolated
+	lent
+	ownedHere
+end 'IsolatedPayloadStanding'
 
 // ⭐ **THE STRATEGY THRESHOLD — below this many disjoint intervals a `match` dispatches by a linear
 // compare chain, at or above it by a balanced binary search.** Three intervals is at most three

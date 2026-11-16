@@ -377,6 +377,14 @@ by the `match`, so its arms own their payloads and open no window, a frozen unio
 in an `isolated` local hands its payload out as a region of its own.
 `specs/regions-modify.md` pins the forms (`a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data`).
 
+Every other union is ordinary region data, held by a plain `let`, a `var`, a parameter, a field or an element, and
+it aliases freely: a second name, a call that keeps it and a call that returns it reach the same payload. The
+payload an arm binds is therefore lent to the arm and is a [part read](#part-reads-and-handed-back-results): the
+arm opens it, as it opens any `isolated` value it does not own, and an owned `isolated` position (an `isolated`
+parameter or slot, a send, `freeze`, a binding) refuses it with **E3198**. A payload bound from a union held in an
+`isolated` local is an owned value, and passing it twice to `isolated` parameters is **E3102**.
+`specs/regions-match-lend.md` pins both.
+
 ### Part Reads and Handed-Back Results
 
 A read of an `isolated` field, element or payload outside a block is a **part read**: data its region still

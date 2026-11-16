@@ -5383,9 +5383,8 @@ extension Parser
 
 	function scrutineeStandingOf(scrut ValueId, scrutStart ElementIndex, isAParameter bool) returns ScrutineeStanding
 		let slotsMayBeReadAgain = self.scrutineeBindingIsMutable(scrut, isAParameter: isAParameter) or self.valueIsASlotRead(scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)
-		let unaliased = self.valueIsSolelyOwnedHere(scrut) or self.valueIsAnOwnedIsolatedLocal(scrut)
 
-		return ScrutineeStanding.create(self.valueIsSoleHeapOwner(scrut), slotsMayBeReadAgain: slotsMayBeReadAgain, unaliased: unaliased)
+		return ScrutineeStanding.create(self.valueIsSoleHeapOwner(scrut), slotsMayBeReadAgain: slotsMayBeReadAgain, heldIsolated: self.valueIsAnOwnedIsolatedLocal(scrut), frozen: self.effectiveCapabilityOf(scrut) == ValueCapability.immutable)
 	end 'scrutineeStandingOf'
 
 	function lentArmRootsOf(scrut ValueId, scrutStart ElementIndex, scrutEnd ElementIndex, isLentMatch bool) returns LentArmRoots
@@ -8013,23 +8012,28 @@ extension Parser
 				// A word's payload is never emptied out of it, but the match still consumes a solely-owned
 				// immutable scrutinee on the condition the box's move-out uses, so a later read is E3102 in
 				// either representation.
-				let take = self.payloadTakeOf(standing, loaded: loaded, slot: binding.field.capability, slotIsEmptiable: true)
-				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range)
-				movedManaged = self.settlePayloadTake(take, loaded: loaded) or movedManaged
+				let take = self.payloadTakeOf(standing, loaded: loaded, slotIsEmptiable: true)
+				let isolatedPayload = standing.isolatedPayloadStanding(binding.field.capability)
+				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range, isolatedPayload: isolatedPayload)
+				self.noteLentIsolatedPayload(loaded, isolatedPayload: isolatedPayload)
+				movedManaged = take == PayloadTake.movedOut or isolatedPayload == IsolatedPayloadStanding.ownedHere or movedManaged
 			end 'aWordPayload' else if payloadClassIsManaged(class) 'managedPayload'
 				// A `var` union's slot is read again by its next `match`, so the bind borrows it rather than
 				// emptying it: a move-out would hand the record to a binding that frees it at the arm's exit,
 				// leaving the box holding a null the author never emptied. A `let` union is never read after
 				// the match consumes it, so an arm may take its payload for good.
-				let take = self.payloadTakeOf(standing, loaded: loaded, slot: binding.field.capability, slotIsEmptiable: not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared))
+				let take = self.payloadTakeOf(standing, loaded: loaded, slotIsEmptiable: not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared))
+				let isolatedPayload = standing.isolatedPayloadStanding(binding.field.capability)
 
 				if take == PayloadTake.movedOut 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: layout.name), range: range)
 					movedManaged = true
 				end 'ownedMoveOut' else 'borrowed'
-					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range)
-					movedManaged = self.settlePayloadTake(take, loaded: loaded) or movedManaged
+					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range, isolatedPayload: isolatedPayload)
+					movedManaged = isolatedPayload == IsolatedPayloadStanding.ownedHere or movedManaged
 				end 'borrowed'
+
+				self.noteLentIsolatedPayload(loaded, isolatedPayload: isolatedPayload)
 			end 'managedPayload'
 		end 'each'
 
@@ -8115,28 +8119,22 @@ extension Parser
 		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'retainBorrowedPayload'
 
-	function payloadTakeOf(standing ScrutineeStanding, loaded ValueId, slot ParamCapability, slotIsEmptiable bool) returns PayloadTake
+	function payloadTakeOf(standing ScrutineeStanding, loaded ValueId, slotIsEmptiable bool) returns PayloadTake
 		if standing.ownsTheBoxAlone() and slotIsEmptiable and not self.valueHoldsAUniqueRecord(loaded) 'theOnlyOwnerTakesIt'
 			return PayloadTake.movedOut
 		end 'theOnlyOwnerTakesIt'
 
-		if slot != ParamCapability.isolated 'notAnIsolatedPayload'
-			return PayloadTake.borrowed
-		end 'notAnIsolatedPayload'
-
-		return PayloadTake.consumed if standing.ownsItsIsolatedPayloads() else PayloadTake.partRead
+		return PayloadTake.borrowed
 	end 'payloadTakeOf'
 
-	function settlePayloadTake(take PayloadTake, loaded ValueId) returns bool
-		if take == PayloadTake.partRead 'theSlotStaysReachable'
+	function noteLentIsolatedPayload(loaded ValueId, isolatedPayload IsolatedPayloadStanding)
+		if isolatedPayload == IsolatedPayloadStanding.lent 'theSlotStaysReachable'
 			self.noteIsolatedPartRead(loaded)
 		end 'theSlotStaysReachable'
+	end 'noteLentIsolatedPayload'
 
-		return take == PayloadTake.movedOut or take == PayloadTake.consumed
-	end 'settlePayloadTake'
-
-	function borrowPayload(bindingInfo VarInfo, loaded ValueId, name ByteArray, range SourceRange)
-		if not self.holdReplacesItsSource(loaded) 'heldRead'
+	function borrowPayload(bindingInfo VarInfo, loaded ValueId, name ByteArray, range SourceRange, isolatedPayload IsolatedPayloadStanding)
+		if isolatedPayload != IsolatedPayloadStanding.ownedHere and not self.holdReplacesItsSource(loaded) 'heldRead'
 			_ = self.holdBindingRead(loaded, name: name, range: range)
 			return
 		end 'heldRead'

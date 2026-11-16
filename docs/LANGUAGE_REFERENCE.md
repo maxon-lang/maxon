@@ -2678,7 +2678,9 @@ In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are 
 
 A match binding names the payload the matched union holds, and it is a `let`. Writing a field of a payload
 record in place (`value.count = value.count + 1`) or handing the record to a function that writes it is legal
-whatever the scrutinee is.
+whatever the scrutinee is. An `isolated` payload of a union that is not linear and not held in an `isolated`
+variable is lent to the arm: see [Match Arms That Lend an `isolated`
+Payload](#match-arms-that-lend-an-isolated-payload).
 
 ### Comparing Union Values
 
@@ -6755,6 +6757,14 @@ number, and the arm of a case with no `isolated` payload are writable. A union w
 by the `match`, so its arms own their payloads and open no window, a frozen union lends nothing, and a union held
 in an `isolated` local hands its payload out as a region of its own.
 `specs/regions-modify.md` pins the forms (`a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data`).
+
+Every other union is ordinary region data, held by a plain `let`, a `var`, a parameter, a field or an element, and
+it aliases freely: a second name, a call that keeps it and a call that returns it reach the same payload. The
+payload an arm binds is therefore lent to the arm and is a [part read](#part-reads-and-handed-back-results): the
+arm opens it, as it opens any `isolated` value it does not own, and an owned `isolated` position (an `isolated`
+parameter or slot, a send, `freeze`, a binding) refuses it with **E3198**. A payload bound from a union held in an
+`isolated` local is an owned value, and passing it twice to `isolated` parameters is **E3102**.
+`specs/regions-match-lend.md` pins both.
 
 #### Part Reads and Handed-Back Results
 

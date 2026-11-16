@@ -54,6 +54,22 @@ release's version as its heading when the release is cut.
   Fix: do the write before or after the `match`, or carry what the arm decided in a variable that holds a number
   or a value and write the record afterwards.
 
+- A `match` over a union that is not linear lends each `isolated` payload to its arm. The union is ordinary
+  region data, held by a plain `let`, a `var`, a parameter, a field or an element, so it aliases freely (`let v
+  = u`, a call that keeps it, a call that returns it), and the payload is opened in the arm under the window
+  rule and never goes where an owned `isolated` value is wanted: `match u` with `m1(o) then takeB(o)` over
+  `takeB(b isolated Bx)`, a store of `o` into an `isolated` slot and a send of it are E3198 (``'o' is isolated
+  and cannot be read outside a block; open it with `modify`, or take it out with `swap` ``). Only a linear union
+  or one that holds a `Reply` hands its payloads over as owned values.
+  Fix: open the payload in the arm (a write through it, `modify`, or a call that takes it unmarked), or keep
+  the `isolated` value in an `isolated` variable or field and move it from there instead of through a plain
+  union.
+
+- A payload bound from a union held in an `isolated` variable is an owned `isolated` value, so passing it to two
+  `isolated` parameters of one call (`takeTwo(o, b: o)`) is E3102 at the second use, as it is for an `isolated`
+  local.
+  Fix: pass it to one parameter, or pass `o.clone()` to the other.
+
 - Inside a `modify` or `acquire` block, an `isolated` local or parameter declared outside the block cannot be
   opened: passing it to a plain parameter or as a receiver, reading or writing through it, and a nested
   `modify` of it are E3199 (`'outer' cannot be opened: the value that holds it is read-only while 'w' is open`).

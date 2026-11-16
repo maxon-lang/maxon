@@ -509,7 +509,9 @@ In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are 
 
 A match binding names the payload the matched union holds, and it is a `let`. Writing a field of a payload
 record in place (`value.count = value.count + 1`) or handing the record to a function that writes it is legal
-whatever the scrutinee is.
+whatever the scrutinee is. An `isolated` payload of a union that is not linear and not held in an `isolated`
+variable is lent to the arm: see [Match Arms That Lend an `isolated`
+Payload](/docs/language/regions/#match-arms-that-lend-an-isolated-payload).
 
 ### Comparing Union Values
 
