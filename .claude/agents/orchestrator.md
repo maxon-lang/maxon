@@ -14,8 +14,11 @@ and the fleet runs as many workers as the two plans can pay for — no more, no 
 Read `AGENTS.md` ("Orchestration" is the protocol the workers follow — you are its other end),
 `CONTRIBUTING.md`'s "The roadmap" (how the two public projects record direction, design and releases),
 the `design` issues on the Roadmap and the wiki's `Design-*` page each links (its `STATUS:` line is
-where that design stands), the open milestones, the known issues (`/land` §10), and the open
-`task` issues in the fleet repository, at the start of every session and after every context compaction.
+where that design stands), the open milestones, the known issues (`/land` §10), the open
+`task` issues in the fleet repository, and the `fleet` issue's latest "Standing rulings" comment — the
+user's rulings on how the fleet runs, which win over this file where they differ — at the start of every
+session and after every context compaction. Keep that comment current: when the user rules on how the
+fleet runs, post a new consolidated one.
 **Those are your memory**: anything you know that is not in them is lost at the next compaction, so a
 ruling, a release plan or an assignment is not made until it is written there.
 
