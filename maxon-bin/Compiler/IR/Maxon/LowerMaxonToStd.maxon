@@ -3134,8 +3134,9 @@ type MaxonToStdLowering
 		self.stampOwnershipWord(self.witnessRetainCallee(typeName, instance: table), label: label, offsetInLabel: WitnessRetainFuncOffset)
 
 		// ⚠ **THE WALK WORD IS STAMPED ONLY IN A PROGRAM THAT SPAWNS A SERVICE**, the one kind of program
-		// that hands a value to another green thread and so the only reader of the word. Stamped in every
-		// program, each conformer's walk cascades would be installed where nothing can reach them.
+		// that hands a value to another green thread and so the only reader of the word;
+		// `emitServiceStart` panics on a strand started in any other. Stamped in every program,
+		// each conformer's walk cascades would be installed where nothing can reach them.
 		if self.signatures.spawnsAnyService() 'aValueCanCross'
 			self.stampOwnershipWord(self.signatures.cascadeCalleeFor(typeName, table: table, action: CascadeAction.shareWalk), label: label, offsetInLabel: WitnessShareWalkFuncOffset)
 		end 'aValueCanCross'
@@ -6580,6 +6581,10 @@ type MaxonToStdLowering
 	end 'emitServiceSpawn'
 
 	function emitServiceStart(result ValueId, typeName ByteArray, state ValueId, capacity ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, replies bool, dstBlock IrBlock)
+		if not self.signatures.spawnsAnyService() 'noServiceIsSpawned'
+			panic("emitServiceStart: '{String.from(self.currentFuncName())}' starts a strand for a `spawn` of '{String.from(typeName)}' through '{String.from(callee)}' in a program `spawnsAnyService` says spawns no service, so every witness table's share-walk word is 0 and a value this strand reads from another would be shared uncounted")
+		end 'noServiceIsSpawned'
+
 		let target = serviceStartTargetOf(callee, funcNames: self.funcNames, target: self.compileTarget)
 		let crossed = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
 		let words = ValueIdArray.create(0)

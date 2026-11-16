@@ -1,0 +1,79 @@
+typealias Tally = int(0 to 1000000)
+typealias TallyArray = Array with Tally
+
+interface Labeled
+	function label() returns String
+end 'Labeled'
+
+type Tag implements Labeled
+	let name as String
+	let marks as TallyArray
+
+	static function create(name String) returns Self
+		let marks = TallyArray.create(0)
+		marks.push(1)
+		marks.push(2)
+		return Self{name: name, marks: marks}
+	end 'create'
+
+	function label() returns String
+		return "{self.name}:{self.marks.count()}"
+	end 'label'
+end 'Tag'
+
+type Holder
+	let item as Labeled
+
+	static function create(item Labeled) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function show() returns String
+		return self.item.label()
+	end 'show'
+end 'Holder'
+
+typealias HolderCell = SharedValue with Holder
+
+type Idle
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Tally
+		return 1
+	end 'ping'
+end 'Idle'
+
+function readFrozen(frozen immutable Holder) returns Tally
+	var total = 0 as Tally
+
+	for _ in 0 upto 100 'eachRound'
+		total = total + (1 if frozen.show().count() > 0 else 0)
+	end 'eachRound'
+
+	return total
+end 'readFrozen'
+
+function readCell(cell HolderCell) returns Tally
+	var total = 0 as Tally
+
+	for _ in 0 upto 100 'eachRound'
+		total = total + (1 if cell.current().show().count() > 0 else 0)
+	end 'eachRound'
+
+	return total
+end 'readCell'
+
+function main() returns ExitCode
+	let idle = spawn Idle.create()
+	let pong = try await idle.ping() otherwise 0
+	let frozen = freeze Holder.create(Tag.create("frozen-tag"))
+	let cell = HolderCell.create(Holder.create(Tag.create("cell-tag")))
+	let a = async readFrozen(frozen)
+	let b = async readCell(cell)
+	let ra = await a
+	let rb = await b
+	print("{frozen.show()} {cell.current().show()} {ra} {rb} {pong}\n")
+	return 0
+end 'main'

@@ -26,6 +26,7 @@ let SchedulerInitName = "__gt_init"
 let SchedulerInitRole = "the green-thread scheduler's bring-up"
 let AbsentFunctionPhrase = "this program contains nothing named "
 let AbsenceLabelInfix = "-absent"
+let PresenceLabelInfix = "-present"
 let EmptyHolderArrayLine = "0"
 
 let X64RegisterCallPrefix = "{X64OpPrefix}callReg "
@@ -170,17 +171,30 @@ function stagedTierCompilerPath(staged FilePath) returns FilePath
 end 'stagedTierCompilerPath'
 
 function noteFunctionAbsent(findings StringArray, staged FilePath, caseLabel String, target String, functionName String, carrier String, role String, libraryTier bool = false)
-	let build = spawnStagedIrBuild(staged, caseLabel: "{caseLabel}{AbsenceLabelInfix}{functionName}", target: target, functionName: functionName, libraryTier: libraryTier)
+	if functionIsLaidOut(staged, caseLabel: "{caseLabel}{AbsenceLabelInfix}{functionName}", target: target, functionName: functionName, carrier: carrier, libraryTier: libraryTier) 'laidOut'
+		findings.push("on {target}, {carrier} carries `{functionName}`, {role}")
+	end 'laidOut'
+end 'noteFunctionAbsent'
+
+function noteFunctionLaidOut(findings StringArray, staged FilePath, caseLabel String, target String, functionName String, carrier String, role String)
+	if not functionIsLaidOut(staged, caseLabel: "{caseLabel}{PresenceLabelInfix}{functionName}", target: target, functionName: functionName, carrier: carrier) 'absent'
+		findings.push("on {target}, {carrier} carries no `{functionName}`, {role}")
+	end 'absent'
+end 'noteFunctionLaidOut'
+
+function functionIsLaidOut(staged FilePath, caseLabel String, target String, functionName String, carrier String, libraryTier bool = false) returns bool
+	let build = spawnStagedIrBuild(staged, caseLabel: caseLabel, target: target, functionName: functionName, libraryTier: libraryTier)
 
 	if build.exitCode() == 0 'laidOut'
-		findings.push("on {target}, {carrier} carries `{functionName}`, {role}")
-		return
+		return true
 	end 'laidOut'
 
 	if not "{build.stdout}{build.stderr}".contains("{AbsentFunctionPhrase}'{functionName}'") 'anotherRefusal'
 		panic("emitted-runtime tests: the gate could not run — {stagedIrBuildSpelling(target, functionName: functionName)} for {carrier} exited {build.exitCode()} without saying the program contains nothing named `{functionName}`: {oneLine(build.stdout)} {oneLine(build.stderr)}")
 	end 'anotherRefusal'
-end 'noteFunctionAbsent'
+
+	return false
+end 'functionIsLaidOut'
 
 function everyNativeTargetName() returns StringArray
 	return [MacosTargetName, LinuxTargetName, X64LinuxTargetName, X64WindowsTargetName]

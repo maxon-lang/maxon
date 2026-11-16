@@ -56,9 +56,11 @@ end '__cpu_count'
 //
 // ⚠ **THE MARK IS RAISED IN `__sched_worker_loop` AND NOWHERE ELSE.**
 //
-// ⚠ **IT ANSWERS 1 FOR AN `async` PROGRAM AT ANY PROCESSOR COUNT.** An `async` frame is a coroutine of its
-// caller and a member of its strand, and a member readied while its strand is held owes no wake, so an
-// `async` program that reads no pipe creates no worker M. A `spawn` does, and raises the mark.
+// An `async`-only program reads 1 until its green thread reaches the scheduler, by a preemption,
+// a retake, an overdue timer, a `Scheduler.yield()` with no sibling coroutine to run, or a park on
+// a timer or a child; then a second machine may claim it. An `async` frame is a coroutine of its
+// caller and a member of its strand, and a member readied while its strand is held owes no wake.
+// A `spawn` publishes a green thread, and raises the mark.
 function __sched_max_active_workers() returns MachineWord
 	return __Raw.loadWord(__Raw.schedMaxActiveWorkersAddr(), offset: 0)
 end '__sched_max_active_workers'

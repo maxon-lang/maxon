@@ -1,0 +1,40 @@
+let AProgramThatNeverSpawnsAServiceLaysOutNoSecondStrandCaseLabel = "never-spawns"
+
+let NoSpawnSharesFixtureName = "no-spawn-shares"
+let OneSpawnSharesFixtureName = "one-spawn-shares"
+let NoSpawnSharesCarrier = "a program that shares an interface-holding record with coroutines and spawns no service"
+let OneSpawnSharesCarrier = "the same program with one idle service spawned"
+let SecondStrandSpawnName = "__gt_spawn_green"
+let SecondStrandSpawnRole = "the door that starts a second strand"
+let ServiceStartName = "__cown_spawn"
+let ServiceStartRole = "the service start that calls it"
+let NoSpawnSharesLine = "frozen-tag:2 cell-tag:2 100 100"
+
+let AProgramThatNeverSpawnsAServiceLaysOutNoSecondStrandReason = "A value crosses to another strand only when a service is spawned: `async` runs its coroutine on the spawner's strand, and a new strand starts only from a service's runner. So a program that spawns no service may leave every witness table's share-walk word 0, and it must lay out neither the service start nor the green-thread spawn it calls. A program that spawns one service lays out both."
+
+test 'a program that never spawns a service lays out no second strand'
+	let noSpawnLabel = "{AProgramThatNeverSpawnsAServiceLaysOutNoSecondStrandCaseLabel}-{NoSpawnSharesFixtureName}"
+	let oneSpawnLabel = "{AProgramThatNeverSpawnsAServiceLaysOutNoSecondStrandCaseLabel}-{OneSpawnSharesFixtureName}"
+	let noSpawnStaged = stagedFixtureTree(FixturesDirName, caseLabel: noSpawnLabel, fixture: NoSpawnSharesFixtureName)
+	let oneSpawnStaged = stagedFixtureTree(FixturesDirName, caseLabel: oneSpawnLabel, fixture: OneSpawnSharesFixtureName)
+
+	let executable = buildStagedForHost(noSpawnStaged, caseLabel: noSpawnLabel)
+	let run = runStagedForHost(executable, staged: noSpawnStaged, procs: FourProcessors, deadlineMs: RunDeadline, standardInput: InputSource.none)
+
+	Expect.equal(run.exitCode(), expected: 0, message: "{NoSpawnSharesCarrier} exited {run.exitCode()}; stderr: {run.stderr}")
+	Expect.equal(oneLine(run.stdout), expected: NoSpawnSharesLine, message: "{NoSpawnSharesCarrier} said `{oneLine(run.stdout)}` where it says `{NoSpawnSharesLine}`")
+
+	let findings = StringArray.create(0)
+
+	for target in everyNativeTargetName() 'eachTarget'
+		noteFunctionAbsent(findings, staged: noSpawnStaged, caseLabel: noSpawnLabel, target: target, functionName: SecondStrandSpawnName, carrier: NoSpawnSharesCarrier, role: SecondStrandSpawnRole)
+		noteFunctionAbsent(findings, staged: noSpawnStaged, caseLabel: noSpawnLabel, target: target, functionName: ServiceStartName, carrier: NoSpawnSharesCarrier, role: ServiceStartRole)
+		noteFunctionLaidOut(findings, staged: oneSpawnStaged, caseLabel: oneSpawnLabel, target: target, functionName: SecondStrandSpawnName, carrier: OneSpawnSharesCarrier, role: SecondStrandSpawnRole)
+		noteFunctionLaidOut(findings, staged: oneSpawnStaged, caseLabel: oneSpawnLabel, target: target, functionName: ServiceStartName, carrier: OneSpawnSharesCarrier, role: ServiceStartRole)
+	end 'eachTarget'
+
+	Expect.isTrue(findings.isEmpty(), message: "a program's strand doors do not follow whether it spawns a service:{renderedFindings(findings)}\n\n  {AProgramThatNeverSpawnsAServiceLaysOutNoSecondStrandReason}")
+
+	discardStagedDir(noSpawnStaged)
+	discardStagedDir(oneSpawnStaged)
+end 'a program that never spawns a service lays out no second strand'

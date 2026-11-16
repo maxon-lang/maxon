@@ -296,6 +296,166 @@ end 'main'
 3 5
 ```
 
+<!-- test: a-frozen-interface-holder-is-read-by-coroutines-without-a-service -->
+<!-- procs: 4 -->
+<!-- process: own -->
+A frozen `Holder` and one held by a `SharedValue` each hold a `Labeled` whose conformer has a `String` and an array field, and an `async` coroutine reads each a thousand times, yielding between reads. Nothing is spawned, so no value reaches another strand: the coroutines run on the spawner's, and the program counts its shared reads plainly. That is a fact about the whole program, so the case runs as a program of its own: batched beside a case that spawns, it would no longer be one that spawns nothing.
+
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias TallyArray = Array with Tally
+
+interface Labeled
+	function label() returns String
+end 'Labeled'
+
+type Tag implements Labeled
+	let name as String
+	let marks as TallyArray
+
+	static function create(name String) returns Self
+		let marks = TallyArray.create(0)
+		marks.push(1)
+		marks.push(2)
+		return Self{name: name, marks: marks}
+	end 'create'
+
+	function label() returns String
+		return "{self.name}:{self.marks.count()}"
+	end 'label'
+end 'Tag'
+
+type Holder
+	let item as Labeled
+
+	static function create(item Labeled) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function show() returns String
+		return self.item.label()
+	end 'show'
+end 'Holder'
+
+typealias HolderCell = SharedValue with Holder
+
+function readFrozen(frozen immutable Holder) returns Tally
+	var total = 0 as Tally
+
+	for _ in 0 upto 1000 'eachRound'
+		total = total + (1 if frozen.show().count() > 0 else 0)
+		Scheduler.yield()
+	end 'eachRound'
+
+	return total
+end 'readFrozen'
+
+function readCell(cell HolderCell) returns Tally
+	var total = 0 as Tally
+
+	for _ in 0 upto 1000 'eachRound'
+		total = total + (1 if cell.current().show().count() > 0 else 0)
+		Scheduler.yield()
+	end 'eachRound'
+
+	return total
+end 'readCell'
+
+function main() returns ExitCode
+	let frozen = freeze Holder.create(Tag.create("frozen-tag-with-a-heap-string"))
+	let cell = HolderCell.create(Holder.create(Tag.create("cell-tag-with-a-heap-string")))
+	let a = async readFrozen(frozen)
+	let b = async readCell(cell)
+	let ra = await a
+	let rb = await b
+	print("{frozen.show()} {cell.current().show()} {ra} {rb}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+frozen-tag-with-a-heap-string:2 cell-tag-with-a-heap-string:2 1000 1000
+```
+
+<!-- test: a-frozen-interface-holder-is-read-by-two-services -->
+<!-- procs: 4 -->
+The same frozen `Holder` is handed `immutable` to two services, which read it three hundred times each at once, so every read of the `Labeled` and its `String` and array steps counts both strands hold; a spawned service is what makes the witness tables carry the walk that marks the graph shared.
+
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias TallyArray = Array with Tally
+
+interface Labeled
+	function label() returns String
+end 'Labeled'
+
+type Tag implements Labeled
+	let name as String
+	let marks as TallyArray
+
+	static function create(name String) returns Self
+		let marks = TallyArray.create(0)
+		marks.push(1)
+		marks.push(2)
+		return Self{name: name, marks: marks}
+	end 'create'
+
+	function label() returns String
+		return "{self.name}:{self.marks.count()}"
+	end 'label'
+end 'Tag'
+
+type Holder
+	let item as Labeled
+
+	static function create(item Labeled) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function show() returns String
+		return self.item.label()
+	end 'show'
+end 'Holder'
+
+type Reader
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function passes(frozen immutable Holder, rounds Tally) returns Tally
+		var total = 0 as Tally
+
+		for _ in 1 to rounds 'eachRound'
+			total = total + (1 if frozen.show().count() > 0 else 0)
+		end 'eachRound'
+
+		return total
+	end 'passes'
+end 'Reader'
+
+function main() returns ExitCode
+	let frozen = freeze Holder.create(Tag.create("frozen-tag-with-a-heap-string"))
+	let one = spawn Reader.create()
+	let two = spawn Reader.create()
+	let first = try one.passes(frozen, rounds: 300) otherwise panic("main: a fresh reader accepts its only request")
+	let second = try two.passes(frozen, rounds: 300) otherwise panic("main: a fresh reader accepts its only request")
+	let a = await first
+	let b = await second
+	one.shutdown()
+	two.shutdown()
+	print("{frozen.show()} {a} {b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+frozen-tag-with-a-heap-string:2 300 300
+```
+
 <!-- test: error.freeze-of-an-interface-whose-converted-conformer-holds-an-os-handle -->
 <!-- unsupported-targets: wasm32-wasi -->
 wasm32-wasi answers E3104 for the `spawn` and `TcpListener.bind` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
@@ -529,6 +689,128 @@ end 'main'
 ```maxoncstderr
 error E3171: <fragment>:53:13: `Holder` cannot be frozen: its `sink` is a `Sink`, and `Gen with Step` stands at `Sink` but no share walk can mark it: its `held` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
 note: <fragment>:36:10: `Gen with Step` is converted to `Sink` here
+```
+
+<!-- test: a-closure-conformer-is-frozen-and-published-without-a-service -->
+<!-- process: own -->
+`Closure` holds a function value and stands at `Stepper`, and a `Holder` of one is frozen and another published to a `SharedValue`. The program spawns no service, so nothing it shares reaches another thread: both doors accept the value, and it runs. That is a fact about the whole program, so the case runs as a program of its own: batched beside a case that spawns, it would be refused as the next case is.
+
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Step = function(Tally) returns Tally
+
+interface Stepper
+	function stepFrom(n Tally) returns Tally
+end 'Stepper'
+
+type Closure implements Stepper
+	let name as String
+	let step as Step
+
+	static function create(name String, step Step) returns Self
+		return Self{name: name, step: step}
+	end 'create'
+
+	function stepFrom(n Tally) returns Tally
+		return self.step(n) + self.name.count() as Tally
+	end 'stepFrom'
+end 'Closure'
+
+type Holder
+	let item as Stepper
+
+	static function create(item Stepper) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Tally) returns Tally
+		return self.item.stepFrom(n)
+	end 'run'
+end 'Holder'
+
+typealias HolderCell = SharedValue with Holder
+
+function main() returns ExitCode
+	let offset = 3 as Tally
+	let frozen = freeze Holder.create(Closure.create("ab", step: function(n) gives n + offset))
+	let cell = HolderCell.create(Holder.create(Closure.create("abc", step: function(n) gives n + 1)))
+	print("{frozen.run(1)} {cell.current().run(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 5
+```
+
+<!-- test: error.a-closure-conformer-is-refused-once-a-service-is-spawned -->
+<!-- unsupported-targets: wasm32-wasi -->
+wasm32-wasi answers E3104 for the `spawn` before any share door is judged, and the door is judged for this cause only in a program that spawns a service.
+
+The program above with one idle service spawned: a value it shares may now reach the service's strand, so the `freeze` and the `SharedValue` door each refuse the `Holder`, whose `Closure` no share walk can mark.
+
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Step = function(Tally) returns Tally
+
+interface Stepper
+	function stepFrom(n Tally) returns Tally
+end 'Stepper'
+
+type Closure implements Stepper
+	let name as String
+	let step as Step
+
+	static function create(name String, step Step) returns Self
+		return Self{name: name, step: step}
+	end 'create'
+
+	function stepFrom(n Tally) returns Tally
+		return self.step(n) + self.name.count() as Tally
+	end 'stepFrom'
+end 'Closure'
+
+type Holder
+	let item as Stepper
+
+	static function create(item Stepper) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Tally) returns Tally
+		return self.item.stepFrom(n)
+	end 'run'
+end 'Holder'
+
+typealias HolderCell = SharedValue with Holder
+
+type Idle
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Tally
+		return 1
+	end 'ping'
+end 'Idle'
+
+function main() returns ExitCode
+	let idle = spawn Idle.create()
+	let pong = try await idle.ping() otherwise 0
+	let offset = 3 as Tally
+	let frozen = freeze Holder.create(Closure.create("ab", step: function(n) gives n + offset))
+	let cell = HolderCell.create(Holder.create(Closure.create("abc", step: function(n) gives n + 1)))
+	print("{frozen.run(1)} {cell.current().run(1)} {pong}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:50:15: `Holder` cannot be frozen: its `item` is a `Stepper`, and `Closure` stands at `Stepper` but no share walk can mark it: its `step` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:50:36: `Closure` is converted to `Stepper` here
+error E3171: <fragment>:51:31: `Holder` cannot be published to a `SharedValue`: its `item` is a `Stepper`, and `Closure` stands at `Stepper` but no share walk can mark it: its `step` is a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Hold that part in a service, or use a separate interface
+note: <fragment>:50:36: `Closure` is converted to `Stepper` here
 ```
 
 <!-- test: freeze-of-an-interface-whose-generic-conformer-nests-its-own-instance-runs -->
