@@ -5,6 +5,7 @@ public let PortablePathSeparator = "/"
 public let WindowsPathSeparator = "\\"
 public let ProjectProductsDirName = ".maxon"
 public let CheckoutStagingRootDirName = "temp"
+public let SupportFixturesDirName = "tests/support/fixtures"
 
 public function listing(dir FilePath) returns FilePathArray
 	return try Directory.list(dir) otherwise panic("the gate could not run — could not list {dir.toString()}")
@@ -40,17 +41,193 @@ public function discardStagedDir(dir FilePath)
 	requireNothingStays(Directory.removeTree(dir), what: "the staged directory {dir.toString()}")
 end 'discardStagedDir'
 
+public let OnTheSecondAskWording = "on the second ask"
+public let HolderProbeHeading = "holders, as the probe found them"
+let RefusalWithNoClassMeaning = "a refusal the standard library names no class for"
+let EntryInsideStaysMeaning = "an entry inside it stays"
+let DirectoryRefusalUnclassedMeaning = "the standard library does not say whether a sharing violation or a denial refused a directory"
+let NothingFoundIsNoRefusalReason = "a delete that found nothing at the path is no refusal of it"
+
+#if os(Windows)
+	let AccessDeniedMeaning = "the image is still mapped, or a delete is pending"
+	let BusyMeaning = "a sharing violation: a process holds it open without sharing delete"
+	let HolderProbeFixtureName = "holders"
+	let HolderProbeScriptName = "holders.ps1"
+	let HolderProbeDeadlineMs = 30000 as WaitDeadlineMs
+	let ProbeDetailIndent = "  "
+	let ProbeNotRunWording = "the probe could not run"
+	let ProbeStderrPrefix = "stderr: "
+	let UnmarkedProbeLinePrefix = ""
+	let ExecutionPolicyFlag = "-ExecutionPolicy"
+	let ExecutionPolicyBypass = "Bypass"
+	let ScriptFileFlag = "-File"
+#else
+	let AccessDeniedMeaning = "the host refused the unlink, which the permissions of the directory holding it decide"
+	let BusyMeaning = "the host reported it in use"
+#endif
+
 function requireNothingStays(unremoved FilePathArray, what String)
-	let stuck = StringArray.create(unremoved.count(), zeroed: false)
-
-	for path in unremoved 'eachStuck'
-		stuck.push(path.toString())
-	end 'eachStuck'
-
-	if not stuck.isEmpty() 'somethingStays'
-		panic("the gate could not run — could not remove {what}:{listedLines(stuck)}")
+	if not unremoved.isEmpty() 'somethingStays'
+		panic("the gate could not run — could not remove {what}:{stuckEntriesReport(unremoved)}")
 	end 'somethingStays'
 end 'requireNothingStays'
+
+// Every entry gets its second ask before the probe runs: a holder may last only a fraction of a
+// second, and a probe between asks would let it go before a later entry is asked.
+public function stuckEntriesReport(unremoved FilePathArray) returns String
+	let firstAskReturned = Clock.nowMs()
+	let stillThere = FilePathArray.create(0)
+	let lines = StringArray.create(unremoved.count(), zeroed: false)
+
+	for entry in unremoved 'eachStuck'
+		lines.push(secondAskOutcome(entry, firstAskReturned: firstAskReturned, stillThere: stillThere))
+	end 'eachStuck'
+
+	#if os(Windows)
+		if not stillThere.isEmpty() 'someStay'
+			probeHolders(stillThere, lines: lines)
+		end 'someStay'
+	#endif
+
+	return listedLines(lines)
+end 'stuckEntriesReport'
+
+public function secondAskRefusalOf(entry FilePath, refusal String) returns String
+	return "{entry.toString()}: {refusal} {OnTheSecondAskWording}"
+end 'secondAskRefusalOf'
+
+// The holder probe's script spells this wording again; only the Windows run of the
+// a-staged-tree-whose-removal-is-refused case holds the two equal.
+public function probedHolderWording(holder Pid) returns String
+	return "pid {holder},"
+end 'probedHolderWording'
+
+function secondAskOutcome(entry FilePath, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+	if Directory.isDirectory(entry) 'aDirectory'
+		return secondAskOfADirectory(entry, firstAskReturned: firstAskReturned, stillThere: stillThere)
+	end 'aDirectory'
+
+	return secondAskOfAFile(entry, firstAskReturned: firstAskReturned, stillThere: stillThere)
+end 'secondAskOutcome'
+
+function secondAskOfAFile(entry FilePath, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+	try File.delete(entry) otherwise (refusal) 'refused'
+		if refusal == FileDeleteError.notFound 'gone'
+			return goneBeforeTheSecondAsk(entry, firstAskReturned: firstAskReturned)
+		end 'gone'
+
+		return refusedOnTheSecondAsk(entry, refusal: refusal.name, meaning: fileRefusalMeaning(refusal), firstAskReturned: firstAskReturned, stillThere: stillThere)
+	end 'refused'
+
+	return removedOnTheSecondAsk(entry, firstAskReturned: firstAskReturned)
+end 'secondAskOfAFile'
+
+function secondAskOfADirectory(entry FilePath, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+	try Directory.delete(entry) otherwise (refusal) 'refused'
+		if refusal == DirectoryDeleteError.notFound 'gone'
+			return goneBeforeTheSecondAsk(entry, firstAskReturned: firstAskReturned)
+		end 'gone'
+
+		return refusedOnTheSecondAsk(entry, refusal: refusal.name, meaning: directoryRefusalMeaning(refusal), firstAskReturned: firstAskReturned, stillThere: stillThere)
+	end 'refused'
+
+	return removedOnTheSecondAsk(entry, firstAskReturned: firstAskReturned)
+end 'secondAskOfADirectory'
+
+function fileRefusalMeaning(refusal FileDeleteError) returns String
+	return match refusal 'meaning'
+		accessDenied gives AccessDeniedMeaning
+		busy gives BusyMeaning
+		failed gives RefusalWithNoClassMeaning
+		notFound panic("{NothingFoundIsNoRefusalReason}")
+	end 'meaning'
+end 'fileRefusalMeaning'
+
+function directoryRefusalMeaning(refusal DirectoryDeleteError) returns String
+	return match refusal 'meaning'
+		notEmpty gives EntryInsideStaysMeaning
+		deleteFailed gives DirectoryRefusalUnclassedMeaning
+		notFound panic("{NothingFoundIsNoRefusalReason}")
+	end 'meaning'
+end 'directoryRefusalMeaning'
+
+function afterTheFirstAsk(firstAskReturned InstantMs) returns String
+	return "{Clock.elapsedMs(firstAskReturned)} ms after the first returned"
+end 'afterTheFirstAsk'
+
+function refusedOnTheSecondAsk(entry FilePath, refusal String, meaning String, firstAskReturned InstantMs, stillThere FilePathArray) returns String
+	let after = afterTheFirstAsk(firstAskReturned)
+	stillThere.push(entry)
+
+	return "{secondAskRefusalOf(entry, refusal: refusal)}, {after}: {meaning}"
+end 'refusedOnTheSecondAsk'
+
+function removedOnTheSecondAsk(entry FilePath, firstAskReturned InstantMs) returns String
+	return "{entry.toString()}: removed {OnTheSecondAskWording}, {afterTheFirstAsk(firstAskReturned)}; it outlasted the first, so the gate fails all the same"
+end 'removedOnTheSecondAsk'
+
+function goneBeforeTheSecondAsk(entry FilePath, firstAskReturned InstantMs) returns String
+	return "{entry.toString()}: gone before the second ask, {afterTheFirstAsk(firstAskReturned)}; something else removed it, so the gate fails all the same"
+end 'goneBeforeTheSecondAsk'
+
+#if os(Windows)
+	// A probe that cannot run becomes a line of the report, never a panic that would replace it: hence
+	// `runIn` with a deadline over `runSystemTool`, and a script path no panicking helper checks.
+	function probeHolders(stillThere FilePathArray, lines StringArray)
+		let checkout = Directory.currentPath()
+		let spelled = "{SupportFixturesDirName}/{HolderProbeFixtureName}/{HolderProbeScriptName}"
+		let script = try FilePath.from(spelled) otherwise panic("the gate could not run — '{spelled}' is not a spellable path")
+		let arguments = [WindowsShellNoProfileFlag, ExecutionPolicyFlag, ExecutionPolicyBypass, ScriptFileFlag, script.resolve(checkout).toString()].clone()
+
+		for entry in stillThere 'eachEntry'
+			arguments.push(entry.resolve(checkout).toString())
+		end 'eachEntry'
+
+		lines.push("{HolderProbeHeading} ({script.toString()}):")
+
+		let ran = try runIn(Executable.name(WindowsShellName), arguments: arguments, staged: checkout, deadline: WaitDeadline.within(HolderProbeDeadlineMs)) otherwise (failure) 'probeFailed'
+			lines.push(probeNotRun(failure.displayReason()))
+			pushProbeOutputOf(failure, lines: lines)
+			return
+		end 'probeFailed'
+
+		if not ran.succeeded() 'probeRefused'
+			lines.push(probeNotRun("it exited {ran.exitCode()}"))
+		end 'probeRefused'
+
+		pushProbeLines(ran.stdout, stderr: ran.stderr, lines: lines)
+	end 'probeHolders'
+
+	function probeNotRun(reason String) returns String
+		return "{ProbeDetailIndent}{ProbeNotRunWording}: {reason}"
+	end 'probeNotRun'
+
+	function pushProbeOutputOf(failure SubprocessError, lines StringArray)
+		match failure 'output'
+			timeout(_, stdout, stderr) then pushProbeLines(stdout, stderr: stderr, lines: lines)
+			treeNotEnded(_, stdout, stderr, _) then pushProbeLines(stdout, stderr: stderr, lines: lines)
+			statusLost(stdout, stderr) then pushProbeLines(stdout, stderr: stderr, lines: lines)
+			executableNotFound or
+			spawnFailed or
+			ioFailed or
+			detachRefused or
+			inputTooLarge then break
+		end 'output'
+	end 'pushProbeOutputOf'
+
+	function pushProbeLines(stdout String, stderr String, lines StringArray)
+		pushIndentedProbeLines(stdout, prefix: UnmarkedProbeLinePrefix, lines: lines)
+		pushIndentedProbeLines(stderr, prefix: ProbeStderrPrefix, lines: lines)
+	end 'pushProbeLines'
+
+	function pushIndentedProbeLines(text String, prefix String, lines StringArray)
+		for line in outputLines(text) 'eachLine'
+			if not line.isEmpty() 'printed'
+				lines.push("{ProbeDetailIndent}{prefix}{line}")
+			end 'printed'
+		end 'eachLine'
+	end 'pushIndentedProbeLines'
+#endif
 
 // ⚠ `tests/fmt/generate-expectations.py`'s `stored_to_real` spells this mapping again, and the two
 // stage the same trees: a disagreement mints expectations for a tree no case stages.

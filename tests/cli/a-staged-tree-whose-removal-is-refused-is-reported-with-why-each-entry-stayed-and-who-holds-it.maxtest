@@ -1,0 +1,84 @@
+let RefusedRemovalCaseDirName = "refused-removal-is-reported"
+let RefusedRemovalProgramDirName = "app"
+let RefusedRemovalHeldDirName = "held"
+let RefusedRemovalBinDirName = "bin"
+let RefusedRemovalStem = "held"
+let RefusedRemovalProgramSource = "function main() returns ExitCode\n\t_ = try Console.stdin().readLine() otherwise LineOrEnd.ended\n\n\treturn 0\nend 'main'\n"
+let RefusedRemovalExitMs = 10000
+
+#if not os(Windows)
+	let RefusedRemovalModeToolName = "chmod"
+	let RefusedRemovalRemoveWriteWords = "a-w"
+	let RefusedRemovalRestoreWriteWords = "u+w"
+#endif
+
+test 'a staged tree whose removal is refused is reported with why each entry stayed and which process holds it'
+	requireHeldOutsideCheckout(RefusedRemovalCaseDirName, check: RefusedRemovalOfAHeldImage.create())
+end 'a staged tree whose removal is refused is reported with why each entry stayed and which process holds it'
+
+type RefusedRemovalOfAHeldImage implements OutsideCheckoutCase
+	static function create() returns RefusedRemovalOfAHeldImage
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let programDir = stagingDir(dir.join(RefusedRemovalProgramDirName).toString())
+		writeStagedFile(programDir.join(StagedProgramFileName), content: RefusedRemovalProgramSource)
+
+		let held = dir.join(RefusedRemovalHeldDirName)
+		let bin = stagingDir(held.join(RefusedRemovalBinDirName).toString())
+		let image = executableIn(bin, stem: RefusedRemovalStem)
+		let build = runRecordedBuild(dir, program: RefusedRemovalProgramDirName, output: "{RefusedRemovalHeldDirName}/{RefusedRemovalBinDirName}/{RefusedRemovalStem}", options: StringArray.create(0))
+		requireBuiltOrPanic(build, output: image, what: "the build of the program the case keeps running")
+
+		let child = try StreamingSubprocess.spawnWithCwd(Executable.path(image), arguments: StringArray.create(0), workingDirectory: WorkingDirectory.at(dir)) otherwise (failure) 'notStarted'
+			panic("{spawnFailureMessage(image.toString(), failure: failure)}")
+		end 'notStarted'
+
+		#if os(Windows)
+			let holder = try child.processId() otherwise panic("the gate could not run — a child that was never released has a process id")
+		#else
+			changeModeOf(bin, words: RefusedRemovalRemoveWriteWords)
+		#endif
+
+		let report = stuckEntriesReport(Directory.removeTree(held))
+
+		#if not os(Windows)
+			changeModeOf(bin, words: RefusedRemovalRestoreWriteWords)
+		#endif
+
+		child.closeStdin()
+
+		let exitStatus = try child.wait(deadline: WaitDeadline.within(RefusedRemovalExitMs)) otherwise (failure) 'notEnded'
+			panic("the gate could not run — waiting for {image.toString()} to exit once its stdin closed ended in {failure.displayReason()}.")
+		end 'notEnded'
+
+		child.release()
+
+		// Every expectation follows the release, so a failing one leaves nothing running.
+		try Expect.equal(exitStatus, expected: 0, message: "the program the case kept running exited {exitStatus} once its stdin closed.")
+		try Expect.isTrue(namesARefusalOf(report, entry: image), message: "the report of a tree whose removal was refused does not say why {image.toString()} stayed: no refusal class {OnTheSecondAskWording}. It said:{report}")
+
+		#if os(Windows)
+			try Expect.contains(report, needle: probedHolderWording(holder), message: "the report of a tree whose removal a running image refused does not name the process that runs it, {holder}. It said:{report}")
+		#else
+			try Expect.isFalse(report.contains(HolderProbeHeading), message: "the report on a host with no holder probe carries a holders section. It said:{report}")
+		#endif
+	end 'requireHeldIn'
+end 'RefusedRemovalOfAHeldImage'
+
+function namesARefusalOf(report String, entry FilePath) returns bool
+	for refusal in FileDeleteError.allCases 'eachRefusal'
+		if report.contains(secondAskRefusalOf(entry, refusal: refusal.name)) 'named'
+			return true
+		end 'named'
+	end 'eachRefusal'
+
+	return false
+end 'namesARefusalOf'
+
+#if not os(Windows)
+	function changeModeOf(bin FilePath, words String)
+		_ = runSystemTool(RefusedRemovalModeToolName, arguments: [words, bin.toString()], what: "changing the mode of {bin.toString()} to {words}")
+	end 'changeModeOf'
+#endif

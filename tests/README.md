@@ -89,13 +89,14 @@ below says what counts as listed.
 
 ```
 tests/
-  support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
+  support/                       not a corpus: the helpers every corpus shares, `public` where a corpus calls them, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
-    Staging.maxon                `stagingDir`, `clearStagedTree`, `discardStagedDir`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
+    Staging.maxon                `stagingDir`, `clearStagedTree`, `discardStagedDir`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`, `stuckEntriesReport`: why each entry a removal left stayed, from one more removal of it at once, and on Windows which processes hold the entries still there, from `fixtures/holders/holders.ps1`; the panic of `clearStagedTree` and `discardStagedDir` carries it
     Spawn.maxon                  `runIn`, `runCompiler` (both throw `SubprocessError`), `spawnFailureMessage`, `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `refuseBrokenRead`, `endedProcessId`, `endedWithin`: waits, bounded, for a process to end, because the directory a running program runs in cannot be removed, `backdatedToTheYear2000`
     FedProcess.maxon             `runFedAfterLine`, `FedRun`, `StagedRunEnd`: a child fed after it prints a line, pumped without blocking, its exit followed by a tail drain bounded by silence and by a cap
     HeldPipe.maxon               `stagedHeldPipe`, `heldPipeLinesMissingFrom`, `endHeldPipeHolder`: the program that exits while a process it started holds its output, and the cleanup of that process, which throws a `TestFailure` naming the product when the output it forwarded names no holder
     fixtures/heldpipe/main.maxon.fixture   the held-pipe program: it prints a line, starts a holder that prints eight lines 400 ms apart and then holds the pipe until told to stop; given the argument `linger` (Linux) it instead starts that holder in a session of its own with `setsid` and sleeps past any deadline - stored name only, see rule 1
+    fixtures/holders/holders.ps1   the holder probe, run by `powershell -File` with the paths as its arguments: for each path, the processes the Restart Manager lists for it and every process whose image it is, each with its process id, image and start time, then whether Defender real-time monitoring is on; a section it cannot read prints its reason
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        `testScratchDir`, `projectScratchDir`: the process's two `maxon test` scratch directories, and `freshOutsideCheckoutDir` in the first
@@ -732,6 +733,7 @@ tests/
     a-reversed-source-order-keeps-a-literal-closed-in-column-one.maxtest   reversing the declarations of a file keeps a multi-line literal whose closing bracket is in column one
     a-reversed-source-order-refuses-a-declaration-whose-end-is-not-in-its-column.maxtest   a reversed source order refuses a declaration whose end is not in its column rather than reading the file as written
     a-reversed-source-order-reports-a-refused-declaration-instead-of-panicking.maxtest   a refused declaration is reported, not tripped over, when the declarations that follow it are read before it
+    a-staged-tree-whose-removal-is-refused-is-reported-with-why-each-entry-stayed-and-who-holds-it.maxtest   a staged tree holding a running program's image is removed, and `stuckEntriesReport` names the image with the class its second removal was refused with and, on Windows, the running program's process id; elsewhere the image's directory is made unwritable to get the refusal, and the report carries no holders section
     a-struct-of-more-fields-than-sixteen-bits-can-number-is-refused.maxtest   a struct that declares 65,536 fields is refused where the 65,536th is declared
     a-tuple-of-more-elements-than-sixteen-bits-can-number-is-refused.maxtest   a tuple type of 65,536 elements is refused
     a-union-case-of-more-payload-fields-than-sixteen-bits-can-number-is-refused.maxtest   a union case that declares 65,536 payload fields is refused
@@ -1099,10 +1101,11 @@ and its `support.maxproj` is an empty marker so the editor checks its files as o
 plain `.maxon` helpers like the `*Harness.maxon` files above — never a stored fixture — and `fmt` formats
 them. Four facts shape it:
 
-- **Every declaration in it is `public`.** A corpus compiles all of `support/` but calls part of it, and
-  `maxon lint --tests`, which CI runs on every corpus, reports an `export` nothing in that compilation
-  uses (E3092) and an unmarked declaration nothing live names (E3219); `public` is the tier exempt from
-  both.
+- **Every declaration a corpus calls is `public`.** A corpus compiles all of `support/` but calls part
+  of it, and `maxon lint --tests`, which CI runs on every corpus, reports an `export` nothing in that
+  compilation uses (E3092) and an unmarked declaration nothing live names (E3219); `public` is the tier
+  exempt from both. A helper reached only from a `public` declaration stays unmarked: E3219 counts it
+  live.
 - **A corpus directory's name is its namespace**, because the project root is the common ancestor of the
   listed directories (`tests/`). A name that is not an identifier is E3182, which is why every corpus
   is named as an identifier: `buildManifest`, `emittedRuntime` and so on.
