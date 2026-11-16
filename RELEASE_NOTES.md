@@ -15,73 +15,17 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
-- While a `match` arm binds the payload of a union held in a field (`match self.pending 'p' … ready(p) then …`),
-  the record holding that field is read-only in the arm: writing it (`self.count = 1`) or passing it to a
-  function that writes it is E3197 / E3207.
-  Fix: write through the binding, or make the write before or after the `match`.
-
-- A finalizer reads and writes nothing of its receiver after `destruct self`: `self.field`, `self.field = …`
-  and a bare field name written after it are E3102, as a read of any moved value is.
-  Fix: read what the finalizer needs into a local before `destruct self`.
-
-- `self` of a method that does not take `consuming self` is only lent, so `return self` and a union literal
-  built around it (`Sent.notSent(self)`) are E3224, as passing it to a function that takes it already was.
-  Fix: take `consuming self`, or return a field or a new value.
-
-- A union with a unique payload cannot be cloned: `slot.clone()` is E3214 (`'Slot' is unique … and cannot be
-  cloned`), as it is for a unique record.
-  Fix: move the union, or clone what its payload holds and build a new union around the copy.
+- While a `match` arm binds the payload of a union that holds an OS handle (a `TcpClient`, `TcpListener`,
+  `HttpServer`, `StreamingSubprocess` or `SharedSegment`, or a type holding one), the arm borrows the union and
+  the record whose field is matched (`match self.pending 'p' … ready(c) then …`): writing that record
+  (`self.count = 1`) or passing it to a function that writes it is E3197 / E3207, and copying or storing the
+  matched union or its holder inside the arm, as a store into a field or a call whose parameter keeps it, is
+  E3214. A call that only reads it stays legal.
+  Fix: write through the binding, or make the write, copy or store before or after the `match`.
 
 - A variable moved before an `if` and refilled in only some of its branches is moved after the `if`, so a
   read of it there is E3102.
   Fix: refill it in every branch, or leave the moved value unread until the next assignment.
-
-- A unique value is handed to another green thread only by the code that owns it. A message argument or a
-  `spawn` factory argument that is a unique value only read out of a field or an element, lent by a loop, a
-  tuple or a `match`, or borrowed through a by-reference parameter is E3214.
-  Fix: move the value out of its holder first (`pop`, `remove`, or `swap` out of an isolated field) and send
-  that.
-
-- A `match` over a unique union lends it to its arms, and the variable that holds the matched union is not
-  moved or copied inside an arm: `let copy = slot`, a call whose parameter keeps `slot`, a store of it into a
-  field, a closure that captures it, and the same for the record whose field is matched (`match holder.slot`)
-  and the operands of a `cond` scrutinee are E3214 (`cannot move or copy the unique value matched by 'slot'
-  inside the arm that lends it`). A call that only reads it stays legal.
-  Fix: move or copy the union before or after the `match`.
-
-- An arm of a `match` that binds an `isolated` payload is a window: data that existed before the arm is
-  read-only in it, as it is inside `modify`. A write to a field of an outer record, of a parameter, of `self`, of
-  the root of an enclosing `modify` or of an acquired state, and a call that needs that data writable, is E3197
-  (`cannot write 'n' through 'b', which is read-only while 'x1' is open`) or E3207. Data the arm creates, the
-  payload itself, a variable that holds a number and an arm that binds no `isolated` payload stay writable, and so
-  does everything in the arm of a union with a linear payload (the match consumes it), of a frozen one, or of one
-  held in an `isolated` local (its payload moves out whole).
-  Fix: do the write before or after the `match`, or carry what the arm decided in a variable that holds a number
-  or a value and write the record afterwards.
-
-- A `match` over a union that is not linear lends each `isolated` payload to its arm. The union is ordinary
-  region data, held by a plain `let`, a `var`, a parameter, a field or an element, so it aliases freely (`let v
-  = u`, a call that keeps it, a call that returns it), and the payload is opened in the arm under the window
-  rule and never goes where an owned `isolated` value is wanted: `match u` with `m1(o) then takeB(o)` over
-  `takeB(b isolated Bx)`, a store of `o` into an `isolated` slot and a send of it are E3198 (``'o' is isolated
-  and cannot be read outside a block; open it with `modify`, or take it out with `swap` ``). Only a linear union
-  or one that holds a `Reply` hands its payloads over as owned values.
-  Fix: open the payload in the arm (a write through it, `modify`, or a call that takes it unmarked), or keep
-  the `isolated` value in an `isolated` variable or field and move it from there instead of through a plain
-  union.
-
-- A payload bound from a union held in an `isolated` variable is an owned `isolated` value, so passing it to two
-  `isolated` parameters of one call (`takeTwo(o, b: o)`) is E3102 at the second use, as it is for an `isolated`
-  local.
-  Fix: pass it to one parameter, or pass `o.clone()` to the other.
-
-- Inside a `modify` or `acquire` block, an `isolated` local or parameter declared outside the block cannot be
-  opened: passing it to a plain parameter or as a receiver, reading or writing through it, and a nested
-  `modify` of it are E3199 (`'outer' cannot be opened: the value that holds it is read-only while 'w' is open`).
-  It still moves into an `isolated` parameter or slot, is sent, or is merged. A `consuming self` method that
-  builds a one-payload union around `self` keeps it, so such a value is E3201 as the receiver.
-  Fix: open the value before or after the block, or move it in with `merge`, an `isolated` parameter or an
-  `isolated` slot.
 
 - `module` is not a visibility modifier: it is an ordinary identifier, and written before a declaration it is
   a syntax error (`E2001 … Expected function declaration, got 'module'`; in a type body `E2010 … Expected
@@ -93,32 +37,31 @@ release's version as its heading when the release is cut.
   method, a static member, a nested typealias and a field alike. A file outside the subtree that names one is
   E3008 (`function 'helper' is not exported`), and E3014 (`field 'Box.v' is not exported`) for a field;
   another type, a free function or an `extension` in the type's directory reads and writes its unmarked
-  fields. E3219 and E3062 count a use anywhere in the subtree. Two files of one directory that each declare an
-  unmarked declaration of one name collide: E3006. E3167 calls the unmarked tier `unexported`.
-  Fix: nothing for most code. Rename one of two unmarked declarations of one name in one directory, and delete
-  a declaration E3219 or E3062 reports.
+  fields. E3062 counts a use anywhere in the subtree. E3167 calls the unmarked tier `unexported`.
+  Fix: nothing for most code. Delete a typealias E3062 reports.
 
-- An `export` that nothing outside its declaring directory's subtree names is E3092 (`exported function
-  'lib.helper' is never referenced outside its declaring directory`), the root directory included: an `export`
-  in a program whose files all sit in one directory is reported. `public` stays exempt.
-  Fix: drop `export`, or write `public` for API surface.
+- `maxon build` does not report an unused `export`: E3092 (`exported function 'lib.helper' is never
+  referenced outside its declaring directory`) is reported by `maxon lint`, `spec-test` and the MCP `check`
+  tool, where `build` reported it for an `export` nothing outside its file named. It counts the declaring
+  directory's subtree, the root directory included, so an `export` in a program whose files all sit in one
+  directory is reported; `public` stays exempt. E3088 (a `module` declaration used outside its subtree), E3093
+  (an `export` that could be `module`) and E3094 (a `module` declaration nothing outside its file uses) are
+  retired.
+  Fix: drop `export`, or write `public` for API surface; a tool or script that read E3092, E3093 or E3094 from
+  `maxon build` runs `maxon lint` and matches E3008, E3092 and E3219.
 
-- E3088 (a `module` declaration used outside its subtree), E3093 (an `export` that could be `module`) and
-  E3094 (a `module` declaration nothing outside its file uses) are retired.
-  Fix: match E3008, E3092 and E3219 in a tool or script that matched the retired codes.
-
-- A unique parameter (a `unique` type, a type holding a unique field, a `Reply`) is moved by the function that
-  keeps it, as a local is: after `parked.answer(1)`, `shelf.push(token)`, `let first = token` or a field or payload
-  store of a parameter, any later read of that parameter on a path that follows is E3102, and so is the same move
-  inside a loop that goes round again. A second `answer` on a `Reply` parameter compiled until now.
-  Fix: move the parameter once on each path; answer a `Reply` parameter in one arm of each branch, or answer it
-  once and return.
-
-- `let b = a` moves a unique value from a `let` source as it does from a `var`: after `let second = first` with
-  `let first = Ticket.create(1)` (a `unique` type, a type holding a unique field, a `Reply`), reading `first` is
-  E3102. Until now a `let` source stayed readable beside its `let` alias.
-  Fix: read the value through the new name, or bind the source with `.clone()` where the type has one; a `unique`
-  value has one name.
+- An OS handle (`TcpClient`, `TcpListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every
+  type that holds one has one name that owns it. Binding one with `let b = a`, from a `let` source as from a
+  `var`, pushing it into a container, storing it in a field or a payload, or handing it to a `spawn` or to a
+  parameter the callee keeps moves it, so reading the old name afterwards is E3102. A parameter of such a type
+  is moved by the function that keeps it (`shelf.push(c)`, `let first = c`, a field or payload store), so a
+  later read of it on a path that follows is E3102, as is the same move inside a loop that goes round again.
+  Binding, returning or storing a handle read out of a field or an element (`let t = items.get(0)`), or
+  handing it to a parameter the callee keeps, is E3214: the field or element goes on owning it, and a call
+  that only reads it (`show(items.get(0))`) stays legal. `StreamingSubprocess.handle` is private.
+  Fix: read what you need from a handle before it moves, or through the name it moved to; move a parameter
+  once on each path; let one owner hold a handle and lend it to calls; take it out of a container with
+  `removeFirst`, `pop` or `remove`.
 
 - `HttpServerError` has the case `deferralUnavailable`, which `HttpExchange.respondLater` throws for an exchange
   `HttpServer.accept` returned, and `HttpHandlerFault` has the case `threwAfterDeferring`, so a `match` over either
@@ -134,14 +77,6 @@ release's version as its heading when the release is cut.
   Fix: pass the handle with each message (`start(oracle Oracle.handle, me Asker.handle)`) instead of keeping it in a
   field, or give the two services distinct types.
 
-- A service type's state may not hold a function value while a closure in the program captures a handle that reaches
-  that service. A function type does not say what its closure captured, so a field, union payload or container
-  element of function type reaches the handle of every service some closure captures, and a cycle through it is
-  E4014 (`Echo` with `var notify as Notifier` while any closure captures an `Echo.handle`). The rule does not trace
-  which closure is stored where, so it also refuses a program whose function field and capturing closure never meet.
-  Fix: pass the handle as an argument to the call that needs it instead of capturing it, or keep the function value
-  out of the service's state.
-
 - A service type's state may not hold an interface value while a generic builds a conformer of that interface at a
   type parameter. `Wrap with T` that returns a `Gen with T` as a `Sink` makes, for `Wrap with Echo.handle`, a
   `Gen with Echo.handle` that no source text spells, so a state field `var sink as Sink` reaches the handle of every
@@ -152,27 +87,12 @@ release's version as its heading when the release is cut.
 
 - A message or a `spawn` factory that may wait on another party while it holds its own service is E3221, and E3139,
   the await-cycle check, is removed. Waiting is an `await` of a message reply or of a promise whose coroutine the
-  compiler cannot see, `awaitAny`, a send with a positive `sendTimeout:`, an `acquire`, the spawn of a throwing
-  factory, `Scheduler.quiesce()`, `CownTorture.violations`, and a call to a function that does one of these, which
-  includes `HttpServer.serve` and `TraceCapture.stopCapture`. Until now a message could await a reply from another
-  service so long as no cycle of services awaited each other. The diagnostic names the chain from the message to
-  the wait.
+  compiler cannot see, `awaitAny`, the spawn of a throwing factory, and a call to a function that does one of
+  these, which includes `HttpServer.serve` and `TraceCapture.stopCapture`, whether or not a cycle of services
+  awaits each other. The diagnostic names the chain from the message to the wait.
   Fix: send the request with the service's handle and handle the reply in another message (pass the asker's handle
-  with the request, or answer through `reply.later()` and `Reply.answer`); send with `sendTimeout: 0`, which fails
-  `mailboxFull` instead of waiting; or make the wait from `main`, a test body or a coroutine, which hold no service.
-
-- A call on an `isolated` value that hands back a view of what it opens, such as `j.items.createIterator()` on an
-  `isolated` `j`, cannot be bound, returned or stored: the view is mutable data of the region the call opens, which
-  is E3201 (E3202 inside a `modify` or `acquire` block), and a `try … otherwise` handler on the `let` makes no
-  difference. Until now the iterator was taken for a fresh value.
-  Fix: bind the value, not the view: read what is needed in the same statement
-  (`let first = try j.items.get(0) otherwise return 0`), or open the value with `modify j 'walk'` and iterate inside
-  the block.
-
-- A `unique` element handed out by a container call is lent for the call: `show(items.get(0))` reads it, and
-  `let ticket = items.get(0)` is E3214, as is passing it to a parameter the callee keeps. Until now such a binding
-  aliased the element.
-  Fix: read through the call, or move the element out with `take` (`Slot`), `removeFirst`, `pop` or `remove`.
+  with the request, or answer through `reply.later()` and `Reply.answer`), or make the wait from `main`, a test
+  body or a coroutine, which hold no service.
 
 - `Subprocess` takes its working directory as a `WorkingDirectory`, not a `FilePath`: a child that starts in the
   parent's directory is `WorkingDirectory.inherit` and one that starts elsewhere is `WorkingDirectory.at(path)`, in
@@ -181,10 +101,6 @@ release's version as its heading when the release is cut.
   `at(FilePath.empty())` fails with `SubprocessError.spawnFailed`.
   Fix: replace `workingDirectory: dir` with `workingDirectory: WorkingDirectory.at(dir)`, and an empty path
   (`FilePath.empty()`, `FilePath.from("")`) with `WorkingDirectory.inherit`, or omit the argument where it defaults.
-
-- `SamplerError` has the case `signalTrampolineUnavailable`, which `SampledProcess.cycles` and `capture` throw
-  on macOS, so a `match` over `SamplerError` that names every case no longer covers it.
-  Fix: add a `signalTrampolineUnavailable` arm to each such `match`.
 
 - A type that declares two fields of one name is E3006 (`Duplicate field 'count' in type 'Counter'`), reported
   at the second; the type keeps the first.
@@ -197,22 +113,11 @@ release's version as its heading when the release is cut.
   closer ambiguous. Two blocks that do not enclose one another may still share a label.
   Fix: rename the inner block's label.
 
-- Every union payload is a `let`, and `let` before a payload (`case(let name T)`) is a syntax error. A `match`
-  binding of a payload is never reassigned, so `full(value) then value = 42` is E2013 under a `var` scrutinee
-  too, and a `var` that is only matched is E3077. A union whose payload types are all immutable is itself
-  immutable, so `isolated` and `merge` on it are refused (E3200), and a unique payload handed to a call that
-  keeps it moves out of the union, so reading the union afterwards is E3102.
-  Fix: delete `let` before each payload; give a union a new payload by assigning it a new case
-  (`b = Box.full(42)`); write `let` for a `var` that is only matched; drop `isolated`, `merge` and `freeze` on
-  a union of immutable payloads; read the union before handing its unique payload to a call that keeps it.
+- A `match` binding of a union payload is never reassigned: `full(value) then value = 42` is E2013 whatever
+  the scrutinee, a `var` included, and a `var` that is only matched is E3077.
+  Fix: give a union a new payload by assigning it a new case (`b = Box.full(42)`); write `let` for a `var`
+  that is only matched.
 
-- An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
-  directory subtree names is E3219, the way an unused local is E3012 and an unused `typealias` is E3062. A
-  declaration is live when code that is not itself an unmarked declaration names it (an `export` or `public`
-  declaration, `main`, a test, a method), or a live unmarked declaration does; declarations that only name each other, or
-  a function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes
-  counts as a use.
-  Fix: delete the declaration (the compiler lists each one), or use it.
 - `+`, `-` and `*` over a full-width unsigned alias (`int(0 to u64.max)`, which `Count`, `ElementIndex` and
   `BytePos` are) are range-checked where they are computed: a carry out of bit 63, a borrow
   (`a.count() - b.count()` with `b` larger) or a product past `u64.max` panics with `Range check failed:
@@ -229,48 +134,61 @@ release's version as its heading when the release is cut.
 - A cast to an alias that the arithmetic result already has, such as `(at - 1) as ElementIndex` over an
   `ElementIndex`, is E3010: the result of arithmetic on a full-width unsigned alias is already that alias.
   Fix: delete the `as`.
-- `SubprocessError` has two more cases, `treeNotEnded(elapsedMs, stdout, stderr, osError)` and
-  `detachRefused(osError)`: a deadline whose kill could not fully end the child's process tree, which threw
-  `ioFailed`, and a `runDetached()` the enclosing Windows job refuses breakaway to, which threw `spawnFailed`,
-  throw these. A `match` over `SubprocessError` that lists every case is no longer exhaustive (E2026).
-  Fix: add arms for `treeNotEnded` and `detachRefused`; code that told these failures apart by the reason text
-  of `ioFailed` or `spawnFailed` matches the cases.
+- `SubprocessError` has three more cases and one fewer. `treeNotEnded(elapsedMs, stdout, stderr, osError)` is
+  thrown for a deadline whose kill could not fully end the child's process tree, which threw `ioFailed`;
+  `detachRefused(osError)` for a `runDetached()` the enclosing Windows job refuses breakaway to, which threw
+  `spawnFailed`; and `statusLost(stdout, stderr)`, by `Subprocess.run` and `StreamingSubprocess.wait`, for a
+  child that ended while another process took its exit status (on macOS, a program killed while a debugger's
+  stub held it; on Linux, a child reaped by another process). `endOfStream` is removed, with the readers that
+  threw it: a child's output is read through a `StreamReader`, and `StreamingSubprocess.readStdoutLine`,
+  `readStdoutLineCapped`, `readStdoutBytes`, `readStderrLine`, `readStderrLineCapped`, `tryReadStdoutLine`,
+  `tryReadStderrLine`, `LinePoll` and `endedTheStream()` are removed. `takeStdout()` and `takeStderr()` each
+  hand out the stream once, as an `isolated ChildOutputReader`, whose `readLine()` answers a `LineOrEnd`
+  (`line(text)`, `ended`) and throws `StreamError`, and whose `readBytes(n)` answers a `ByteArray`. A `match`
+  over `SubprocessError` that lists every case is no longer exhaustive (E2026), and an `endOfStream` arm is
+  E3034.
+  Fix: add arms for `treeNotEnded`, `detachRefused` and `statusLost`, or give the `match` a `default throws`,
+  and delete `endOfStream` arms; code that told the first two failures apart by the reason text of `ioFailed`
+  or `spawnFailed` matches the cases. Take the reader once (`let out = try child.takeStdout()`) and read from
+  it: match `try out.readLine()` for `line(text)`, and treat `ended` where `endOfStream` was caught;
+  `String.from(try out.readBytes(n))` for the bytes. A loop that polled with `tryReadStdoutLine` reads each
+  stream in a service of its own and `awaitAny`s over the replies beside a timer.
 - `let` means the name is never reassigned, so a `var` that is never reassigned is E3077 whatever else is done
-  with it. A field store, a `push`, a call whose callee writes the parameter and moving the name into another
-  binding no longer keep a `var`; what keeps it is an assignment, passing it to a `mutable` parameter and calling
-  a `mutable self` method on a value of a value type (`text.append("!")` over a `String`). A `var` bound from a
-  record, from state something else writes (`var node = holder.box`) or from a read-only value is reported alike,
-  and so is a `var` bound to a literal array or map that is written through.
+  with it: a `var` that is only written through by a field store, a `push` or a call whose callee writes the
+  parameter, or only moved into another binding, is reported. A `var` bound from a record, from state something
+  else writes (`var node = holder.box`) or from a read-only value is reported alike, and so is a `var` bound to
+  a literal array or map that is written through.
   Fix: write `let` (the compiler lists each site); write `let items = [..].clone()` where a `var` held a literal
   container that is written through, since a plain `let` of a literal is constant data (E3207).
-- Reassigning a `let` is E2013 with the message `'x' is a let and cannot be reassigned` (`'f' is a let field and
-  cannot be reassigned` for a field), and passing a `let` to a `mutable` parameter is E2013 (``'n' is a let and
-  cannot be passed to the `mutable` parameter 'x'; bind it to a `var` ``), where it was E3159.
-  Fix: expect E2013 wherever a script or test matches the code or the message; bind the value to a `var` to
-  pass it to a `mutable` parameter.
+- A `var` cannot start from a bare number: `var x = 10` is E2004 (`A var cannot start from a bare number:
+  write 'var name = expr as Type'`).
+  Fix: write the type the variable counts in, `var x = 10 as T` with a ranged alias `T`.
+- A field's default gives the field its type: `var count as Count = 1` and `let count as Count = 1` in a type
+  body are E2010 (`Expected newline but got '='`).
+  Fix: write the type on the default, `var count = 1 as Count` (`let count = 1 as Count` for a `let` field).
 - Constant data is `immutable`: a `let` bound to a literal, a `b"…"` byte string, a constant record or array
   literal or another constant `let` (module, `static`, field or local), and every inline `b"…"` literal. Storing
-  one into a plain `ByteArray` field, array element or union payload is E3196, returning one from an unmarked
-  result is E3209, and writing through it, passing it to a parameter the callee writes, or writing a `var` bound
-  to a literal is E3207; each compiled before. The same holds through a `String` field of a `static` or module
-  `let` (`append` on it is E3207), a closure that returns such data (writing its result is E3207, and it converts
-  only to a function type that declares `returns immutable`, E3210), and a field default that names it
+  one into a plain `ByteArray` field, array element or union payload is E3196 (a module `let` array stored as
+  `Holder.nums(defaults)` included), returning one from an unmarked result is E3209, and writing through it
+  (`upsert` on a `let` bound to a `Map` literal included) or passing it to a parameter the callee writes is
+  E3207; each compiled before. The same holds through a `String` field of a `static` or module `let` (`append`
+  on it is E3207), a closure that returns such data (writing its result is E3207, and it converts only to a
+  function type that declares `returns immutable`, E3210), and a field default that names it
   (`var names = sharedNames`, E3196).
   Fix: declare the holder `immutable ByteArray` (a field, an `Array with immutable ByteArray` element, a union
-  payload `named(let name immutable ByteArray)`) and the result `returns immutable ByteArray`; to get a mutable
-  array build it with `ByteArray.create` and `push`, or `"text".toByteArray()`, or take `.clone()`; build a field
-  default fresh, or declare the field `immutable`.
+  payload `named(name immutable ByteArray)`) and the result `returns immutable ByteArray`; to get a mutable
+  array build it with `ByteArray.create` and `push`, or `"text".toByteArray()`, or take `.clone()`, as in
+  `let counts = [..].clone()` for a literal that is written; build a field default fresh, or declare the field
+  `immutable`.
 - A `Map` key and a `Set` element are `immutable` slots: `Map.insert`, `Map.upsert` and `Set.insert` take an
-  `immutable` key or element, so a record or array key built at run time is E3207 until it is frozen. Numbers,
-  `String` and other value types need nothing. A generic body that keeps its type parameter in such a slot (a
-  `Set` of `T`, a `Map` key `T`) takes frozen arguments at every instantiation, so a collection of writable
-  records passed to it is E3207.
-  Fix: write `freeze` before the fresh key or element (`counts.upsert(freeze ByteArray.create(3), value: 7)`);
-  `freeze` or `.clone()` the argument of a generic body that keeps its elements frozen.
-- A record whose fields are all `let` is immutable only when every field's type is a value type or an immutable
-  aggregate, so a record with a `let` array field is no longer immutable data: handing it to an `immutable`
-  parameter, or sending it as `immutable`, is E3207.
-  Fix: write `freeze` before the value.
+  `immutable` key or element, so a record or array key built at run time is E3207 until it is frozen, and so is
+  a key of a `Map` literal that something may still write (`[pick(buf): 1 as Count]`, with `pick` returning its
+  argument). Numbers, `String` and other value types need nothing. A generic body that keeps its type parameter
+  in such a slot (a `Set` of `T`, a `Map` key `T`) takes frozen arguments at every instantiation, so a
+  collection of writable records passed to it is E3207.
+  Fix: write `freeze` before the fresh key or element (`counts.upsert(freeze ByteArray.create(3), value: 7)`),
+  and freeze a copy of one something else holds (`[freeze pick(buf).clone(): 1 as Count]`); `freeze` or
+  `.clone()` the argument of a generic body that keeps its elements frozen.
 - The `CharacterSet` presets are `public static let` constants, so `CharacterSet.whitespaces()` is refused.
   Fix: drop the parentheses (`CharacterSet.whitespaces`, `CharacterSet.decimalDigits`, `CharacterSet.letters`, …);
   `CharacterSet.from(chars)` is unchanged.
@@ -278,22 +196,22 @@ release's version as its heading when the release is cut.
   Fix: write `create(0)` for an empty array, `create(n)` for `n` zero elements in one allocation, or
   `create(n, zeroed: false)` for an empty array with room for `n`; a collection whose length is fixed after the
   fill is a `FixedArray`.
-- Creating a `FixedArray` is a pure call, as creating an `Array` is, so discarding the result of
-  `Vec3.create()`, or of a static that returns `Self{}`, with `_ =` is E3064.
-  Fix: use the value, or delete the call.
 - `InputSource.delayed(data)` is removed, with the fixed one-second stdin feed it stood for.
-  Fix: to feed a child after it prints a marker, run it as a `StreamingSubprocess`, read its stdout with
-  `tryReadStdoutLine()` until the marker line, then `writeStdinLine(...)` and `closeStdin()`; where the
-  child only needs to block on stdin, use `InputSource.hold`.
+  Fix: to feed a child after it prints a marker, run it as a `StreamingSubprocess`, take its reader once
+  (`let out = try child.takeStdout()`) and match `try out.readLine()` (`line(text)`, `ended`) until the marker
+  line, then call `child.writeStdinLine(...)` and `child.closeStdin()`; where the child only needs to block on
+  stdin, use `InputSource.hold`.
 - A `with` list names at most 64 type arguments; a longer one is E2015.
   Fix: group the arguments into a smaller number of types, such as a record type passed as one argument.
 - `Vector` is renamed `FixedArray`, and its iterator typealias `Vector.VectorIter` is
-  `FixedArray.FixedArrayIter`; `Vector with 3 Int` is an unknown type (E2010).
-  Fix: rename `Vector` to `FixedArray` and `VectorIter` to `FixedArrayIter`.
-- A `FixedArray` `get` or `set` whose index is proven inside the size — a constant, a value whose ranged
-  type lies inside, or a counted-loop counter between compile-time bounds — cannot throw, so a `try` on it
-  is E3055.
-  Fix: drop the `try … otherwise` and write the call bare.
+  `FixedArray.FixedArrayIter`; `Vector with 3 Int` is an unknown type (E2010). A constant `FixedArray` index at
+  or past the size is E3005 at compile time. A sum, difference or product of values whose ranges are known
+  carries the range those ranges give, and a `FixedArray` `get` or `set` whose index, or a `/` or `mod` whose
+  divisor, is proven by a constant, a ranged type, a counted loop's bounds or such arithmetic to land inside the
+  size or to exclude 0 cannot throw, so a `try` on it is E3055 (`try (100 / i)` in `for i in 1 upto 10`).
+  Fix: rename `Vector` to `FixedArray` and `VectorIter` to `FixedArrayIter`; correct a constant index, or pass
+  a deliberate out-of-range index through a value computed at run time; drop the `try … otherwise` from an
+  access or a division that cannot throw and write it bare.
 - An `export` or `public` top-level `let`, or `static let`
   member, whose type is less visible than the binding is E3167 (`exported constant 'api.BIG' names
   unexported enum 'Status' in its type`). The type is the one the initializer gives it, inferred or
@@ -309,22 +227,13 @@ release's version as its heading when the release is cut.
   Fix: widen the named type to the surface's tier (`export enum Mode`), or narrow the surface (drop the
   `export` from `export var mode as Mode`).
 - A declaration whose name contains `unionCases`, such as a method `Holder.unionCasesFor` or an extension
-  method `int.unionCasesFor`, is held to E3167 and to the unused-export check E3092 like any other.
-  Fix: widen the type its signature names to the declaration's tier, or narrow the declaration; drop the
-  `export` from one nothing outside its directory uses.
-- A constant `FixedArray` index at or past the size is E3005 at compile time.
-  Fix: correct the index, or pass a deliberate out-of-range index through a value computed at run time.
-- A divide or `mod` whose divisor is proven non-zero by a counted loop's bounds or a range computed from
-  them (`100 / i` in `for i in 1 upto 10`) cannot throw, so a `try` on it is E3055.
-  Fix: drop the `try … otherwise` and write the divide bare.
+  method `int.unionCasesFor`, is held to E3167 like any other.
+  Fix: widen the type its signature names to the declaration's tier, or narrow the declaration.
 - `URL.host()` answers an IP literal without its brackets (`::1` for `http://[::1]/`), where it answered
   `[::1]`; the new `URL.authorityHost()` answers the bracketed spelling. An `HttpRequest`'s URL read in a
   handler follows the same rule.
   Fix: call `authorityHost()` where the brackets are wanted, such as building an authority or a `Host`
   header by hand; code that stripped the brackets itself can drop that step.
-- `DerError` has two more cases, `invalidBoolean` and `invalidString`, so a `match` over it that lists
-  every case is no longer exhaustive.
-  Fix: add arms for `invalidBoolean` and `invalidString`.
 - An interface requirement returning one typealias of a generic instance is not met by a method returning
   another typealias of that instance (E3016), as a parameter already was not.
   Fix: declare the method's return with the requirement's own typealias.
@@ -336,9 +245,6 @@ release's version as its heading when the release is cut.
   typealias of the same instance, or a non-`Character`/`CString` value for a `Character` or `CString`
   parameter is E3005.
   Fix: pass a value of the requirement's type, re-branding an instance with `as` (`xs as IntArray`).
-- The result of a call through an interface keeps the requirement's typealias, so passing it where another
-  typealias of the same instance is expected is E3005.
-  Fix: re-brand the result with `as`, or declare the destination with the requirement's typealias.
 - A call's result wears the typealias its callee returns as the callee's declaring file resolves it, a
   directory-qualified `returns alpha.Numbers` included, so passing it where another declaration of that
   alias name is expected is E3005.
@@ -346,64 +252,28 @@ release's version as its heading when the release is cut.
 - A `match` payload binding wears the typealias its payload was declared with, as the union's declaring
   file resolves it, so passing it where another typealias of the same instance is expected is E3005.
   Fix: convert the binding with `as`, or declare the parameter with the payload's typealias.
-- An element of another enum stored into an array by `push`, `set`, `insert` or `fill`, or written in an
-  array literal, is refused (E3005).
+- An element of another enum stored into an array by `push`, `set`, `insert` or `fill` is refused (E3005).
   Fix: store a value of the element's own enum.
-- An array-literal element of another brand is refused (E3005), as `push` refuses one: a `B` value in a
-  `[...]` written at an `Array with A` slot.
-  Fix: re-brand the element with `as` (`[b as A]`).
-- An array-literal element of another type is E3005, where it was E2015.
-  Fix: expect E3005 wherever a script or test matches the code.
 - A member of your own type named `pop`, `remove`, `removeFirst` or `removeLast` that hands back a promise is
   judged by its body, and one that returns a borrow (`self.items.last()`) is E3141; so is a generic static
   that hands back a promise one of its arguments still holds.
   Fix: return what a library `pop`/`remove` takes out of the field, or have the declaration the call binds
   take that argument.
-- A static called on a bare generic name whose result is written over a type parameter no argument fixes
-  (`Holder.make()` declared `returns T`) is E3162.
-  Fix: call it through a typealias that names the instance (`typealias IntHolder = Holder with Integer`).
-- `Type.method` written without its call — a static or instance method, a static the compiler provides
-  (`int.fromString`), or a requirement through a type parameter — is E2078, where it was E2010, E2004 or,
-  at module scope, E2015.
-  Fix: pass a closure that calls it, `function(n) gives Ops.twice(n)`.
-- A static a primitive (`int.nope()`, `byte.nope()`), a compiler-owned type (`String`, `__ManagedFile`) or a
-  builtin container alias does not have is E2073, reported at the member, where it was E2015, or E3004 for
-  `byte`.
-  Fix: call a static the type provides; expect E2073 wherever a script or test matches the code.
-- A member read through a ranged, function or tuple alias, an interface, a type parameter or a directory
-  that does not declare it is E2073, where it was E2010 (`Expected 'min or max'`).
-  Fix: read the member through the type that declares it; only a sized type has `.min` and `.max`.
-- A `static` requirement called through a type parameter (`T.make()`) is E3116, where it was E3004.
-  Fix: call the static on a concrete type that implements the interface.
-- Assigning to a method (`Ops.twice = f`) is E2013, where it was E2004.
-  Fix: store the function value in a `var`.
-- A primitive's static called in a module-level initializer (`let n = int.fromString("5")`) is E2015, where
-  it was E2004.
-  Fix: compute the value in a function, or write it as a literal.
-- A function whose shape differs from the declared function type, stored into a field (`h.op = f`,
-  `self.op = f`, a struct literal), a tuple element (`t.0 = f`) or an array element (`push`, `set`, a typed
-  array literal), is E3005.
-  Fix: store a function whose parameters and result match the declared function type, or change the
-  declared type.
+- A function value is checked against the declared function type wherever it is stored, as it is where it is
+  passed, returned or cast: a function whose parameter is narrower or whose result is wider than the declared
+  function type's (a ranged alias, or a bare `int` in the type's declaration, against a function over a
+  narrower alias), stored into a field (`h.op = f`, `self.op = f`, a struct literal), a tuple element
+  (`t.0 = f`), an array element (`push`, `set`, a typed array literal) or a `let`, is E3005. A closure literal
+  bound by `let` or `var`, or written where no function type is declared, has an unranged result, so it does
+  not fit a function type declaring a ranged result (E3005); a closure written at a parameter, returned value,
+  struct field, field write, variable write or union payload of a function type takes that type's parameter
+  and result types.
+  Fix: declare the function with the function type's parameter and result types, or change the declared type;
+  write a closure where the function type is declared, or end its body in a cast to the result alias
+  (`function(n Integer) gives (n + 1) as Byte`).
 - A `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, backtick, control character or non-ASCII character outside a
   string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
   Fix: delete the character, or move it into a string literal or a comment.
-- A function value fits a function type only by variance: a read-only parameter may be wider than the
-  type's, a `mutable` parameter must be the same type, and a result may be narrower.
-  A function whose read-only parameter is narrower, whose written parameter differs, or whose result is
-  wider than the function type it is stored or passed as — a ranged alias, or a bare `int` in the type's
-  declaration, against a function over a narrower alias — is E3005, or E3009 as an `as` cast.
-  Fix: declare the function with the function type's parameter and result types.
-- A closure literal bound by `let` or `var`, or written where no function type is declared, has an unranged
-  result, so it no longer fits a function type declaring a ranged result (E3005); a closure written at a
-  parameter, returned value, struct field, field write, variable write or union payload of a function type
-  takes that type's parameter and result types, as it did at a parameter.
-  Fix: write the closure where the function type is declared, or end its body in a cast to the result alias
-  (`function(n Integer) gives (n + 1) as Byte`).
-- A call through a function value is checked against the function type the value is held at, not against
-  the function behind it: after `let f = one as Bin`, `f(3)` against a two-parameter `Bin` is E3036 beside
-  the cast's E3009, where only the E3009 was reported.
-  Fix: call the value with the arguments of the type it is held at.
 - `HttpError` and `HttpServerError` are unions, each with a new case `tlsFailed(error TlsError)`, so a
   `match` over either that lists every case is no longer exhaustive, and `==` or `!=` on one is E3066.
   Fix: add an arm for `tlsFailed`, and replace a comparison such as `e == HttpError.timedOut` with a `match`
@@ -425,76 +295,47 @@ release's version as its heading when the release is cut.
   Fix: rename one of the two members, or delete the declaration that is not meant.
 - An `extension` of a type that declares a nested `typealias` the type's own body declares is E3061 at the
   extension's declaration, in any file and for a standard-library type's members too, as an extension
-  method of the type's own method's name is E3176. An interface extension's nested `typealias` yields to a
+  method of the type's own method's name is E3006. An interface extension's nested `typealias` yields to a
   conforming type's own declaration of the same name, and the extension's methods compiled for that
   type read the type's; they read the extension's alias while callers saw the type's.
   Fix: rename the extension's member, or delete it and use the type's own.
 - A nested `typealias` that a program's `extension` declares under the name of one a library `extension` of
   the same type declares (`ElementArray`, `SortComparator` or `NodePower` on `Array`, `ElementTransform` on
-  `Iterable`) is the program's own member: the program's extension bodies and the callers of its methods read
-  the program's declaration, where an extension body that wrote the name read the library's and the library's
-  bodies could read the program's. An extension in another directory naming a member the declaring directory
-  leaves without a visibility modifier is E3008.
-  Fix: write the extension bodies for the member the program declares, or rename it to keep the library's.
-- `TlsListener.accept()` returns once the TCP connection is accepted, and the stream runs its handshake on its
-  first `send`, `readSome` or `shutdownWrite`, or on the new `handshake()`, as Go's `Conn.Handshake` does. A failed
-  handshake is thrown from that call, not from `accept()`, and the options' handshake deadline bounds the
-  handshake from that call. A read or write deadline set on the stream before then applies once the handshake
-  completes.
-  Fix: handle handshake errors where the stream is first used, or call `handshake()` right after `accept()`.
-- `TlsStream.protocol()`, `cipherSuite()`, `applicationProtocol()` and `peerCertificates()` throw `TlsError`,
-  `handshakePending` until the handshake has completed, and `TlsError` has that case, so a `match` over it that
-  lists every case is no longer exhaustive. `HttpTransport.security()` throws `TlsError` the same way.
-  Fix: call the four with `try`, after `handshake()` on a stream from `accept()`; add an arm for
-  `handshakePending`.
-- `HttpServer.serve` moves each connection, a `TcpClient` or a `TlsStream`, to a green thread of its own, so a
-  client that stalls and a handler that computes delay only their own connection, and it returns once every
-  connection it took has finished. The handler is one value every connection reads at once, so it is
-  read-only: a handler whose methods write its fields is E3210 where it conforms to `HttpHandler`, and a
-  handler that holds an OS handle, a function value or a promise cannot be frozen, so `serve` refuses it at
-  compile time. What the handler wrote in place is no longer shared between requests or visible to the caller.
+  `Iterable`) is the program's own member: the program's extension bodies and the callers of its methods are
+  checked against the program's declaration, where they were checked against the library's, so a body or call
+  written for the library's alias is E3005.
+  Fix: write the extension bodies and their callers for the alias the program declares, or rename the
+  program's alias.
+- `HttpServer.serve` moves each connection to a green thread of its own, so a client that stalls and a handler
+  that computes delay only their own connection, and it returns once every connection it took has finished.
+  The handler is one value every connection reads at once, so it is read-only: a handler whose methods write
+  its fields is E3210 where it conforms to `HttpHandler`, and a handler that holds an OS handle, a function
+  value or a promise cannot be frozen, so `serve` refuses it at compile time. What the handler wrote in place
+  is no longer shared between requests or visible to the caller. `serve` takes `handler immutable HttpHandler`.
   Fix: keep what connections share, or what the caller reads after `serve`, in a service the handler holds a
   handle to (`CountingHandler.create(visits.clone())`), declare the handler's fields `let`, and build the
-  handler where `serve` is called.
+  handler where `serve` is called. Write `server.serve(freeze MyHandler.create(…))` where the handler holds a
+  record or an array built at run time; a handler of plain `let` values needs no change (`freeze` of it is
+  E3200). A function that receives a handler for `serve` declares its parameter `immutable`.
 - A cast whose operand is itself a cast, `x as A as B` or `(x as A) as B`, is E2079.
   Fix: cast directly to the final type (`x as B`), or, when both steps do work (a range check, then a
   reinterpretation as `bits(n)`), bind the first: `let a = x as A`, then `a as B`.
-- A file-scope `let` or `static` initializer whose operator combines two different typealiases with no
-  common ancestor (`let t = a + b` over a `Small` and a `Tally`, a comparison, `and`, `or`, `xor` or `mod`)
-  is E3005, as it is in a function body.
-  Fix: cast one side with `as` (`a + (b as Small)`).
-- A file-scope constant derived from aliased operands carries their typealias, as the same expression does
-  in a function body: with `let a = 5 as Small`, `let s = a + a` is a `Small`, so passing `s` where a
+- A file-scope `let` or `static` initializer is typed as the same expression is in a function body. An
+  operator that combines two different typealiases with no common ancestor (`let t = a + b` over a `Small` and
+  a `Tally`, a comparison, `and`, `or`, `xor` or `mod`) is E3005, and a constant derived from aliased operands
+  carries their typealias: with `let a = 5 as Small`, `let s = a + a` is a `Small`, so passing `s` where a
   `Tally` is required is E3005 and casting it to `Small` again is E3010.
-  Fix: cast with `as` where the other typealias is required (`f(s as Tally)`), and drop a cast to the
-  typealias the constant already carries.
-- A file-scope `let` initialized by a cast literal (`let Base = 2 as Wide`) whose readers include another
-  file-scope initializer that takes the plain constant (`let S = Base as Small`) is E3010, as a read in a
-  function body is.
-  Fix: write the bare literal (`let Base = 2`).
+  Fix: cast one side with `as` (`a + (b as Small)`), cast with `as` where the other typealias is required
+  (`f(s as Tally)`), and drop a cast to the typealias the constant already carries.
 - A bare call to an instance method of the enclosing type from a `static` method or a file-scope
   initializer is E3193, with or without arguments: a first argument there is never the
   receiver (`bump(m)` with `m` a `Maker` no longer fills `self`).
   Fix: call it on a value (`m.bump()`) or pass the receiver explicitly (`Maker.bump(m)`).
-- In a type that declares a `static` and an instance method of one name, a bare call from an instance method
-  or its closures calls the instance method, whichever is declared first: with `function getValue()`
-  declared before `static function getValue()`, a bare `getValue()` in an instance method is
-  `self.getValue()`.
-  Fix: write `Box.getValue()`, qualified by the type's name, where the static method is meant.
 - A `union` value is refused as an operand of an arithmetic, bitwise or shift operator, of unary `-` or
   `not`, and as a condition, as a struct is: `n + Shape.empty` is E2004
   (`Cannot operate on int and Shape`).
   Fix: read the union with `match`, or its tag with `.ordinal` or `.rawValue`; declare an `enum` where the
   values are meant to be numbers.
-- `TlsClient.connect`'s `deadlineMs` parameter is renamed `dialDeadlineMs` and bounds only the TCP
-  connection, where it used to bound the connection and the handshake each; the handshake is bounded by
-  the new `TlsClientOptions.setHandshakeDeadline(milliseconds)`, 30 seconds by default as
-  `TlsServerOptions` already is, where a client with no `deadlineMs` waited without a limit. A handshake
-  that outlasts it throws `handshakeTimedOut`. `HttpClient` caps the handshake deadline at what is left of
-  the exchange's timeout.
-  Fix: rename `deadlineMs:` to `dialDeadlineMs:` at each `TlsClient.connect` call, and call
-  `options.setHandshakeDeadline(...)` where the old `deadlineMs` also had to bound the handshake (`0` waits
-  without a limit).
 - A message parameter, a message reply or a `spawn` factory argument whose type can hold a promise is
   E3217: a record with a promise in a field, a union with a case carrying one, or an array or list of
   promises, empty or not; so is a bare promise handed to a factory. A coroutine belongs to the strand that
@@ -503,46 +344,36 @@ release's version as its heading when the release is cut.
   hold its strand`. A service's own state may still hold the promises its handlers start.
   Fix: `await` the promise and send, return or pass the result it yields.
 - `spawn Type.factory(args)` runs the factory on the new service's own green thread instead of on the
-  spawner's, and its arguments move there the way a message's do. A coroutine the factory starts therefore
-  belongs to the service's strand. Programs that compiled before are refused. A binding passed to a factory is moved whether or not the factory keeps it, so
-  reading it after the `spawn` is E3102, and an argument is held to a message argument's terms (`isolated T` or
-  `immutable T`, E3217 without one), so one read out of a field or a container is not `isolated` (E3200) even
-  where the factory does not keep it. A factory, or a function it calls, is held to the rules a message
-  handler is: waiting on another party is E3221. A factory argument held at an opaque type parameter (a `T` value
-  inside a generic function) is E2015.
-  Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the
-  value in a field of the service and reach it through a message; handle a reply in another message, as the E3221 entry
-  describes; spawn from a function of a concrete type.
+  spawner's, and its arguments move there the way a message's do, so a coroutine the factory starts belongs to
+  the service's strand. A record or container factory parameter is written `isolated` (E3217 until it is, as
+  for a message parameter), and a binding passed to it is then moved whether or not the factory keeps it, so
+  reading it after the `spawn` is E3102, and an argument read out of a field or a container is not `isolated`
+  (E3200) even where the factory does not keep it. A factory argument held at an opaque type parameter (a `T`
+  value inside a generic function) is E2015.
+  Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the value in
+  a field of the service and reach it through a message; spawn from a function of a concrete type.
 - A generic body the program instantiates with a promise, or a type holding one, is held to a promise's
-  rules: a `T` parameter it stores in a record twice, or inside a loop, is E3102, and a closure in it that
-  stores or returns a captured `T` is E3141.
-  Fix: store the parameter once, outside any loop, and hand the closure the value as a parameter.
-- The `ByteWord` alias is removed; `readOrderedWord` returns, and `appendOrderedWord` takes, an
-  `OrderedWord`, the same `bits(64)`.
-  Fix: write `OrderedWord` wherever `ByteWord` appeared.
-- A sum, difference or product of values whose ranges are known carries the range those ranges give. A
-  `FixedArray` `get` or `set` indexed by it that lands inside the size cannot throw, and neither can a `/`
-  or `mod` by one that excludes 0, so a `try` on either is E3055.
-  Fix: drop the `try … otherwise` and write the access or the division bare.
+  rules: a `T` parameter handed to a record literal (`Self{a: x}`) and handed to another in a later statement
+  or inside a loop (`s = Self{a: x}`) is E3102.
+  Fix: hand the parameter to one record literal, outside any loop.
 - Arguments and right-hand sides run before the target or receiver path is resolved, and an assignment
   counts the new value, stores it, then releases the old one. In `x.inner.name = x.dropInner()` and in
   `x.inner.add(x.dropInner())`, where the call rebinds `x.inner`, the write or the call lands in the
   `x.inner` that exists after the call runs.
   Fix: a program that depended on the path being resolved first puts the call on its own line before the
   statement, which makes the order explicit.
-- A parameter is a `let` binding, so reassigning one — by assignment, by storing a fresh record in it, or by
-  a method that writes its value in place such as `s.append("!")` over a `String` parameter — is E2013.
-  Nothing is inferred any more: a parameter is by reference only where it is marked `mutable` before its type.
+- A parameter is a `let` binding, so reassigning one (by assignment, by storing a fresh record in it, or by a
+  method that writes its value in place such as `s.append("!")` over a `String` parameter) is E2013. Nothing
+  is inferred: a parameter is by reference only where it is marked `mutable` before its type. A `mutable`
+  parameter takes a `var`, a field or an element that is writable: a literal or an expression handed to it is
+  E2013, and so is a `let`, a module-level `let`, a name a closure captured, and a field of a `let` that is
+  another name for a record held elsewhere. A function with a `mutable` parameter fits only a function type
+  that spells `mutable` at that position (E3005).
   Fix: write `mutable` on a value-type parameter (a number, `bool`, an enum or `String`) the function must
-  reassign, as in `function bump(n mutable Count)`, or copy the parameter into a local `var` and reassign the
-  local. A record-type parameter is never rebound; copy it into a local `var`.
-- A `mutable` parameter takes a `var`, a field or an element that is writable: a literal or an expression
-  handed to it is E2013, where it was given a temporary, and so is a `let`, a module-level `let`, a name a
-  closure captured, and a field of a `let` that is another name for a record held elsewhere. A function with a
-  `mutable` parameter fits only a function type that spells `mutable` at that position (E3005), and a
-  message or factory parameter cannot be `mutable` (E2010).
-  Fix: pass a `var` (a captured name or a module `let` goes through a local `var` or a `.clone()`); write the marker in the function type, as in `typealias Step = function(mutable Count)`;
-  return the new value from a message or a factory instead of writing a parameter.
+  reassign, as in `function bump(n mutable Count)`, and pass it a `var` (a captured name or a module `let` goes
+  through a local `var` or a `.clone()`); or copy the parameter into a local `var` and reassign the local. A
+  record-type parameter is never rebound; copy it into a local `var`. Write the marker in the function type,
+  as in `typealias Step = function(mutable Count)`.
 - Maxon has no overloading. A function name is declared once per directory, a method name once per type and
   an interface requirement name once per interface, so a second function of one name, a `static` and an
   instance method of one name, a method of a type and one its `extension` adds, and a field and a method of
@@ -552,19 +383,13 @@ release's version as its heading when the release is cut.
 - Standard-library operations that were overloads have one name per form. `Array.contains(sequence)` is
   `containsSequence`, `Array.sort(cmp)` is `sortBy`, `Array.sortUnstable(cmp)` is `sortUnstableBy`,
   `FilePath.join(FilePath)` is `joinPath`, `Hasher.combine(bytes)` is `combineBytes`,
-  `Hasher.combined(state, bytes:)` is `combinedBytes`, `String.contains(Character)` is `containsCharacter`,
-  `String.slice(start, length:)` is `sliceLength`, `TlsStream.send(ByteArray)` is `sendBytes` and
+  `String.contains(Character)` is `containsCharacter`, `String.slice(start, length:)` is `sliceLength` and
   `Iterable.contains(predicate)` is `containsWhere`. `Subprocess.run`, `TcpClient.connect`, `String.trim`,
   `String.trimStart` and `String.trimEnd` are one declaration each with default parameters.
   Fix: write the new name at each call; the arguments are unchanged.
-- The standard library's accessors over stored values are fields, read without parentheses, and calling one
-  is E4006 (`Type 'PemBlock' has no method named 'label'`): `DerHeader.tagClass`, `tagNumber` and `length`,
-  `DerBitString.unusedBits`, `PemBlock.label` and `bytes`, `URL.scheme` and `path`, `X509Attribute.oid` and
-  `value`, `X509Name.attributes`, `X509PublicKey.algorithm`, `X509BasicConstraints.isCertificateAuthority`,
-  the `Certificate` fields `version`, `serialNumber`, `signatureAlgorithm`, `issuer`, `notBefore`,
-  `notAfter`, `tbsCertificate` and `signature`, and the TLS handshake message and key-schedule types
-  under `stdlib/helpers/tls`.
-  Fix: drop the `()`, as in `block.label` and `certificate.issuer`.
+- `URL.scheme` and `URL.path` are fields, read without parentheses, and calling one is E4006 (`Type 'URL' has
+  no method named 'scheme'`).
+  Fix: drop the `()`, as in `url.scheme` and `url.path`.
 - A top-level name is declared once per directory, whatever its kind and visibility: a `type`, `enum`,
   `union`, `interface`, `typealias`, top-level `let`, and `function` share one namespace, private or
   exported and generic or not. A second declaration in a directory is E3006 (`duplicate definition of
@@ -574,11 +399,10 @@ release's version as its heading when the release is cut.
   Fix: rename one declaration, or declare the name once and use it from both files.
 - A bare name resolves the same way for every kind of declaration: the reading file's own directory's
   declaration, else the project root's, else the one declaration the file may name, else it is ambiguous
-  (E3063 for a type name, E3095 for a function or a binding). A bare name that the project root declares and the
-  reader's own directory also declares now means the reader's own, a reader's own declaration no longer
-  competes with another directory's, and a program's own names shadow the standard library's and the
-  runtime tier's. E3063 no longer ends `or rename this file's own
-  declaration`.
+  (E3063 for a type name, E3095 for a function or a binding). A bare name that the project root declares and
+  the reader's own directory also declares now means the reader's own, a reader's own declaration no longer
+  competes with another directory's, and a program's own names shadow the standard library's and the runtime
+  tier's.
   Fix: write `export.name` for the project root's declaration and `dir.name` for another directory's.
 - A bare read of a name that the reader's directory declares as a function means that function, where it
   read another directory's exported `let` of the name.
@@ -588,10 +412,6 @@ release's version as its heading when the release is cut.
   escapes, where the specifier left it plain: `{`/`}` are `\{`/`\}` in a `String`, control characters are
   `\uXXXX`, and a width pads the quoted text (`{name:8q}`).
   Fix: drop `:q` where the plain text is wanted.
-- `Aes.encryptBlock`, `Aes.decryptBlock`, `Aes.xorKeyStream`, `AesGcm.seal` and `AesGcm.open` are pure calls
-  on every target, so discarding a result with `_ =` is E3064.
-  Fix: use the result. For `AesGcm.open` that means acting on the plain text or on the failure, since the call
-  is also the authentication check.
 - Storing a value of one named integer type into an array whose element type is another, or a value of one
   float alias into an array of another, is E3005. `items.push(n)`, `items.set(i, value: n)` and
   `WideArray from [n]`, with `n` a `Narrow` and the array an `Array with Wide`, name the cast, as a variable,
@@ -599,11 +419,6 @@ release's version as its heading when the release is cut.
   and stores it into a stdlib `ByteArray`, or the reverse, crosses two types.
   Fix: write `n as Wide`, or use the stdlib `Byte`. A plain `int`, a value of the element's own alias and an
   `as Wide` cast are accepted.
-- A payload assignment in a `match` must reach its union. Assigning a match binding replaces the payload held
-  by the matched union, so it must be able to write that union: the scrutinee is a local `var`, a field of a
-  `var`, a record parameter's field, or a parameter marked `mutable`. Any other scrutinee (an unmarked
-  parameter, the receiver `self`, a temporary) is E2013, and the message names the fix.
-  Fix: mark the parameter `mutable`, or copy the union into a local `var` and match on that.
 - A call that fills array slots with zero is E3106 for an element that is a payload-free enum or union whose
   raw values (tags) include no 0, as it is for a ranged alias that excludes 0: `Array.create(n)` and
   `create(n, zeroed: true)`, `resize` and `FixedArray.create`. Zero named no case, so a `match`
@@ -627,92 +442,50 @@ release's version as its heading when the release is cut.
   function is E3212, as is an exit that leaves it neither awaited nor cancelled.
   Fix: `await` it or call `.cancel()` on it before every `return`, `throw` and propagating `try`; pass a
   `.clone()` of the argument to untie the call (`async walkTree(root.clone())`).
-- A variable handed to a `mutable` parameter of an `async` callee is lent to the coroutine, which writes the
-  caller's own variable, where the coroutine wrote storage of its own and nothing reached the caller. Until
-  the promise is awaited or cancelled, reading, writing or passing the variable is E3102, and naming it in the
-  statement that starts the coroutine is E3186. Non-local storage at a by-reference
-  position of an `async` call is E2015.
+- A variable handed to an `async` callee at a parameter it writes (a `mutable` parameter) is lent to the
+  coroutine, which writes the caller's own variable, where the coroutine wrote storage of its own and nothing
+  reached the caller. Until the promise is awaited or cancelled, reading, writing or passing the variable is
+  E3102, and naming it in the statement that starts the coroutine is E3186. Non-local storage at a
+  by-reference position of an `async` call is E2015.
   Fix: `await` or `.cancel()` the promise before the variable is used again, and pass a local `var` or a field
   of one.
-- A variable passed at a `mutable` parameter must be declared at the parameter's own type, alias included: a
-  `Narrow` variable at a `mutable Wide` parameter, or a `Wide` one at a `mutable Narrow` parameter, is E3005 at
-  the call, in direct calls, method calls, calls through function values and interfaces, generic functions and
-  coroutines. The write used to be range-checked when the call returned.
+- A variable of a subtype alias (`typealias Narrow = int(0 to 10) implements Wide`) passed to a parameter of the
+  ancestor alias that the callee writes (a `mutable Wide` parameter) is E3005 at the call, in direct calls and
+  calls through an interface.
   Fix: declare the variable or field at the parameter's type, or pass a local of that type.
 - E3186 follows evaluation order and the callee's writes. A local read by an operand evaluated before a call
   writes it through a `mutable` parameter is refused anywhere in the statement, judged per root binding: the
   other argument or the receiver (`bump(h.n, h: h.copy())`, `self.item.bump(self.level)`), sibling fields of one
-  root, a field of `self` or a module `var` beside its own cell, `f(s, s)` through a function value or an
-  interface, a ternary condition wrapped around the call, a closure that captures the local, and a receiver
-  call whose by-reference write reaches a root an argument reads. A read that runs after the write, and a
-  `mutable` parameter the callee never writes, are accepted. The message names the other operand and the cure
-  where it said `overlaps argument`. A static `var` field path or a namespace-qualified `var` passed by
-  reference now reaches the callee's write, where it was lost.
+  root, a field of `self` beside its own cell, `f(s, s)` through a function value or an interface, a ternary
+  condition wrapped around the call, a closure that captures the local, and a receiver call whose by-reference
+  write reaches a root an argument reads. A read that runs after the write, and a `mutable` parameter the callee
+  never writes, are accepted. The message names the other operand and the cure.
   Fix: copy the local into a `let` in an earlier statement and use the copy for the other operand; for a
   by-reference operand, copy into a `var`, pass the copy and store it back after the call.
 - A function type and an interface requirement are read-only and neither wait nor yield. A function value,
   closure or conformer that writes a parameter, its receiver or a capture the boundary does not declare, or
   that may wait or yield, is E3210, and a `mutates captures` value called through frozen or read-only data is
-  E3211, inside a `modify` block as well when the value came from the data the block holds. A closure that
-  builds a record from its captures counts as writing them. The library's own boundaries are declared the same
-  way: `Iterator.advance`, `BidirectionalIterator.retreat` and `LogHandler.handle` are `mutable self`,
-  `HttpHandler.handle` takes
-  `exchange mutable HttpExchange`, and `Array.SortComparator` and the other library function types do not
-  declare `mutates captures`.
+  E3211. A closure that builds a record from its captures counts as writing them. The library's own
+  boundaries are declared the same way: `Iterator.advance`, `BidirectionalIterator.retreat` and
+  `LogHandler.handle` are `mutable self`, `HttpHandler.handle` takes `exchange mutable HttpExchange`, so a
+  conformer that declares `handle(exchange HttpExchange)` is E3016, and `Array.SortComparator` and the other
+  library function types do not declare `mutates captures`.
   Fix: declare what the callee does on the boundary: `mutable` on the parameter (`function(mutable Row)`),
   `mutable self` on the requirement (`function grow(mutable self, by Tally)`), `mutates captures` after the
   result of a function type whose closures write what they capture or build a record from it; declare
   `mutable self` on the interface requirement whose conformer's result holds data from its receiver (E3210).
   Spell `mutable` on an `HttpHandler` conformer's `exchange` parameter. A callee that waits on a reply or
   awaits a coroutine cannot stand behind a function type or requirement: start the wait in the caller.
-- `keep`, `sole`, `returns sole` and `returns readonly` are removed, along with E2076 and E3189, and fail as
-  any stray word does. A message or factory parameter marked `mutable` is E2010, where it was E2076.
-  Fix: delete the qualifier. A function type whose callee writes a parameter says `mutable T`; whether a
-  function keeps a parameter is read from its body.
-- A type with a unique field is unique, `Promise` is declared `type Promise is unique`, and a unique value
-  is never cloned or aliased. `clone()` of a record, array or promise holding a promise is E3214, and so is
-  freezing one, or binding, returning, storing or handing to a keeping parameter a unique value read out of a
-  field, an element, a `for` loop variable or a tuple destructure.
-  Fix: move the value out with `pop` or `remove`, or `swap` it out of an `isolated` field; a holder of promises
-  has no `clone()`.
-- A `for` loop over an array whose elements move out as the loop runs, such as an array of promises, makes the
-  array read-only in the body: pushing to it, clearing it or passing it to a function that writes it is E3197 or
-  E3207.
-  Fix: collect what the body adds in another array and use it after the loop.
-- Every program is held to the capability checks, whether or not its source spells a region word: a write
-  through frozen or read-only data (E3197), a store that mixes capabilities (E3196), an argument a
-  parameter's inferred use refuses (E3207), a parameter the body needs both mutable and immutable (E3206),
-  results whose source arguments disagree (E3208, E3209), a call that may wait or yield inside a `modify`
-  block (E3205), and a function value or conformer that writes, keeps or returns a parameter its function
-  type or requirement leaves read-only (E3210).
-  Fix: follow the message, which names the use that decided the class: pass a mutable argument, `freeze` a
-  `.clone()` where a frozen one is wanted, or move the write out of the data that is frozen; declare
-  `mutable` on the parameter or `mutable self` on the boundary where a function value or conformer writes,
-  and return a `.clone()` of a read-only parameter instead of the parameter.
 - `sendable` and `isolated` after `is` in a generic type's `where` clause are region bounds, so an interface
   of either name is not a constraint there, and the same words in a function's or an extension's `where`
   clause are E3215.
   Fix: rename an interface called `sendable` or `isolated`; bound a generic function's parameter by an
   interface.
-- A child's output is read through a `StreamReader`: `StreamingSubprocess.readStdoutLine`,
-  `readStdoutLineCapped`, `readStdoutBytes`, `readStderrLine`, `readStderrLineCapped`, `tryReadStdoutLine` and
-  `tryReadStderrLine` are removed, with `LinePoll`, `SubprocessError.endOfStream` and `endedTheStream()`.
-  `takeStdout()` and `takeStderr()` each hand out the stream once, as an `isolated ChildOutputReader`, whose
-  `readLine()` answers a `LineOrEnd` (`line(text)`, `ended`) and throws `StreamError`, and whose
-  `readBytes(n)` answers a `ByteArray`.
-  Fix: take the reader once (`let out = try child.takeStdout()`) and read from it: match `out.readLine()` for
-  `line(text)`, and treat `ended` where `endOfStream` was caught; `String.from(try out.readBytes(n))` for the
-  bytes. Delete `endOfStream` arms. A loop that polled with `tryReadStdoutLine` reads each stream in a service
-  of its own and `awaitAny`s over the replies beside a timer.
 - `maxon test` fails a test that passes but leaves a process running when it ends, naming the process, on
   Windows, Linux and macOS; when no single test of a process leaves it alone, every test of that process
   fails, naming them. `spec-test` fails a case the same way.
   Fix: wait for every process a test starts before it ends: `Subprocess.run`, `wait()` on a
   `StreamingSubprocess`, or a poll of `Process.isAlive` until a detached child has ended.
-- `Process.isAlive(pid)` answers `false` for a process that has ended and not been reaped, on Linux and macOS
-  as on Windows.
-  Fix: wait on a child with `wait()` where the program needs to know it was reaped; a loop that polls
-  `isAlive` until it answers `false` needs no change.
 - `Directory.list` throws `DirectoryListError.accessDenied` for a directory the process may not list and
   `listFailed` for any other failure, where it threw `notFound` for both.
   Fix: handle `accessDenied` and `listFailed` beside `notFound` where a `notFound` arm stood for every
@@ -729,31 +502,27 @@ release's version as its heading when the release is cut.
   coroutine belongs to the strand that started it.
   Fix: `await` the promise, or `.cancel()` it, before the message or factory returns, and keep its result in
   the field.
-- A service's `spawn(capacity: n)` admits exactly `n` queued messages. A service that was parked idle took one
-  more directly, so the `n + 1`th send succeeded; it now fails `mailboxFull` (or waits, with a `sendTimeout:`).
-  Fix: give the service a capacity one larger where a program relies on the extra slot, or give the send a
-  `sendTimeout:`.
 - A service message parameter, message reply or factory parameter whose type is a record, a union with a
   payload, an array or other container, or an interface value is written `isolated T` or `immutable T`; with
   neither, the `spawn` is E3217. Only the factory the `spawn` names is judged, and a reply is judged at its
   declaration. Numbers, `bool`, `String`, `Character`, enums, unions whose cases carry nothing, service and
-  interface handles, `SharedValue` cells, tuples that own no heap, and types that hold a `unique` value or an
-  OS handle need no word.
+  interface handles, `SharedValue` cells, tuples that own no heap, and types that hold an OS handle need no
+  word.
   Fix: write `isolated T` and send a fresh value or an `isolated` local, which the sender cannot read
   afterwards, or write `immutable T` and send `freeze x.clone()`.
+- Every message send is a throwing call: a send that awaits no reply (`h.note(3)`) is E3057 without `try`
+  outside a `test` body, since a send fails `mailboxFull` when the service's mailbox is full and
+  `serviceStopped` when it has stopped.
+  Fix: write `try h.note(3) otherwise …`, propagate the error from a throwing function, or make the send inside
+  a block-form `try`.
 - `LogHandler.handle` takes `record immutable LogRecord`, so a handler conforming to
   `LogHandler` declares `handle(record immutable LogRecord)`.
   `LogRecord.create` takes `attrs isolated LogFieldArray`.
   Fix: spell `immutable` on a `LogHandler` conformer's `record` parameter; pass `attrs` as a fresh
   `LogFieldArray.create(0)` call or an `isolated` local, and `freeze` a `LogRecord` before sending it to a
   handler.
-- `HttpServer.serve` takes `handler immutable HttpHandler`.
-  Fix: write `server.serve(freeze MyHandler.create(…))`; a function that receives a handler for `serve`
-  declares its parameter `immutable`.
-- A promise has no zero value, so `create(n)`, `create(n, zeroed: true)` and `resize` on an `Array` of
-  promises are E3106, as they are for a `String`, and so is `create(n)` in a generic body that some
-  instantiation makes an array of promises.
-  Fix: create with `create(n, zeroed: false)` and fill with `push`.
+- A promise has no zero value, so `resize` on an `Array` of promises is E3106, as it is for a `String`.
+  Fix: grow the array with `push`.
 - An `extension` whose name is not a declared `type`, `enum`, `union`, `interface` or primitive is refused:
   an unknown name is E3011, and a typealias (`extension WideBox` over `typealias WideBox = Box with Wide`) is
   E2015. Both compiled to an extension that added nothing.
@@ -772,63 +541,6 @@ release's version as its heading when the release is cut.
   a surrogate or a malformed byte sequence typed into the source. UTF-8 has no spelling for a surrogate
   (U+D800 to U+DFFF), and such a literal used to build a `Character` or `String` holding one.
   Fix: write `\uFFFD` where a placeholder is meant; bytes that are not text are a `b"…"` literal.
-- A function that returns frozen data on one path and writable data on another, including one `return` whose
-  `if … else` or `match` gives both, hands back a read-only result to every caller: writing through it, or
-  passing it to a `mutable` parameter, is E3197 or E3207 whatever the receiver is, where only a caller whose
-  receiver was an unmarked parameter was held to it.
-  Fix: declare the function `returns immutable` when every path is frozen, or return a `.clone()` of the frozen
-  path.
-- A function declared `returns immutable` that returns one of its parameters on some path, including a
-  `return` whose `if … else` or `match` also gives frozen data, takes frozen data for that parameter, as it does
-  when it returns the parameter alone: passing a mutable value is E3207.
-  Fix: `freeze` the argument, or pass a `.clone()` of it.
-- The keys of a `Map` literal are held to `Map.upsert`'s `immutable` key like the argument of a written
-  `upsert`, so a key that something may still write, such as the fresh result of a call that returns its
-  argument, is E3207.
-  Fix: `freeze` the key where the literal writes it.
-- A `let` bound to a collection literal (a `Map`, a `FixedArray` or an array literal) is constant data, so a
-  call that writes it (`upsert`, `set`, `push`) is E3207, and a `let` bound to a `String` is a name that is
-  never reassigned, so `let s = "…"` followed by `s.append(…)` is E2013.
-  Fix: declare the name `var`, or write to a `.clone()`.
-- `freeze` of a record that is an immutable aggregate (every field a `let` of a value type or of such a
-  record) is E3200, because the record already counts as a value: `freeze LogHandlerOptions.create()`.
-  Fix: delete the `freeze`.
-- A `for` over a read-only `List` (frozen, or a module-level `let`), or over a collection whose element type is
-  `immutable` (`Array with immutable Box`), hands out read-only elements: writing one is E3197. The element an
-  iterator hands out of a frozen collection parameter is frozen too, so handing it to a function that writes its
-  parameter is E3207.
-  Fix: iterate a `.clone()`, or write through a mutable list; take a mutable collection, or `.clone()` the
-  element, where a callee writes it.
-- A closure that writes through a captured iterator writes the collection the iterator runs over, so a function
-  whose parameter the closure iterates takes a mutable argument: a frozen one is E3207. A union parameter is
-  judged like a record parameter, and a parameter a function passes only through a retained alias (an
-  interface-typed argument, for one) to a callee that stores or writes it is mutable only, so a read-only
-  argument is E3207.
-  Fix: pass writable data or a `.clone()`.
-- `try … otherwise <param>` joining two parameter sources is E3208 for mixed arguments (one frozen, one
-  fresh), and binding an element of an `isolated` container to a `let` or `var` outside a block is E3198.
-  Fix: `freeze` or `.clone()` one argument so both share a capability; open the container with `modify`.
-- A bare `get(…)` inside an `extension Array` or `Array` body takes the capability of the receiver, so
-  writing through its result when the receiver is frozen or read-only is E3197, and so is writing through what
-  an `extension` member returns out of an instance whose elements are `immutable` (`return try self.get(0)`
-  over `Array with immutable Point`).
-  Fix: take a `.clone()` of the element.
-- `SubprocessError` has a new case, `statusLost(stdout, stderr)`, thrown by `Subprocess.run` and by
-  `StreamingSubprocess.wait` for a child that ended while another process took its exit
-  status (on macOS, a program killed while a debugger's stub held it; on Linux, a child reaped by another process). A `match` over `SubprocessError` with no
-  `default` that lists every case no longer compiles.
-  Fix: add a `statusLost` arm, or `statusLost(stdout, stderr)` where the arm uses
-  the output, or give the `match` a `default throws`.
-- A conformer that binds an associated type to an interface (`type Impl implements Source with Named`) is
-  E2015 at that binding when an `extension` of the interface stores the associated type as a container element
-  (`typealias ItemArray = Array with Item`), however many bodies use the alias. It compiled while nothing used
-  the alias, and stopped the compiler with a panic once something did. A standard library extension counts
-  the same way: `extension Iterable` stores `Element` as a container element (`ElementArray`) and in the
-  function types `ElementTransform` and `ElementPredicate`, so `type Names implements Iterable with (Named,
-  NamedCursor)`, which binds `Element` to an interface, is E2015 at that binding and again at the library's
-  alias.
-  Fix: bind the associated type to a concrete type that implements the interface (for an `Iterable`
-  conformer, a concrete element type), or take the container out of your own extension.
 - `Directory.delete` throws `deleteFailed`, not `notFound`, for a path that holds a file or a link, a dangling
   link included. `notFound` means nothing is at the path.
   Fix: where a handler treats `notFound` as "already gone" for a path that may hold a file or a link, handle
@@ -843,24 +555,15 @@ release's version as its heading when the release is cut.
   generic type another directory exports as `Pair`; it is now E2055 (`Type 'Pair' has no associated types`), because
   an alias is not a generic type and the alias that wins is the declaration the bare name means.
   Fix: write the directory-qualified base for the generic type (`a.Pair with …`), or rename the alias.
-- `view` is removed: `view x = e` fails as any stray word does. It was another spelling of `let`.
-  Fix: write `let` (`view v = h.box` is `let v = h.box`).
-- The `readonly` element qualifier is removed, with E2075 and E2077: `Array with readonly T` and `Map with K,
-  readonly V` fail as any stray word does. A collection whose elements nothing may write is `Array with
-  immutable T` or `Map with K, immutable V`; a value stored into one must be frozen (E3196), and an element read
-  out is read-only (a write through it is E3197).
-  Fix: write `immutable` where `readonly` stood, and `freeze` a value built at run time where it is stored into
-  the collection.
-- The read-only value rules that made `let` deep are gone, and with them E3078, E3159, E3188, E3135, E3137,
-  E3138, E3163, E3164 and E3191: binding read-only data to a `var`, to a mutable place or to a keeping
-  parameter now compiles, and the write is what is refused. A write through frozen, constant or read-only data is
-  E3197 (E3207 where the data is handed to a parameter the callee writes), a store into a plain field, element or
-  payload is E3196, a `mutable` by-reference argument that is a literal, an expression, a captured name or a
-  module `let` is E2013, a message or factory value that cannot cross is E3217, and a `spawn` reachable from a
-  global initializer is E3220. A send no longer checks sole ownership at run time: a value that crosses is
-  `isolated` (E3200, E3102) or `immutable` (E3207), so a program whose message arguments were aliased by something
-  else is refused at compile time, and exit code 96 now means only that a `freeze` or publish walk reached a value
-  held at an interface type whose conformer no walk can be built for.
+- The read-only value rules that made `let` deep are gone, and with them E3078, E3159, E3135, E3137, E3138,
+  E3163 and E3164: binding read-only data to a `var`, to a mutable place or to a keeping parameter compiles,
+  and the write is what is refused. A write through frozen, constant or read-only data is E3197 (E3207 where
+  the data is handed to a parameter the callee writes), a store into a plain field, element or payload is
+  E3196, a `mutable` by-reference argument that is a literal, an expression, a captured name or a module `let`
+  is E2013, and a message or factory value that cannot cross is E3217. A send no longer checks sole ownership
+  at run time: a value that crosses is `isolated` (E3200, E3102) or `immutable` (E3207), so a program whose
+  message arguments were aliased by something else is refused at compile time, and exit code 96 no longer
+  reports a send.
   Fix: expect the replacement code wherever a script or test matches the old one; write `.clone()` where a
   mutable copy of read-only data is wanted, and send `isolated` values or `freeze x.clone()`.
 - The initializer of a module-level `let` or a `static let` calls nothing: a call in it is E3220 (`let shared =
@@ -870,25 +573,13 @@ release's version as its heading when the release is cut.
   value once before `main` no longer runs there.
   Fix: write a literal; or build the value with a function where it is used, and call `.clone()` on a constant
   where a mutable copy is wanted.
-- The OS handle types `TcpClient`, `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`,
-  `StreamingSubprocess` and `SharedSegment`, and every type that holds one, are unique: one name owns a handle.
-  Binding one with `let`, pushing it into a container or handing it to a `spawn` moves it, so reading the name
-  afterwards is E3102, and `clone()` of one is E3214. `SampledProcess.clone`, `SeizedThreads.clone` and
-  `MachinePin.clone` are removed, and `StreamingSubprocess.handle` is private. Aliasing a handle used to stop the
-  program with exit code 96 at a send.
-  Fix: read what you need from a handle before it moves; let one owner hold it and lend it to calls; take it out
-  of a container with `pop`, `remove` or `swap`.
-- A `unique` value handed to an `async` call is lent to the coroutine until its promise is awaited or cancelled:
-  `async serve(server)` followed by a read, `close()` or pass of `server` before the await is E3102, and a
-  `HttpServer` is stopped with `.cancel()` on its serving promise, not by a concurrent `close()`. `serve` on a
-  server already closed returns `closed`.
+- An OS handle (a `TcpClient`, `TcpListener`, `HttpServer`, `StreamingSubprocess` or `SharedSegment`) that a
+  parameter or field holds and an `async` call is handed is lent to the coroutine until its promise is awaited
+  or cancelled: `async serve(server)` followed by a read, `close()` or pass of `server` before the await is
+  E3102, and a `HttpServer` is stopped with `.cancel()` on its serving promise, not by a concurrent `close()`.
+  `serve` on a server already closed returns `closed`.
   Fix: read the value before the `async`, or after the await or cancel; stop a server with `.cancel()` on its
   promise, then call `close()`.
-- A `throw` inside a `modify` block, or in the statement that opens an `isolated` value, is E3202 when its
-  payload holds mutable data of the open region, as `return` is. A `throw` caught by a `try` block opened inside
-  the `modify` stays legal.
-  Fix: copy the value out (for example `.clone()`) before it goes into the payload, or throw only values,
-  `immutable` data or fresh `isolated` data.
 - `StreamingSubprocess.waitWithTimeout` is removed: `wait` takes the deadline, `wait(deadline:
   WaitDeadline.within(ms))`, and with none waits until the child exits. A `WaitDeadlineMs` is at least one.
   Fix: replace `waitWithTimeout(ms)` with `wait(deadline: WaitDeadline.within(ms))`, and `waitWithTimeout(0)`
@@ -915,54 +606,24 @@ release's version as its heading when the release is cut.
   Fix: write `String.from(try conn.readSome(n))` for `try conn.recv(n)`, treat an empty answer as the peer's
   close where `connectionClosed` was caught, and handle `StreamError`; read lines with
   `StreamReader.over(conn)`. Delete `recvFailed` arms.
-- A method of a generic type that widens an instance built over the type's own parameters to an interface (`Gen
-  with T` returned as a `Sink` inside `type Wrap uses T`) takes the widened value's witness table from the layout
-  descriptor its caller passes. When the instance's methods reach the enclosing type again, so that composing the
-  table at a concrete instantiation would build an ever-deeper chain of instances, the widening is E2015.
+- A generic type whose methods reach an instance of itself through another generic, at type arguments that
+  nest its own parameters deeper, is E2015 at the call that reaches it: inside `type Gen uses T`,
+  `Next.create(…)` over `typealias Next = Wrap with (Array with T)`, where `Wrap`'s `asSink` returns a
+  `Gen with T` as a `Sink`. In a program with a share door (`SharedValue.create`, `publish`), a conformer that
+  binds an associated type an interface holds to an instance nesting its own type parameters deeper
+  (`typealias Deeper = Nest with (Nest with T)` inside `type Nest uses T implements A with Deeper`) is E2015,
+  since the conformers the door must judge grow without end.
   Fix: give the type argument a concrete type, or pass the value it wraps as a type parameter of its own.
-- `StreamReader.readLine()` takes no cap and reads a line however long it is: it answers a `LineOrEnd`
-  (`line(text)`, `ended`). A capped read is `readLineWithin(cap)`, which answers a `LineRead` with
-  `pastTheCap`. `DefaultLineCap` is removed.
-  Fix: delete the `pastTheCap` arm from every `match` over a `readLine()` result and write `LineOrEnd` where
-  `LineRead` names its type; replace `readLine(cap: n)` and `readLine(n)` with `readLineWithin(n)`.
-- `as isolated T` is the whole initializer of a `let` or `var`; written inside a call argument it is a syntax
-  error (E2010).
-  Fix: bind the region to a local first (`let fresh = Payload.create(1) as isolated Payload`) and pass the local.
-- A function whose unmarked result mixes frozen data (a module `let`, a `static let`, an `immutable` field, or
-  another mixed function's result it returns) with writable or fresh data hands every caller a read-only result,
-  also when the call's arguments are all values or fresh data. Writing through it is E3197, passing it to a
-  `mutable` parameter is E3207, moving it into an `isolated` slot is E3200, and calling a `mutates captures`
-  function value it hands back is E3211. Until now such a call read as
-  fresh, and a `push` on it compiled and crashed on the image data.
-  Fix: write a copy (`get(false).clone()`) where the caller must write, or declare the result `returns immutable`
-  when every path is frozen.
-- An `isolated` local that an enclosing `for` iterates (`for x in items`, or `for (it, x) in
-  items.withIterator()`) is held by the loop until it ends, so sending it as a service message or `spawn`
-  factory argument inside the loop is E3200, whether or not a `break` follows the send.
-  Fix: send it after the loop, or send a `.clone()`.
-- `let a = r as isolated T` over a local `r` moves the value to `a`, as `let a = r` does, and reading `r`
-  afterwards is E3102 (`use of moved value 'r'`).
-  Fix: read the value through `a` instead of `r`.
 - A share door whose graph holds a value at an interface type is E3171 when a conformer the program converts to
-  that interface reaches a function value, an OS handle or a promise. The doors are `freeze`,
-  `SharedValue.create` and `publish`, a value key's `register` and a value key's `default`. The message names the
-  interface, the conformer and the field, and a note points at the conversion. These programs compiled and stopped
-  with exit code 96 at the share walk; exit code 96 is now a compiler bug. A `freeze` or publish refused for its
-  own graph is E3171 too, where it was E3217, which is now only for a message, a reply or a factory argument.
-  A door is judged for every cause in a program that spawns a service, and for a promise in every program. A
-  promise is judged by conversion as well, so a conformer holding one that the program never converts to the
-  interface leaves the door legal.
+  that interface reaches a function value, an OS handle or a promise. The doors are `SharedValue.create` and
+  `publish`, a value key's `register` and a value key's `default`. The message names the interface, the
+  conformer and the field, and a note points at the conversion. These programs compiled and stopped with exit
+  code 96 at the share walk; exit code 96 reports only a compiler bug. A door is judged for every cause in a program
+  that spawns a service, and for a promise in every program. A promise is judged by conversion as well, so a
+  conformer holding one that the program never converts to the interface leaves the door legal.
   Fix: hold the part that cannot be shared in a service and keep its handle in the shared value, or give that
   conformer a separate interface the shared value does not hold; expect E3171 and its wording where a script or
-  test matched E3217 or exit code 96 at a share door.
-- A program with a share door is E2015 where the generic instances the door must judge grow without end: a generic
-  type that names an instance of itself nesting its own type parameters deeper (`typealias Deeper = Box with (Cell
-  with T)` inside `type Box uses T`), or a conformer that binds an associated type an interface holds to such an
-  instance. One rule decides growth for these, for E3184 and for the widening and layout-descriptor E2015s: a
-  chain grows only when a cycle of instances passes a type argument that properly contains a type parameter, so a
-  generic whose methods reach the enclosing type again at the same or permuted arguments compiles where it was
-  E2015.
-  Fix: give that type argument a concrete type, or pass the value it wraps as a type parameter of its own.
+  test matched exit code 96 at a share door.
 - A tuple `as` cast between tuple types whose element types differ yields a new tuple: a write through the
   source after the cast reaches only the source, and a write through the result reaches only the result,
   where the two shared one record. Each element is checked against its target's range, so an element
@@ -981,10 +642,6 @@ release's version as its heading when the release is cut.
 - A tuple cast between tuples of different numbers of elements is E3009 (`a tuple converts only to a tuple
   with the same number of elements`).
   Fix: build a tuple of the target type from the elements (`(t.0, t.1, extra) as Triple`).
-- A tuple cast that gives an element a different capability, such as `(Box, Wide) as (immutable Box, Wide)`
-  or the reverse, is E3226.
-  Fix: build the tuple from a frozen element (`freeze x.clone()`, or `freeze x` when `x` is not used
-  writable afterwards) for an `immutable` element, and from a `clone()` of the element for an unmarked one.
 - An integer cast to a ranged float alias is checked against the alias's range: a constant outside it is
   E3005 (`5000 as SmallReal` for `float(0.0 to 1000.0)`), and a value computed at run time outside it
   panics.

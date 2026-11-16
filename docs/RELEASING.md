@@ -394,12 +394,21 @@ is neither `## Unreleased` nor `## X.Y.Z — YYYY-MM-DD`, on sections out of new
 `###` heading outside the five above, and on a breaking change with no `Fix:` line; `website.yml`
 fails on drift.
 
-**`## Unreleased` holds the source breaks of the release being prepared: Maxon code that compiled with
-the previous release and does not compile with this one.** The change that causes one adds its entry
-under `## Unreleased` › `### Breaking changes` in the same commit, since it is the one that knows the
-fix. A change to a command, flag, tool output or event stream is not entered there as it lands; it
-updates its `docs/` source, and the release notes describe it at the cut. The section is the first in the file and exists only while it holds
-something. Cutting a release renames it to `## X.Y.Z — YYYY-MM-DD` and adds the other subsections.
+**`## Unreleased` holds the source breaks of the release being prepared: Maxon code that compiled with the
+previous release and does not compile or behaves differently with this one.** The change that causes one adds
+its entry under `## Unreleased` › `### Breaking changes` in the same commit, since it is the one that knows
+the fix. A change to a command, flag, tool output or event stream is not entered there as it lands; it updates
+its `docs/` source, and the release notes describe it at the cut. The section is the first in the file and
+exists only while it holds something. Cutting a release renames it to `## X.Y.Z — YYYY-MM-DD` and adds the
+other subsections.
+
+⛔ **An entry is owed against the latest release only.** A change to something added since that release
+owes none, even when it breaks code written against `main`, and neither does a program the latest release
+already refused when only its diagnostic code or message changes. Successive changes to one surface between
+releases are one bullet stating the end state against the latest release, with one `Fix:`: a change to a
+surface that already has an entry rewrites that entry rather than adding another. An entry is checked by
+compiling the program it says breaks with the latest release's compiler, run from its unpacked archive so
+that it reads the `stdlib/` and `runtime/` it shipped with, and again with the tree's compiler.
 
 ```bash
 scripts/release-notes.sh --commits-since
