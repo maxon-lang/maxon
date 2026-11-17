@@ -7617,10 +7617,6 @@ extension Parser
 	function holdRetainPlan(source ValueId, range SourceRange) returns HoldRetainPlan
 		let tag = self.tagOf(source)
 
-		if tag == ValueTypeTag.typeParameter 'anOpaqueRecord'
-			return HoldRetainPlan.create(RetainTypeParamName, args: argsOf(source))
-		end 'anOpaqueRecord'
-
 		if tagIsByteRecord(tag) 'aByteRecord'
 			return HoldRetainPlan.create(StrRetainName, args: argsOf(source))
 		end 'aByteRecord'
@@ -7629,11 +7625,7 @@ extension Parser
 			return HoldRetainPlan.create(RetainExistentialName, args: twoArgs(self.witnessOfValue(source), second: source))
 		end 'anExistential'
 
-		if self.valueIsAnImageableDeepBox(source) 'aBoxWithPointerSlots'
-			return HoldRetainPlan.create(MmOwnDeepName, args: twoArgs(source, second: self.emitCodeAddress(self.deepBoxCloneCallee(source), range: range)))
-		end 'aBoxWithPointerSlots'
-
-		return HoldRetainPlan.create(self.signatures.retainCalleeOf(tag, nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName, readerFilePath: self.job.path), args: argsOf(source))
+		return self.retainPlanOf(source, sharesImmutableData: false, range: range)
 	end 'holdRetainPlan'
 
 	function holdKindsForWrite() returns HoldKindMap
@@ -7771,14 +7763,14 @@ extension Parser
 		var boundValue = value
 		var boundBareLocal = rhsWasBareLocal
 
-		if (mutable or valueIsMarked(self.bodyState.overwritableSlotReads, value: value) or self.bindsAnUndecidedBorrowedResult(value)) and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
+		if self.borrowedValueOwesAHandoffReference(value) and (mutable or (self.tagOf(value) != ValueTypeTag.typeParameter and (valueIsMarked(self.bodyState.overwritableSlotReads, value: value) or self.bindsAnUndecidedBorrowedResult(value)))) 'promoteBorrowedBinding'
 			boundValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			boundBareLocal = false
 		end 'promoteBorrowedBinding' else if mutable and not rhsWasBareLocal and tagIsByteRecord(self.tagOf(value)) and self.valueIsOwnedHeap(value) and not self.valueIsSoleHeapOwner(value) 'unshareTheBoundRecord'
 			boundValue = self.unsharedByteRecord(value, range: SourceRange.ofToken(nameTok))
 		end 'unshareTheBoundRecord'
 
-		if (not mutable or self.tagOf(value) == ValueTypeTag.typeParameter) and self.bindingHoldsAStorageRead(value, boundValue: boundValue, sourceReadsAField: sourceReadsAField, sourceName: sourceName) 'holdTheStorageRead'
+		if not mutable and self.bindingHoldsAStorageRead(value, boundValue: boundValue, sourceReadsAField: sourceReadsAField, sourceName: sourceName) 'holdTheStorageRead'
 			let named = self.holdBindingRead(value, name: nameTok.value, range: SourceRange.ofToken(nameTok))
 
 			if named != value 'theBindingNamesTheReference'

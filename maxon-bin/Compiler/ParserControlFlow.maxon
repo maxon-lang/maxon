@@ -1731,20 +1731,19 @@ extension Parser
 		let join = self.artifact.module.addBlock(func, label: b"forjoin", heat: BlockHeat.normal)
 		self.reconcileMovesAtTwoEdgeMerge(exit, markA: moveMarkPrefix(self.captureMoveMark(), height: skippedMark.height()), b: empty, markB: skippedMark, anchor: forTok)
 
-		// Collected BEFORE the phis are minted, because minting rebinds each binding to its phi and the exit
-		// edge must carry what the binding held on the way OUT of the loop.
+		// Each exit value is read BEFORE its phi is minted, because minting rebinds the binding to its phi and
+		// the exit edge must carry what the binding held on the way OUT of the loop.
 		let loopVals = ValueIdArray.create(0)
-
-		for k in 0 upto phiVars.count() 'exitEdge'
-			let pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
-			self.pushMergedEdgeValue(loopVals, binding: pv.binding, value: pv.binding.boundValue)
-		end 'exitEdge'
 
 		for k in 0 upto phiVars.count() 'mkJoinPhi'
 			let pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
+			let exitValue = pv.binding.boundValue
+			self.pushEdgeArgs(loopVals, binding: pv.binding, value: exitValue)
 			let joinPhiId = self.mintPhiForBinding(join, binding: pv.binding)
-			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: joinPhiId, def: DebugVersionDef.definedIn(join.id))
+			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: exitValue, value: joinPhiId, def: DebugVersionDef.definedIn(join.id))
 			pv.binding.setBoundValue(joinPhiId, ledger: self.bodyState.moveLedger)
+			self.joinEdgeInto(joinPhiId, incoming: exitValue)
+			self.joinEdgeInto(joinPhiId, incoming: pv.entryValue)
 		end 'mkJoinPhi'
 
 		self.recordBranchEdge(exit, targetId: join.id, argIds: loopVals)
@@ -4458,17 +4457,12 @@ extension Parser
 
 		for pv in phiVars 'each'
 			let carried = pv.entryValue if preLoop else pv.binding.boundValue
-			self.pushMergedEdgeValue(vals, binding: pv.binding, value: carried)
+			self.pushEdgeArgs(vals, binding: pv.binding, value: carried)
 
-			// ⭐⭐ **A LOOP NAMES ITS PHI SEPARATELY FROM THE BINDING, WHICH IS WHY THE IMMUTABLE-GLOBAL-READ MARK IS CARRIED HERE
-			// AS WELL.** On a BACK edge the binding's own value IS what is being pushed, so the carry
-			// `pushMergedEdgeValue` makes is a self-carry and the HEADER phi — the value every later read of the
-			// name sees — inherits nothing. `pv.phiId` is that phi, and it is the loop's own to name.
-			//
-			// ⛔ MEASURED without this line: `var b = ["q"]` + `for _ in 0 upto 2  b = expose()  end` +
-			// `grow(b)` compiled and grew a `let`-declared global (exit 6), while the same rebind under an `if`
-			// was already refused. The `if` half and this one are the same defect at two merge shapes.
-			self.joinCapabilityInto(pv.phiId, incoming: carried)
+			// ⭐⭐ **A LOOP NAMES ITS PHI SEPARATELY FROM THE BINDING, SO THE EDGE JOINS INTO `pv.phiId`.** On a BACK
+			// edge the binding's own value IS what is pushed, so a join into `binding.boundValue` is a self-join
+			// and the HEADER phi — the value every later read of the name sees — inherits no mark and no ownership.
+			self.joinEdgeInto(pv.phiId, incoming: carried)
 		end 'each'
 
 		return vals
@@ -6745,7 +6739,7 @@ extension Parser
 			return false
 		end 'armHoldsNothing'
 
-		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not self.valueNeedsNoHold(give)
+		return self.borrowedValueOwesAHandoffReference(give) and not self.valueNeedsNoHold(give)
 	end 'giveBorrowsIntoDyingRecords'
 
 	// ⭐⭐ **DOES THIS GIVE NAME A VALUE AN IMMUTABLE BINDING GOES ON OWNING PAST THE MERGE?** The three
@@ -9519,7 +9513,7 @@ extension Parser
 		// join between them, which is why nothing smaller than a self-compile finds it.
 		//
 		// ⚠ The bit is read off the incoming the mint can see — `binding.boundValue`, the path parsed last —
-		// and `pushMergedEdgeValue` checks every OTHER incoming against it, because a phi that owns on one edge
+		// and `joinOwnershipInto` checks every OTHER incoming against it, because a phi that owns on one edge
 		// and borrows on another is an ownership question with no answer, not a mark to join. That holds
 		// for resolved incomings only: an unresolved one (`unresolvedMergeValues`) leaves the phi owning
 		// nothing.
@@ -9534,7 +9528,7 @@ extension Parser
 		end 'ownedBinding'
 
 		// ⭐⭐ **THE IMMUTABLE-GLOBAL-READ MARK CROSSES A BINDING MERGE, and this half alone is not enough — see
-		// `pushMergedEdgeValue`.** The value flowing IN here is only ONE of the phi's incomings (the path parsed
+		// `joinEdgeInto`.** The value flowing IN here is only ONE of the phi's incomings (the path parsed
 		// last); the others arrive as edge args, which is why the twin below carries from each of them. Both are
 		// needed and neither is redundant: this one covers a phi whose edges are pushed BEFORE it exists (the
 		// loop join), the other covers a phi minted before its edges are known (the `if` continuation).
@@ -9587,26 +9581,34 @@ extension Parser
 	end 'refuseExistentialValueMerge'
 
 	function pushMergedEdgeValue(args ValueIdArray, binding VarInfo, value ValueId)
+		self.pushEdgeArgs(args, binding: binding, value: value)
+		self.joinEdgeInto(binding.boundValue, incoming: value)
+	end 'pushMergedEdgeValue'
+
+	function pushEdgeArgs(args ValueIdArray, binding VarInfo, value ValueId)
 		args.push(value)
 
 		if bindingCarriesWitness(binding) 'existentialBinding'
 			args.push(self.witnessOfValue(value))
 		end 'existentialBinding'
+	end 'pushEdgeArgs'
 
-		// ⭐⭐ **AN INCOMING EDGE HANDS THE IMMUTABLE-GLOBAL-READ MARK TO THE PHI** — placed here because this is the ONE
-		// routine every merge in the parser pushes every carried binding's incoming value through, which is the
-		// same census argument its header already makes about the witness half. `binding.boundValue` is the
-		// merged name's settled value at each of these call sites (the continuation phi at an `if`/`match`, the
-		// exit phi at a loop), so a marked incoming makes the merged name marked.
-		self.joinCapabilityInto(binding.boundValue, incoming: value)
+	// ⭐⭐ **AN INCOMING EDGE HANDS THE IMMUTABLE-GLOBAL-READ MARK AND ITS OWNERSHIP TO THE PHI** — the ONE
+	// routine every merge joins every carried binding's incoming value into its phi through, so a marked or
+	// disagreeing incoming reaches the phi at every merge shape.
+	function joinEdgeInto(phi ValueId, incoming ValueId)
+		self.joinCapabilityInto(phi, incoming: incoming)
+		self.joinOwnershipInto(phi, incoming: incoming)
+	end 'joinEdgeInto'
 
+	function joinOwnershipInto(phi ValueId, incoming ValueId)
 		// One unresolved incoming (`unresolvedMergeValues`) makes the whole merge unresolved, and an
 		// unresolved merge has no ownership to check below.
-		if self.valueIsDeferred(value) 'anUnresolvedEdge'
-			self.bodyState.unresolvedMergeValues = withValueMarked(self.bodyState.unresolvedMergeValues, value: binding.boundValue)
+		if self.valueIsDeferred(incoming) 'anUnresolvedEdge'
+			self.bodyState.unresolvedMergeValues = withValueMarked(self.bodyState.unresolvedMergeValues, value: phi)
 		end 'anUnresolvedEdge'
 
-		if valueIsMarked(self.bodyState.unresolvedMergeValues, value: binding.boundValue) 'anUnresolvedMerge'
+		if valueIsMarked(self.bodyState.unresolvedMergeValues, value: phi) 'anUnresolvedMerge'
 			return
 		end 'anUnresolvedMerge'
 
@@ -9617,24 +9619,24 @@ extension Parser
 		// (`promoteBorrowedBinding`) — so no path can hand a carried binding a borrowed managed value. A
 		// disagreement therefore means that promotion has a hole, which would leak or double-free with no
 		// diagnostic anywhere; it fails loudly here instead.
-		let phiOwns = self.valueIsOwnedHeap(binding.boundValue)
+		let phiOwns = self.valueIsOwnedHeap(phi)
 
-		if phiOwns != self.valueIsOwnedHeap(value) 'edgeDisagrees'
-			panic("pushMergedEdgeValue: the merged binding's phi v{binding.boundValue} {"owns" if phiOwns else "does not own"} its heap but the incoming edge value v{value} {"does not" if phiOwns else "does"} — a carried binding is a `var` whose managed initializer is promoted to owned at declaration, so every incoming to its phi must agree; one edge minting a reference the merged name does not own is a leak, and the reverse is a double free")
+		if phiOwns != self.valueIsOwnedHeap(incoming) 'edgeDisagrees'
+			panic("pushMergedEdgeValue: the merged binding's phi v{phi} {"owns" if phiOwns else "does not own"} its heap but the incoming edge value v{incoming} {"does not" if phiOwns else "does"} — a carried binding is a `var` whose managed initializer is promoted to owned at declaration, so every incoming to its phi must agree; one edge minting a reference the merged name does not own is a leak, and the reverse is a double free")
 		end 'edgeDisagrees'
 
 		// A phi is the sole owner only if EVERY path made it one — one co-owning edge is enough to make the
 		// merged name share the box, and a stale `sole` there is a destructive-move licence on an allocation
 		// somebody else still holds.
-		if phiOwns and not self.valueIsSoleHeapOwner(value) 'edgeCoOwns'
-			let everyEdgeSolelyOwned = self.valueIsSolelyOwnedHere(binding.boundValue) and self.valueIsSolelyOwnedHere(value)
-			self.markValueCoOwnsHeap(binding.boundValue)
+		if phiOwns and not self.valueIsSoleHeapOwner(incoming) 'edgeCoOwns'
+			let everyEdgeSolelyOwned = self.valueIsSolelyOwnedHere(phi) and self.valueIsSolelyOwnedHere(incoming)
+			self.markValueCoOwnsHeap(phi)
 
 			if everyEdgeSolelyOwned 'stillAHandOffSource'
-				self.markValueFromFreshReturn(binding.boundValue)
+				self.markValueFromFreshReturn(phi)
 			end 'stillAHandOffSource'
 		end 'edgeCoOwns'
-	end 'pushMergedEdgeValue'
+	end 'joinOwnershipInto'
 
 	// ⭐⭐ **DOES THIS CARRIED BINDING CONTRIBUTE A WITNESS TO A MERGE? — THE ONE FACT BOTH HALVES READ.**
 	// Block-args and edge args are POSITIONAL, so the mint

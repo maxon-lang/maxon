@@ -710,6 +710,11 @@ release's version as its heading when the release is cut.
 - On `wasm32-wasi`, `.clone()` and `.shutdown()` on a service's handle (`Echo.handle`), and `.shutdown()` on an
   interface handle, are E3104 at the call.
   Fix: guard the code that clones or shuts down such a handle with `#if not os(Wasi)`.
+- In a generic body, a `var` of type-parameter type owns its value, as a `var` of `String` or of a record does.
+  Binding or assigning it to another name (`var b = a`, `let b = a`, `b = a`) moves it, and reading the old name
+  is E3102 at every instantiation. Binding such a value to another name and reading it through that name
+  gave wrong bytes, a compiler panic or an `__mm_retain` crash with 0.5.0; it compiles and runs correctly.
+  Fix: read the new name, bind from the original value again, or call `.clone()` where both names must stay live.
 
 ## 0.5.0 — 2026-10-08
 

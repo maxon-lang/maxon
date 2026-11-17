@@ -24,7 +24,7 @@
 # the graph walk.
 #
 # ⚠ THE CONTROL IS NOT PURE, AND THE RESIDUAL TERM HAS TO BE NAMED. A gate the walk ADMITS sends
-# `coOwnConcreteRecordForSink` down `emitOwnDeepBoxCopy` where the control takes `emitOwnBoxForSink`, so
+# `coOwnConcreteRecordForSink` down `emitRetainCall`'s deep-box arm (`retainPlanOf`) where the control takes `emitOwnBoxForSink`, so
 # gate−control is the walk PLUS one per-site emission difference. That term is O(1) per site and flat in
 # `fields`, exactly like the walk's own per-ask overhead — so FLATNESS IN `fields` DOES NOT ATTRIBUTE A
 # RESIDUAL TO EITHER. What it is safe to read off is a BEFORE/AFTER of gate−control across two compilers:

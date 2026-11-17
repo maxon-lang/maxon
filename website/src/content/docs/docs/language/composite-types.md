@@ -704,6 +704,11 @@ A generic body is checked against the bound of `T` only, so it never reassigns a
 marked `mutable` or not (**E2013**, `'item' is a generic parameter and cannot be reassigned; return the new
 value`); see [Parameter Passing](/docs/language/functions/#parameter-passing).
 
+A `var` of type `T` in a generic body owns its value and moves like any owned value of a concrete type
+(see [Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)): `var b = a`, `let b = a` and `b = a` out of an owned `var a` move
+it, and reading `a` afterwards is **E3102** at every instantiation. Read the new name,
+bind from the original value again, or `clone()` where both names must stay live.
+
 ### Associated Types
 
 An interface can declare associated types with `uses`; a conforming type binds them with `with`:

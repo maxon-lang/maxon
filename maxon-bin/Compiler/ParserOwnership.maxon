@@ -9627,15 +9627,6 @@ extension Parser
 			return self.emitRetainExistentialCall(source, range: range)
 		end 'existential'
 
-		// ⭐⭐ **A BOX WHOSE SLOTS ADDRESS OTHER RECORDS IS THE THIRD REPRESENTATION WITH AN IMMORTAL MEMBER**,
-		// and it earns an arm HERE rather than in `retainCalleeOf` for one reason: its entry takes the
-		// box's own cloner as a SECOND argument, which a callee selector cannot express. The buffer record's
-		// fork is `__managed_retain`'s, off `capacity@16`; this one is `__mm_own_deep`'s, off the allocation
-		// header, because a declared generic's `@16` — and a struct's — is an author-declared field.
-		if self.valueIsAnImageableDeepBox(source) and not self.valueIsImmutableData(source) 'aBoxWithPointerSlots'
-			return self.emitOwnDeepBoxCopy(source, range: range)
-		end 'aBoxWithPointerSlots'
-
 		if self.valueIsImmortalFunction(source) 'anImmortalRecord'
 			let copy = self.emitRetaggedCastValue(source, targetType: self.typeOf(source), range: range)
 			self.markImmortalFunction(copy)
@@ -9647,7 +9638,8 @@ extension Parser
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(source)
 		let opFloor = self.artifact.module.ops.count()
-		let retained = self.emitRuntimeCall(self.retainCalleeForValue(source), args: argsOf(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let plan = self.retainPlanForValue(source, range: range)
+		let retained = self.emitRuntimeCall(plan.callee, args: plan.args, resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 		self.noteRetainOfAParameter(source, retained: retained, opFloor: opFloor)
 		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		self.carryFrozenCapability(source, target: retained)
@@ -9677,13 +9669,40 @@ extension Parser
 		end 'eachSourceParameter'
 	end 'noteRetainOfAParameter'
 
-	function retainCalleeForValue(source ValueId) returns immutable ByteArray
-		if self.valueIsAnArray(source) and self.valueIsImmutableData(source) 'immutableArrayIsNeverCopied'
-			return MmRetainName
+	function retainPlanForValue(source ValueId, range SourceRange) returns HoldRetainPlan
+		if self.tagOf(source) == ValueTypeTag.typeParameter 'anOpaqueValue'
+			panic("retainPlanForValue: v{source} is an opaque type-parameter value — its retain is retainBorrowedOpaque's or coOwnBorrowedOpaque's, never emitRetainCall's")
+		end 'anOpaqueValue'
+
+		return self.retainPlanOf(source, sharesImmutableData: true, range: range)
+	end 'retainPlanForValue'
+
+	function retainPlanOf(source ValueId, sharesImmutableData bool, range SourceRange) returns HoldRetainPlan
+		let sharedAsImmutable = sharesImmutableData and self.valueIsImmutableData(source)
+
+		// ⭐⭐ **A BOX WHOSE SLOTS ADDRESS OTHER RECORDS IS THE THIRD REPRESENTATION WITH AN IMMORTAL MEMBER**,
+		// and it earns an arm HERE rather than in `retainCalleeOf` for one reason: its entry takes the
+		// box's own cloner as a SECOND argument, which a callee selector cannot express. The buffer record's
+		// fork is `__managed_retain`'s, off `capacity@16`; this one is `__mm_own_deep`'s, off the allocation
+		// header, because a declared generic's `@16` — and a struct's — is an author-declared field.
+		if self.valueIsAnImageableDeepBox(source) and not sharedAsImmutable 'aBoxWithPointerSlots'
+			return HoldRetainPlan.create(MmOwnDeepName, args: twoArgs(source, second: self.emitCodeAddress(self.deepBoxCloneCallee(source), range: range)))
+		end 'aBoxWithPointerSlots'
+
+		if sharedAsImmutable and self.valueIsAnArray(source) 'immutableArrayIsNeverCopied'
+			return HoldRetainPlan.create(MmRetainName, args: argsOf(source))
 		end 'immutableArrayIsNeverCopied'
 
+		return HoldRetainPlan.create(self.sharedRetainCallee(source), args: argsOf(source))
+	end 'retainPlanOf'
+
+	function sharedRetainCallee(source ValueId) returns immutable ByteArray
+		if self.tagOf(source) == ValueTypeTag.typeParameter 'anOpaqueValue'
+			return RetainTypeParamName
+		end 'anOpaqueValue'
+
 		return self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName, readerFilePath: self.job.path)
-	end 'retainCalleeForValue'
+	end 'sharedRetainCallee'
 
 	// ⭐ **THE ONE `__retain_existential` CALL**, so its argument ORDER — the witness first, matching
 	// `__drop_existential` — is spelled once. BOTH callers want the same half of it, the returned id: the
@@ -9797,7 +9816,7 @@ extension Parser
 		// blit, the sink would hold the `let`'s own columns, and the first write through them would hit a
 		// read-only page (a silent write on wasm).
 		if self.valueIsAnImageableDeepBox(value) 'aBoxWithPointerSlots'
-			return self.emitOwnDeepBoxCopy(value, range: range)
+			return self.emitRetainCall(value, range: range)
 		end 'aBoxWithPointerSlots'
 
 		if self.valueIsAHeapRecord(value) 'plainStructBox'
@@ -9894,28 +9913,8 @@ extension Parser
 		return owned
 	end 'emitOwnBoxForSink'
 
-	// ⭐⭐ **THE RETURNING `__mm_own_deep` A BOX WITH POINTER SLOTS OWES — `emitOwnBoxForSink`'s twin over the
-	// shape whose SLOTS address other records.** The two differ in the one thing that matters: this one's
-	// copy arm is the box's own `__clone_<…>`, stamped as the second argument, where that door's is a byte
-	// blit. `MmRuntime.buildMmOwnDeep` carries why a blit cannot serve one.
-	//
-	// ⚠ **ONLY AN IMMORTAL BOX IS COPIED, WHICH IS WHAT KEEPS THE ALIASING `emitOwnBoxForSink`'S HEADER
-	// RESERVES.** An ordinary heap box goes through the counted arm, so `var q = m` still shows
-	// `q.upsert(…)` through to `m`; an image record has no aliasing to preserve, because nothing can write
-	// it. It is `__managed_retain`'s bargain one representation over.
-	//
-	// The result is a distinct ValueId either way, which the caller needs for `emitRetainCall`'s reason.
-	function emitOwnDeepBoxCopy(value ValueId, range SourceRange) returns ValueId
-		self.markValueCoOwnsHeap(value)
-		let cloner = self.emitCodeAddress(self.deepBoxCloneCallee(value), range: range)
-		let copy = self.emitRuntimeCall(MmOwnDeepName, args: twoArgs(value, second: cloner), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
-		self.carryFromSharedRecord(copy, from: value, source: self.bodyState, path: ValueCarryPath.copy)
-		return copy
-	end 'emitOwnDeepBoxCopy'
-
-	// The `(box) -> newBox` the door above stamps: a declared generic's container clones through its
-	// INSTANCE's cloner, a struct through its TYPE's. The value's own tag says which, and it is the tag
-	// `valueIsAnImageableDeepBox` forked on to admit it.
+	// Must fork on the tag `valueIsAnImageableDeepBox` admitted the box by: an instance's cloner and a
+	// struct's are different functions, and the wrong one copies the wrong layout.
 	function deepBoxCloneCallee(value ValueId) returns immutable ByteArray
 		if self.tagOf(value) == ValueTypeTag.genericInstance 'aDeclaredContainersBox'
 			return self.signatures.genericInstanceBoxCloneCallee(self.valueInstanceId(value))
@@ -9981,7 +9980,19 @@ extension Parser
 			return value
 		end 'ownedTemporaryIsAdopted'
 
-		return self.retainBorrowedByteRecord(value, range: range) if tagIsByteRecord(self.tagOf(value)) else self.retainBorrowedAggregate(value, range: range)
+		if tagIsByteRecord(self.tagOf(value)) 'aByteRecord'
+			return self.retainBorrowedByteRecord(value, range: range)
+		end 'aByteRecord'
+
+		if self.tagOf(value) == ValueTypeTag.typeParameter 'anOpaqueValue'
+			return self.retainBorrowedOpaque(value, range: range)
+		end 'anOpaqueValue'
+
+		if self.valueMayNameARecord(value) 'aRecordTheRetainTableAnswers'
+			return self.retainBorrowedAggregate(value, range: range)
+		end 'aRecordTheRetainTableAnswers'
+
+		panic("coOwnImmutableRebindSource: v{value} is an owned {self.tagOf(value)} the retain table has no entry for — only a byte record, a managed record or an opaque type parameter can take a second reference")
 	end 'coOwnImmutableRebindSource'
 
 	function coOwnAggregateAsTemp(source ValueId, range SourceRange) returns ValueId
@@ -10280,7 +10291,7 @@ extension Parser
 	// it is promoted — a String COPIES into a fresh owned record (value semantics), a struct/union INCREFS the
 	// shared box (reference semantics: an aggregate has no cheap owning copy and its alias is observable
 	// through a field write). The caller has already established that `value` is a BORROWED managed heap value
-	// (`valueIsManagedHeap and not valueIsOwnedHeap`), so the two arms are exhaustive and a scalar — which owns
+	// (`borrowedValueOwesAHandoffReference`), so the two arms are exhaustive and a scalar — which owns
 	// no heap and never reaches an owned binding — is a parser invariant break, not an unhandled case.
 	//
 	// ⭐⭐ **THREE DOORS, NOT TWO.** A DECLARATION (`var q = p`), a REASSIGNMENT (`q = p2`), and a HAND-OFF —
@@ -10321,18 +10332,16 @@ extension Parser
 
 	// ⭐ **WHICH VALUES THE DOOR ABOVE HAS AN ANSWER FOR** — the entry condition of a hand-off that must leave
 	// its new owner with a reference of its own. Written once because a door whose condition is NARROWER than
-	// the door's answer set silently declines a shape its sibling promotes: spelled `valueIsManagedHeap`, the
-	// merge-edge door dropped a generic body's borrowed opaque `T` into `promoteBorrowedGive`'s
-	// unreachable-case panic while the `if`/`return` spelling of the same function compiled.
+	// the door's answer set silently declines a shape its sibling promotes.
 	//
 	// It gates every such door: a `return` (`emitOwnedValueReturn`), a `match`/ternary arm's give
 	// (`promoteBorrowedGive`), a `try … otherwise` fallback (`finishValueTry`) and a rebind of a
-	// binding in the owned set, so narrowing it narrows all four.
+	// binding in the owned set, so narrowing it narrows every one.
 	//
 	// A scalar owns no heap and owes nothing, and neither does a deferred call result. An
 	// already-owned value has already discharged the hand-off.
 	function borrowedValueOwesAHandoffReference(value ValueId) returns bool
-		return (self.valueIsManagedHeap(value) or self.tagOf(value) == ValueTypeTag.typeParameter) and not self.valueIsOwnedHeap(value)
+		return self.valueMayNameARecord(value) and not self.valueIsOwnedHeap(value)
 	end 'borrowedValueOwesAHandoffReference'
 
 	// The protocol choice `promoteBorrowedToOwned` is written around — RETAIN a String at a hand-off and COPY
@@ -10347,16 +10356,19 @@ extension Parser
 		// byte record, `__mm_retain` for a managed aggregate and 0 — a no-op — for an instantiation that owns
 		// nothing.
 		//
-		// ⭐ **IT IS ASKED AT THE SHARED DOOR BECAUSE THREE DOORS OWE THIS REFERENCE, NOT TWO.** A RETURN out
-		// of the body, a STORE into a durable slot (`moveOpaqueValueInto`, which reaches `coOwnBorrowedOpaque`
-		// on its own consume path) and a MERGE EDGE — a `match`/ternary arm's borrowed give, and a
-		// `try … otherwise` fallback — each hand a borrowed `T` to an owner that will release it. The merge
-		// edge is a door that needs wiring of its own: `return front if c else back` over an `Array with Element`'s
-		// borrowed `first()` and owned `last()` PANICKED the parser in `promoteBorrowedGive`, while the same
-		// program written as an `if`/`return` pair compiled and ran, because only the return road asked.
+		// ⭐ **IT IS ASKED AT THE SHARED DOOR BECAUSE EVERY DOOR THAT HANDS A BORROWED `T` TO AN OWNER OWES THIS
+		// REFERENCE.** A RETURN, a BINDING, a MERGE EDGE (a `match`/ternary arm's give, a `try … otherwise`
+		// fallback) and a STORE (`moveOpaqueValueInto`, on its own consume path) each do.
+		//
+		// ⚠ Only the RETURN keeps the result unmarked, for the caller adopts it; marking it here would drop it twice.
 		if self.tagOf(value) == ValueTypeTag.typeParameter 'opaqueElement'
 			try self.requireCapturedOpaqueHoldsNoGreenThread(value, range: range)
-			return self.coOwnBorrowedOpaque(value, range: range)
+
+			if door == BorrowLaunderDoor.returned 'theCallerAdoptsItsReference'
+				return self.coOwnBorrowedOpaque(value, range: range)
+			end 'theCallerAdoptsItsReference'
+
+			return self.retainBorrowedOpaque(value, range: range)
 		end 'opaqueElement'
 
 		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'

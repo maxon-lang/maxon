@@ -1864,7 +1864,7 @@ extension Parser
 	// byte-record argument, `__mm_retain` for an aggregate, and nothing at all for a trivial one, whose word is
 	// 0. `lowerRuntimeCall` prepends the descriptor, exactly as it does for the drop twin.
 	//
-	// **TWO DOORS OWE THIS REFERENCE, AND THEY OWE THE SAME ONE.** A STORE into a durable slot
+	// **THE STORE AND RETURN DOORS OWE THIS REFERENCE, AND THEY OWE THE SAME ONE.** A STORE into a durable slot
 	// (`moveOpaqueValueInto`) and a RETURN out of the body (`emitOwnedValueReturn`) each
 	// hand a borrowed `T` to an owner that will release it, and neither can name the protocol. Written twice
 	// they would be two answers to one question about a reference count — a leak on one side and a double free
@@ -1873,7 +1873,7 @@ extension Parser
 	// ⚠ **THE RESULT IS WHAT THE CALLER USES AND NEVER `value`** — the byte-record arm hands back a DIFFERENT
 	// record, which is the identical trap `coOwnBorrowedForConsume`'s existential arm measured as an access
 	// violation plus a leaked clone. This frame marks the result neither owned nor pending, and that is right
-	// for both doors: the new owner is a SLOT in another record whose destructor releases exactly this
+	// for those two doors: the new owner is a SLOT in another record whose destructor releases exactly this
 	// reference, or the CALLER, which adopts it (`enrolOwnedCallTemp`).
 	//
 	// ⚠ It records a missing descriptor rather than emitting a call the lowering can only abort on — the
@@ -1883,11 +1883,17 @@ extension Parser
 		// managed instantiation, and inert for a trivial one — so a second owner either exists or there is
 		// nothing to own, and neither case licenses a destructive write through `value`.
 		self.markValueCoOwnsHeap(value)
-		let retained = self.emitRuntimeCall(RetainTypeParamName, args: argsOf(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let retained = self.emitRuntimeCall(self.sharedRetainCallee(value), args: argsOf(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryFromSharedRecord(retained, from: value, source: self.bodyState, path: ValueCarryPath.copy)
 		self.noteFeedStored(value, range: range)
 		return retained
 	end 'coOwnBorrowedOpaque'
+
+	function retainBorrowedOpaque(value ValueId, range SourceRange) returns ValueId
+		let retained = self.coOwnBorrowedOpaque(value, range: range)
+		self.markValueOwnsHeap(retained, exclusivity: OwnedHeapExclusivity.coOwned)
+		return retained
+	end 'retainBorrowedOpaque'
 
 	// ⭐ **STORE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element
@@ -5900,7 +5906,7 @@ extension Parser
 		// STRUCT NAME and INDEX never lets a type cross an interner boundary at all, so there is no id to get
 		// wrong, and the guard and the cascade read one column. `typeIsManaged` demands its interner by
 		// name (`from:`) so the two-step cannot be rebuilt by accident.
-		let borrowsManagedHeap = self.signatures.genericInstanceFieldIsManaged(self.valueInstanceId(base.box), index: index) if self.tagOf(base.box) == ValueTypeTag.genericInstance else self.signatures.structFieldIsManaged(base.layout.name, index: index)
+		let borrowsManagedHeap = (self.signatures.genericInstanceFieldIsManaged(self.valueInstanceId(base.box), index: index) or self.signatures.genericInstanceFieldIsOpaque(self.valueInstanceId(base.box), index: index)) if self.tagOf(base.box) == ValueTypeTag.genericInstance else (self.signatures.structFieldIsManaged(base.layout.name, index: index) or self.signatures.structFieldIsOpaque(base.layout.name, index: index))
 
 		if not borrowsManagedHeap 'scalarFieldIsCopiedNotBorrowed'
 			return false

@@ -2589,57 +2589,153 @@ Deciding what a record literal's field holds costs one visit per local, however 
 type Cell uses T
 	export var v as T
 
-	static function chain(v T) returns Self
+	static function chain(v T, flag bool) returns Self
 		var a0 = v
 		a0 = v
-		var a1 = a0
-		a1 = a0
-		var a2 = a1
-		a2 = a1
-		var a3 = a2
-		a3 = a2
-		var a4 = a3
-		a4 = a3
-		var a5 = a4
-		a5 = a4
-		var a6 = a5
-		a6 = a5
-		var a7 = a6
-		a7 = a6
-		var a8 = a7
-		a8 = a7
-		var a9 = a8
-		a9 = a8
-		var a10 = a9
-		a10 = a9
-		var a11 = a10
-		a11 = a10
-		var a12 = a11
-		a12 = a11
-		var a13 = a12
-		a13 = a12
-		var a14 = a13
-		a14 = a13
-		var a15 = a14
-		a15 = a14
-		var a16 = a15
-		a16 = a15
-		var a17 = a16
-		a17 = a16
-		var a18 = a17
-		a18 = a17
-		var a19 = a18
-		a19 = a18
-		var a20 = a19
-		a20 = a19
-		var a21 = a20
-		a21 = a20
-		var a22 = a21
-		a22 = a21
-		var a23 = a22
-		a23 = a22
-		var a24 = a23
-		a24 = a23
+		var a1 = v
+		if flag 'x1'
+			a1 = a0
+		end 'x1' else 'y1'
+			a1 = a0
+		end 'y1'
+		var a2 = v
+		if flag 'x2'
+			a2 = a1
+		end 'x2' else 'y2'
+			a2 = a1
+		end 'y2'
+		var a3 = v
+		if flag 'x3'
+			a3 = a2
+		end 'x3' else 'y3'
+			a3 = a2
+		end 'y3'
+		var a4 = v
+		if flag 'x4'
+			a4 = a3
+		end 'x4' else 'y4'
+			a4 = a3
+		end 'y4'
+		var a5 = v
+		if flag 'x5'
+			a5 = a4
+		end 'x5' else 'y5'
+			a5 = a4
+		end 'y5'
+		var a6 = v
+		if flag 'x6'
+			a6 = a5
+		end 'x6' else 'y6'
+			a6 = a5
+		end 'y6'
+		var a7 = v
+		if flag 'x7'
+			a7 = a6
+		end 'x7' else 'y7'
+			a7 = a6
+		end 'y7'
+		var a8 = v
+		if flag 'x8'
+			a8 = a7
+		end 'x8' else 'y8'
+			a8 = a7
+		end 'y8'
+		var a9 = v
+		if flag 'x9'
+			a9 = a8
+		end 'x9' else 'y9'
+			a9 = a8
+		end 'y9'
+		var a10 = v
+		if flag 'x10'
+			a10 = a9
+		end 'x10' else 'y10'
+			a10 = a9
+		end 'y10'
+		var a11 = v
+		if flag 'x11'
+			a11 = a10
+		end 'x11' else 'y11'
+			a11 = a10
+		end 'y11'
+		var a12 = v
+		if flag 'x12'
+			a12 = a11
+		end 'x12' else 'y12'
+			a12 = a11
+		end 'y12'
+		var a13 = v
+		if flag 'x13'
+			a13 = a12
+		end 'x13' else 'y13'
+			a13 = a12
+		end 'y13'
+		var a14 = v
+		if flag 'x14'
+			a14 = a13
+		end 'x14' else 'y14'
+			a14 = a13
+		end 'y14'
+		var a15 = v
+		if flag 'x15'
+			a15 = a14
+		end 'x15' else 'y15'
+			a15 = a14
+		end 'y15'
+		var a16 = v
+		if flag 'x16'
+			a16 = a15
+		end 'x16' else 'y16'
+			a16 = a15
+		end 'y16'
+		var a17 = v
+		if flag 'x17'
+			a17 = a16
+		end 'x17' else 'y17'
+			a17 = a16
+		end 'y17'
+		var a18 = v
+		if flag 'x18'
+			a18 = a17
+		end 'x18' else 'y18'
+			a18 = a17
+		end 'y18'
+		var a19 = v
+		if flag 'x19'
+			a19 = a18
+		end 'x19' else 'y19'
+			a19 = a18
+		end 'y19'
+		var a20 = v
+		if flag 'x20'
+			a20 = a19
+		end 'x20' else 'y20'
+			a20 = a19
+		end 'y20'
+		var a21 = v
+		if flag 'x21'
+			a21 = a20
+		end 'x21' else 'y21'
+			a21 = a20
+		end 'y21'
+		var a22 = v
+		if flag 'x22'
+			a22 = a21
+		end 'x22' else 'y22'
+			a22 = a21
+		end 'y22'
+		var a23 = v
+		if flag 'x23'
+			a23 = a22
+		end 'x23' else 'y23'
+			a23 = a22
+		end 'y23'
+		var a24 = v
+		if flag 'x24'
+			a24 = a23
+		end 'x24' else 'y24'
+			a24 = a23
+		end 'y24'
 		return Self{v: a24}
 	end 'chain'
 end 'Cell'
@@ -2647,7 +2743,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function main() returns ExitCode
-	let c = StrCell.chain("payload")
+	let c = StrCell.chain("payload", flag: true)
 	print("{c.v}\n")
 	return 0
 end 'main'
