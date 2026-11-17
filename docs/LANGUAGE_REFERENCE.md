@@ -7184,14 +7184,25 @@ interface-typed field holds is judged at the `freeze` that shares it, in a progr
 `T is isolated` takes the same values and handles, or a `unique` type.
 
 Every instantiation is checked against the bound, and so is every instance it holds in a field, a container or
-a tuple. An argument written inside a generic type is judged there with the type's own parameters unknown: one
-refused for every parameter (a function type) is reported there, once, and one whose verdict depends on the
-parameter (a bare `T`) is judged at each instantiation that fixes it. A `spawn` that infers a generic service's
-argument is reported at the factory the `spawn` calls. A generic service's factory parameter or reply declared as the bare
-`sendable`-bounded parameter is judged by the bound alone; a type built over it (`Array with T`) crosses as any
-other type does (**E3217**). A refusal is **E3215** (``'Job' is not sendable, so it cannot be 'T' of 'Pool',
+a tuple. An argument written inside a generic type `Outer` that is or mentions a parameter of `Outer` is judged
+there, from `Outer`'s own `where` clause alone, once, however many instantiations `Outer` has (none included):
+a bare `T` meets `sendable` only when `Outer` declares `where T is sendable`, and meets `isolated` only when it
+declares `where T is isolated`; neither proves the other, so a type that fills both kinds of position declares
+both (`where T is sendable and isolated`). An `immutable` argument that mentions a parameter (through an alias,
+a tuple, an instance argument, a phantom one included, or a function type) meets `sendable` when every
+parameter it mentions is bounded `sendable` in `Outer`; the refusal names the first unbounded one by owner and
+position. A bare aggregate over a parameter is refused, and so is a function type, an interface type and a
+promise, whatever the parameter is. Under `isolated`, an aggregate over a parameter is met only when it is
+`unique` whatever the parameter is. `Outer with X` is judged against `Outer`'s own bounds, and an
+instantiation of a bounded `Outer` leaves an inner type's bound to where `Outer` writes it. An interface's
+associated type carries no bound; in an `extension` it is the conformer's binding, judged for each conformer.
+A generic function called with the caller's type parameter as its argument is refused at the call (**E3181**).
+A `spawn` that infers a generic service's argument is reported at the factory the `spawn` calls. A generic
+service's factory parameter or reply declared as the bare `sendable`-bounded parameter is judged by the bound
+alone; a type built over it (`Array with T`) crosses as any other type does (**E3217**). A refusal is **E3215** (``'Job' is not sendable, so it cannot be 'T' of 'Pool',
 which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value
-or a service handle``). A function's or an extension's `where` clause cannot spell either bound (**E3215**).
+or a service handle``; ``'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares
+`where T is sendable`: declare `where T is sendable` on 'Outer'``). A function's or an extension's `where` clause cannot spell either bound (**E3215**).
 A generic type accepts an `isolated` type argument only when it declares `where T is isolated`
 (`Wrapper with isolated Box` over an unbounded `Wrapper` is a parse error). `specs/regions-bounds.md` pins
 these.

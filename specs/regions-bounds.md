@@ -241,8 +241,8 @@ end 'main'
 error E3215: <fragment>:2:44: a function's `where` clause cannot bound a type parameter with `sendable` or `isolated`: those bounds belong to a generic type's own `where` clause, where every instantiation is checked against them
 ```
 
-<!-- test: a-sendable-bound-reaches-an-instance-made-through-a-type-parameter -->
-`Outer uses T` holds `Pool with T`; `JobOuter` fills `T` with a plain record, so the `Pool with Job` it makes breaks the `sendable` bound even though no typealias spells it.
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound -->
+`Outer uses T` holds `Pool with T` and declares no bound on `T`, so the instance is refused once, where `Outer` writes it; `JobOuter` fills `T` with a plain record and adds no report.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -282,7 +282,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:30:11: 'Job' is not sendable, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value or a service handle
+error E3215: <fragment>:21:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
 <!-- test: a-generic-function-where-clause-with-a-bound-is-refused-at-its-template -->

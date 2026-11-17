@@ -1284,7 +1284,7 @@ capability word only where a value must change owners or be shared without a wri
   elements are `immutable` slots: a key built at run time is `freeze`d where it is inserted.
 - `merge x` turns an `isolated` value back into ordinary mutable data (`return merge box`).
 - `type T is unique` for a value that must never be copied or aliased; `let b = a` moves it.
-- `where T is sendable` or `where T is isolated` on a generic **type** bounds its argument.
+- `where T is sendable` or `where T is isolated` on a generic **type** bounds its argument; a parameter of an enclosing generic type meets the bound only when that type declares the same bound on it.
 - On an interface requirement or function type, write `mutable self`, `mutable T` or `mutates captures`
   where the callee writes; unmarked ones are read-only and never wait or yield. This holds in every program,
   whether or not it spells a region word. A function value that hands back its read-only parameter returns

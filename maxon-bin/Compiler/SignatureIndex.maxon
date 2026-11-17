@@ -4146,6 +4146,16 @@ export type TypeParamOwner
 		return self.declaringTypeName.equals(other.declaringTypeName) and self.paramName.equals(other.paramName)
 	end 'namesTheSameParameterAs'
 
+	function precedesInMentionOrder(other TypeParamOwner) returns bool
+		let byOwner = compareBytesOrdinally(self.declaringTypeName, right: other.declaringTypeName)
+
+		if byOwner != Ordering.equalTo 'ownersDiffer'
+			return byOwner == Ordering.lessThan
+		end 'ownersDiffer'
+
+		return self.position < other.position
+	end 'precedesInMentionOrder'
+
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.declaringTypeName)
@@ -7037,24 +7047,163 @@ end 'UnsendableStanding'
 export union SendableRefusal
 	standing(why UnsendableStanding)
 	graph(noun String)
+	builtOver(why UnprovenParameter)
 end 'SendableRefusal'
 
+union ParameterMention
+	none
+	allBounded
+	unproven(why UnprovenParameter)
+end 'ParameterMention'
+
+function dischargedMention(discharge OpaqueRegionDischarge) returns ParameterMention
+	return match discharge 'discharge'
+		bounded gives ParameterMention.allBounded
+		unproven(why) gives ParameterMention.unproven(why)
+	end 'discharge'
+end 'dischargedMention'
+
+function combinedParameterMention(found ParameterMention, next ParameterMention) returns ParameterMention
+	return match next 'next'
+		none gives found
+		allBounded gives atLeastAllBounded(found)
+		unproven(why) gives ParameterMention.unproven(firstDeclaredUnproven(why, against: found))
+	end 'next'
+end 'combinedParameterMention'
+
+function atLeastAllBounded(found ParameterMention) returns ParameterMention
+	return match found 'found'
+		none gives ParameterMention.allBounded
+
+		allBounded or
+		unproven gives found
+	end 'found'
+end 'atLeastAllBounded'
+
+function firstDeclaredUnproven(why UnprovenParameter, against ParameterMention) returns UnprovenParameter
+	return match against 'against'
+		none or
+		allBounded gives why
+
+		unproven(other) gives why if unprovenOwnerOf(why).precedesInMentionOrder(unprovenOwnerOf(other)) else other
+	end 'against'
+end 'firstDeclaredUnproven'
+
+union MentionNode
+	instance(gid GenericInstanceId)
+	tuple(name immutable ByteArray, fields immutable MaxonTypeArray)
+	functionAlias(name immutable ByteArray)
+end 'MentionNode'
+
+union MentionState
+	open(position Count)
+	settled(mention ParameterMention)
+end 'MentionState'
+
+typealias MentionNodeArray = Array with MentionNode
+typealias InstanceMentionStates = Map with (GenericInstanceId, MentionState)
+typealias NamedMentionStates = Map with (ByteArray, MentionState)
+
+export type SendableBoundMemo
+	let shareSettled as ClonerSet
+	let mentions as ParameterMentionWalk
+
+	static function create() returns Self
+		return Self{shareSettled: ClonerSet.create(), mentions: ParameterMentionWalk.create()}
+	end 'create'
+end 'SendableBoundMemo'
+
+type ParameterMentionWalk
+	let instances as InstanceMentionStates
+	let tuples as NamedMentionStates
+	let functions as NamedMentionStates
+	let nodes as MentionNodeArray
+	var low = 0 as Count
+
+	static function create() returns Self
+		return Self{instances: InstanceMentionStates.create(), tuples: NamedMentionStates.create(), functions: NamedMentionStates.create(), nodes: MentionNodeArray.create(0)}
+	end 'create'
+
+	function stateOf(node MentionNode) returns MentionState throws MapError
+		return match node 'node'
+			instance(gid) gives try self.instances.get(gid)
+			tuple(name, _) gives try self.tuples.get(name)
+			functionAlias(name) gives try self.functions.get(name)
+		end 'node'
+	end 'stateOf'
+
+	function record(node MentionNode, state MentionState)
+		match node 'node'
+			instance(gid) then self.instances.upsert(gid, value: state)
+			tuple(name, _) then self.tuples.upsert(name, value: state)
+			functionAlias(name) then self.functions.upsert(name, value: state)
+		end 'node'
+	end 'record'
+
+	function revisited(state MentionState) returns ParameterMention
+		match state 'state'
+			open(position) then self.lowerTo(position)
+			settled(mention) then return mention
+		end 'state'
+
+		return ParameterMention.none
+	end 'revisited'
+
+	function lowerTo(position Count)
+		if position < self.low 'lower'
+			self.low = position
+		end 'lower'
+	end 'lowerTo'
+
+	function entered(node MentionNode) returns Count
+		let position = self.nodes.count()
+		self.nodes.push(node)
+		self.record(node, state: MentionState.open(position))
+		self.low = position
+		return position
+	end 'entered'
+
+	function left(position Count, outerLow Count, mention ParameterMention)
+		if self.low != position 'insideAComponent'
+			self.lowerTo(outerLow)
+			return
+		end 'insideAComponent'
+
+		while self.nodes.count() > position 'eachMember'
+			let member = try self.nodes.pop() otherwise break
+			self.record(member, state: MentionState.settled(mention))
+		end 'eachMember'
+
+		self.low = outerLow
+	end 'left'
+end 'ParameterMentionWalk'
+
+export union UnprovenParameter
+	undeclaredOnItsOwner(owner TypeParamOwner)
+	unprovableByItsOwner(owner TypeParamOwner)
+end 'UnprovenParameter'
+
+export union OpaqueRegionDischarge
+	bounded
+	unproven(why UnprovenParameter)
+end 'OpaqueRegionDischarge'
+
 export union SendableBoundAnswer
-	openArgument
+	typeParameter(discharge OpaqueRegionDischarge)
 	undeclared
 	refused(why SendableRefusal)
-	admitted(shareWalk TransferWalk, retainCallee OwnershipCallee)
+	admitted
 end 'SendableBoundAnswer'
 
-export enum IsolatedBoundAnswer
-	openArgument
+export union IsolatedBoundAnswer
+	typeParameter(discharge OpaqueRegionDischarge)
 	undeclared
 	admitted
 	refused
 end 'IsolatedBoundAnswer'
 
 union BoundArgumentStanding
-	openArgument
+	typeParameter(token TypeParamId)
 	undeclared
 	valueOrHandle(subject MaxonType)
 	notAValue(kind NotAValueKind)
@@ -7121,10 +7270,38 @@ end 'byteRecordTransferWalk'
 
 function unwalkableTransfer(display String, kind TransferKind, blocker TransferBlocker) returns TransferWalk
 	return match blocker 'blocker'
-		onlyFunctionValues gives TransferWalk.refused("a `{display}` whose graph reaches {FunctionValueCrossingNoun}")
-		cause(unwalkable) gives TransferWalk.refused("a `{display}` whose graph reaches {unwalkableCauseNoun(unwalkable, kind: kind)}")
+		onlyFunctionValues gives TransferWalk.refused(graphReachNoun(display, reached: FunctionValueCrossingNoun))
+		cause(unwalkable) gives TransferWalk.refused(graphReachNoun(display, reached: unwalkableCauseNoun(unwalkable, kind: kind)))
 	end 'blocker'
 end 'unwalkableTransfer'
+
+function graphReachNoun(display String, reached String) returns String
+	return "a `{display}` whose graph reaches {reached}"
+end 'graphReachNoun'
+
+function unprovenShareReachNoun(display String, why UnprovenParameter) returns String
+	let word = String.from(SendableBoundWord)
+	return graphReachNoun(display, reached: "{unprovenParameterNoun(why)}, which is not bounded `{word}`{unprovenParameterRemedy(why, word: word)}")
+end 'unprovenShareReachNoun'
+
+function unprovenOwnerOf(why UnprovenParameter) returns TypeParamOwner
+	return match why 'unproven'
+		undeclaredOnItsOwner(owner) gives owner
+		unprovableByItsOwner(owner) gives owner
+	end 'unproven'
+end 'unprovenOwnerOf'
+
+function unprovenParameterNoun(why UnprovenParameter) returns String
+	let owner = unprovenOwnerOf(why)
+	return "'{String.from(owner.paramName)}' of '{String.from(owner.declaringTypeName)}'"
+end 'unprovenParameterNoun'
+
+function unprovenParameterRemedy(why UnprovenParameter, word String) returns String
+	return match why 'unproven'
+		undeclaredOnItsOwner(owner) gives ": declare `where {String.from(owner.paramName)} is {word}` on '{String.from(owner.declaringTypeName)}'"
+		unprovableByItsOwner gives ": an interface's associated type carries no region bound"
+	end 'unproven'
+end 'unprovenParameterRemedy'
 
 union TransferBlocker
 	onlyFunctionValues
@@ -7135,6 +7312,11 @@ export enum FunctionMentions
 	counted
 	ignored
 end 'FunctionMentions'
+
+union AggregateComponents
+	functionAlias(name immutable ByteArray)
+	elements(types immutable MaxonTypeArray)
+end 'AggregateComponents'
 
 union UnwalkableCause
 	osHandle

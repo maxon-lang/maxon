@@ -209,6 +209,20 @@ extension ProgramSignatures
 		return false
 	end 'typeParamIsBounded'
 
+	function typeParamRegionDischarge(token TypeParamId, kind RegionBoundKind) returns OpaqueRegionDischarge
+		let owner = try self.typeParamOwnerOf(token) otherwise panic("ProgramSignatures.typeParamRegionDischarge: type-parameter token {token} reached a region bound with no owner — only a generic function's parameter has none, and each copy of a generic function is compiled at its inferred types")
+
+		if self.typeParamIsBounded(owner.declaringTypeName, position: owner.position, kind: kind) 'boundedByItsOwner'
+			return OpaqueRegionDischarge.bounded
+		end 'boundedByItsOwner'
+
+		if isInterfaceName(self.interfaceMap(), name: owner.declaringTypeName) 'anOwnerThatCannotBoundIt'
+			return OpaqueRegionDischarge.unproven(UnprovenParameter.unprovableByItsOwner(owner))
+		end 'anOwnerThatCannotBoundIt'
+
+		return OpaqueRegionDischarge.unproven(UnprovenParameter.undeclaredOnItsOwner(owner))
+	end 'typeParamRegionDischarge'
+
 	// The `uses` parameter names of a declared type, in declaration order — the list a `typeParameter` token
 	// is resolved against. Read by `Parser.scanFixedElementCountNeedsInto`, which scans an EXTENSION body in its
 	// TARGET's scope and so has no `uses` clause of its own to parse. An undeclared name answers the SHARED
@@ -3926,6 +3940,15 @@ extension ProgramSignatures
 
 	export function typeDisplayName(t MaxonType) returns String
 		let layout = try self.tupleLayoutOf(t) otherwise return maxonTypeDisplayName(t, typeNames: self.typeNames, signatures: self)
+		return self.tupleLayoutDisplayName(layout)
+	end 'typeDisplayName'
+
+	function aggregateNameDisplay(name ByteArray) returns String
+		let layout = try self.tupleLayoutNamed(name) otherwise return String.from(name)
+		return self.tupleLayoutDisplayName(layout)
+	end 'aggregateNameDisplay'
+
+	function tupleLayoutDisplayName(layout StructLayout) returns String
 		let names = StringArray.create(layout.fieldCount(), zeroed: false)
 
 		for i in 0 upto layout.fieldCount() 'eachElement'
@@ -3933,7 +3956,7 @@ extension ProgramSignatures
 		end 'eachElement'
 
 		return "({joinedWith(names, separator: TypeArgumentSeparator)})"
-	end 'typeDisplayName'
+	end 'tupleLayoutDisplayName'
 
 	function tupleElementDisplayName(layout StructLayout, index FieldIndex) returns String
 		let element = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.tupleElementDisplayName: fieldTypes.get OOB at {index} below count {layout.fieldCount()}")
@@ -9396,18 +9419,6 @@ extension ProgramSignatures
 		return try self.registeredLayout(name) otherwise panic("ProgramSignatures.tupleLayoutNamed: tuple `{String.from(name)}` is not registered — `internTupleType` registers the layout before it hands the name back")
 	end 'tupleLayoutNamed'
 
-	export function aggregateNameIsBuiltOnATypeParameter(name ByteArray) returns bool
-		let layout = try self.tupleLayoutNamed(name) otherwise return false
-
-		for element in layout.fieldTypes 'eachElement'
-			if self.typeIsBuiltOnATypeParameter(element) 'mentionsOne'
-				return true
-			end 'mentionsOne'
-		end 'eachElement'
-
-		return false
-	end 'aggregateNameIsBuiltOnATypeParameter'
-
 	// ⭐⭐ **IS EVERY ARGUMENT OF THIS INSTANCE A TYPE, ALL THE WAY DOWN?** — the question two mechanisms
 	// ask for the same reason, which is that a PARAMETRIC instance names nothing a compile-time answer can be
 	// built from:
@@ -9681,19 +9692,46 @@ extension ProgramSignatures
 		return edges
 	end 'instantiationEdgesOf'
 
-	function aggregateComponentsOf(resolved MaxonType, functions FunctionMentions) returns MaxonTypeArray throws AbsentError
-		if maxonTypeTag(resolved) == ValueTypeTag.function 'aFunctionValue'
-			match functions 'functions'
-				counted then return try self.functionAliasComponentsOf(resolved)
-				ignored then throw AbsentError.absent
-			end 'functions'
-		end 'aFunctionValue'
+	function mentionComponentsOf(resolved MaxonType, functions FunctionMentions, expanded ClonerSet) returns MaxonTypeArray throws AbsentError
+		match try self.aggregateComponentsSourceOf(resolved) 'components'
+			functionAlias(name) then return try self.unexpandedFunctionAliasComponentsOf(name, functions: functions, expanded: expanded)
+			elements(types) then return types
+		end 'components'
+	end 'mentionComponentsOf'
 
-		return try self.tupleElementTypesOf(resolved) otherwise throw AbsentError.absent
+	function unexpandedFunctionAliasComponentsOf(name immutable ByteArray, functions FunctionMentions, expanded ClonerSet) returns MaxonTypeArray throws AbsentError
+		if expanded.contains(name) 'expandedBefore'
+			throw AbsentError.absent
+		end 'expandedBefore'
+
+		expanded.insert(name)
+		return try self.countedFunctionAliasComponentsOf(name, functions: functions)
+	end 'unexpandedFunctionAliasComponentsOf'
+
+	function aggregateComponentsOf(resolved MaxonType, functions FunctionMentions) returns MaxonTypeArray throws AbsentError
+		match try self.aggregateComponentsSourceOf(resolved) 'components'
+			functionAlias(name) then return try self.countedFunctionAliasComponentsOf(name, functions: functions)
+			elements(types) then return types
+		end 'components'
 	end 'aggregateComponentsOf'
 
-	function functionAliasComponentsOf(resolved MaxonType) returns MaxonTypeArray throws AbsentError
-		match self.functionAliasInAnyFile(self.nameOfId(typeNameIdOf(resolved))) 'alias'
+	function aggregateComponentsSourceOf(resolved MaxonType) returns AggregateComponents throws AbsentError
+		if self.slotTypeIsAFunctionValue(resolved) 'aFunctionValue'
+			return AggregateComponents.functionAlias(self.nameOfId(typeNameIdOf(resolved)))
+		end 'aFunctionValue'
+
+		return AggregateComponents.elements(try self.tupleElementTypesOf(resolved) otherwise throw AbsentError.absent)
+	end 'aggregateComponentsSourceOf'
+
+	function countedFunctionAliasComponentsOf(name immutable ByteArray, functions FunctionMentions) returns MaxonTypeArray throws AbsentError
+		match functions 'functions'
+			counted then return try self.functionAliasComponentsOf(name)
+			ignored then throw AbsentError.absent
+		end 'functions'
+	end 'countedFunctionAliasComponentsOf'
+
+	function functionAliasComponentsOf(name immutable ByteArray) returns MaxonTypeArray throws AbsentError
+		match self.functionAliasInAnyFile(name) 'alias'
 			undeclared then throw AbsentError.absent
 			declared(alias) then return self.slotTypesOfFunctionAlias(alias)
 		end 'alias'

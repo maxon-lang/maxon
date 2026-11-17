@@ -2512,12 +2512,14 @@ export enum ErrorCode
 	// caller keeps sharing it; write it `immutable`); and a `unique` type (its values move; bound the parameter
 	// with `isolated` instead). `where T is isolated` takes the same values and handles, or a `unique` type.
 	// Every instantiation of the generic type is checked, and so is every instance it holds in a field, a
-	// container or a tuple. An argument written inside a generic type is checked there with the type's own
-	// parameters unknown: one refused for every parameter is reported there, once, and one whose verdict
-	// depends on the parameter is checked at each instantiation that fixes it. A `spawn` that infers a generic
-	// service's argument is reported at the factory it calls. A function's or an extension's `where` clause
-	// cannot spell either bound; they belong to a generic type's own `where` clause. Reported at the
-	// instantiation.
+	// container or a tuple. An argument written inside a generic type `Outer` that is or mentions a parameter
+	// of `Outer` is judged there, once, from `Outer`'s own `where` clause alone: a bare `T` (or an `immutable`
+	// argument built over it, through aliases, tuples, instance arguments and function types) meets a bound
+	// only when `Outer` declares it on every parameter it mentions, and the message names the first unbounded
+	// one: declare `where T is sendable` on `Outer`. An interface's associated type carries no region bound.
+	// A `spawn` that infers a generic service's argument is reported at the factory it calls. A function's or
+	// an extension's `where` clause cannot spell either bound; they belong to a generic type's own `where`
+	// clause. Reported where the program writes the instantiation.
 	semanticRegionBoundRefused = "E3215"
 
 	// A service type's state can hold a promise. A field of a service type that is a `Promise`, an array of

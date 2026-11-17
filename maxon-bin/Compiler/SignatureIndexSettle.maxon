@@ -1927,39 +1927,170 @@ extension ProgramSignatures
 		return DefaultSlotKind.value(OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType)), retainCallee: OwnershipCallee.named(self.retainCalleeOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.typeNames, result: RetainResult.sharedRead, readerFilePath: readerFilePath)), shareWalk: walk)
 	end 'registryValueKindOf'
 
-	export function sendableBoundAnswer(gid GenericInstanceId, position ElementIndex, readerFilePath FilePath) returns SendableBoundAnswer
-		match self.boundArgumentStanding(self.substitutedInstanceArg(gid, position: position)) 'standing'
-			openArgument then return SendableBoundAnswer.openArgument
+	export function sendableBoundAnswer(gid GenericInstanceId, position ElementIndex, readerFilePath FilePath, memo SendableBoundMemo) returns SendableBoundAnswer
+		let written = self.substitutedInstanceArg(gid, position: position)
+
+		match self.boundArgumentStanding(written) 'standing'
+			typeParameter(token) then return SendableBoundAnswer.typeParameter(self.typeParamRegionDischarge(token, kind: RegionBoundKind.sendable))
 			undeclared then return SendableBoundAnswer.undeclared
 			notAValue(kind) then return SendableBoundAnswer.refused(SendableRefusal.standing(UnsendableStanding.notAValue(kind)))
 			unique then return SendableBoundAnswer.refused(SendableRefusal.standing(UnsendableStanding.unique))
-			valueOrHandle(subject) then return self.sharedGraphAnswer(subject, readerFilePath: readerFilePath)
-			aggregate(subject) then return self.immutableAggregateAnswer(gid, position: position, subject: subject, readerFilePath: readerFilePath)
+			valueOrHandle(subject) then return self.immutableValueAnswer(gid, position: position, written: written, subject: subject, readerFilePath: readerFilePath, memo: memo)
+			aggregate(subject) then return self.immutableAggregateAnswer(gid, position: position, written: written, subject: subject, readerFilePath: readerFilePath, memo: memo)
 		end 'standing'
 	end 'sendableBoundAnswer'
 
-	function immutableAggregateAnswer(gid GenericInstanceId, position ElementIndex, subject MaxonType, readerFilePath FilePath) returns SendableBoundAnswer
+	function immutableValueAnswer(gid GenericInstanceId, position ElementIndex, written MaxonType, subject MaxonType, readerFilePath FilePath, memo SendableBoundMemo) returns SendableBoundAnswer
+		if self.genericInstanceArgQualifier(gid, position: position) == GenericArgQualifier.frozen and not self.typeIsAShareableHandle(subject) 'anImmutableValue'
+			match self.parameterMentionOf(written, walk: memo.mentions) 'mention'
+				none or
+				allBounded then break
+
+				unproven(why) then return SendableBoundAnswer.refused(SendableRefusal.builtOver(why))
+			end 'mention'
+		end 'anImmutableValue'
+
+		return self.sharedGraphAnswer(subject, readerFilePath: readerFilePath)
+	end 'immutableValueAnswer'
+
+	function typeIsAShareableHandle(subject MaxonType) returns bool
+		return maxonTypeTag(subject) == ValueTypeTag.genericInstance and self.instanceIsAShareableHandle(genericInstanceIdOf(subject))
+	end 'typeIsAShareableHandle'
+
+	function immutableAggregateAnswer(gid GenericInstanceId, position ElementIndex, written MaxonType, subject MaxonType, readerFilePath FilePath, memo SendableBoundMemo) returns SendableBoundAnswer
 		if self.genericInstanceArgQualifier(gid, position: position) != GenericArgQualifier.frozen 'writtenPlain'
 			return SendableBoundAnswer.refused(SendableRefusal.standing(UnsendableStanding.plainAggregate))
 		end 'writtenPlain'
 
-		return self.sharedGraphAnswer(subject, readerFilePath: readerFilePath)
+		return match self.parameterMentionOf(written, walk: memo.mentions) 'mention'
+			none gives self.sharedGraphAnswer(subject, readerFilePath: readerFilePath)
+			allBounded gives self.openAggregateAnswer(subject, shareSettled: memo.shareSettled)
+			unproven(why) gives SendableBoundAnswer.refused(SendableRefusal.builtOver(why))
+		end 'mention'
 	end 'immutableAggregateAnswer'
 
+	function parameterMentionOf(written MaxonType, walk ParameterMentionWalk) returns ParameterMention
+		let resolved = self.typeArgumentType(written)
+
+		if maxonTypeTag(resolved) == ValueTypeTag.typeParameter 'aParameter'
+			return dischargedMention(self.typeParamRegionDischarge(typeParamIdOf(resolved), kind: RegionBoundKind.sendable))
+		end 'aParameter'
+
+		match try self.typeOwnershipSubject(written) otherwise return self.componentParameterMention(resolved, walk: walk) 'subject'
+			instance(id) then return self.nodeParameterMention(MentionNode.instance(id), walk: walk)
+			aggregate(name) then return self.aggregateParameterMention(name, resolved: resolved, walk: walk)
+		end 'subject'
+	end 'parameterMentionOf'
+
+	function componentParameterMention(resolved MaxonType, walk ParameterMentionWalk) returns ParameterMention
+		if maxonTypeTag(resolved) == ValueTypeTag.genericInstance 'anInstance'
+			return self.nodeParameterMention(MentionNode.instance(genericInstanceIdOf(resolved)), walk: walk)
+		end 'anInstance'
+
+		match try self.aggregateComponentsSourceOf(resolved) otherwise return ParameterMention.none 'components'
+			functionAlias(name) then return self.nodeParameterMention(MentionNode.functionAlias(name), walk: walk)
+			elements(types) then return self.componentsMention(types, walk: walk)
+		end 'components'
+	end 'componentParameterMention'
+
+	function aggregateParameterMention(name immutable ByteArray, resolved MaxonType, walk ParameterMentionWalk) returns ParameterMention
+		let layout = try self.tupleLayoutNamed(name) otherwise return self.componentParameterMention(resolved, walk: walk)
+		return self.nodeParameterMention(MentionNode.tuple(name, fields: layout.fieldTypes), walk: walk)
+	end 'aggregateParameterMention'
+
+	function nodeParameterMention(node MentionNode, walk ParameterMentionWalk) returns ParameterMention
+		if let state = try walk.stateOf(node) 'visitedBefore'
+			return walk.revisited(state)
+		end 'visitedBefore'
+
+		let outerLow = walk.low
+		let position = walk.entered(node)
+		let mention = self.nodeComponentsMention(node, walk: walk)
+		walk.left(position, outerLow: outerLow, mention: mention)
+		return mention
+	end 'nodeParameterMention'
+
+	function nodeComponentsMention(node MentionNode, walk ParameterMentionWalk) returns ParameterMention
+		return match node 'node'
+			instance(gid) gives self.instanceArgumentsMention(gid, walk: walk)
+			tuple(_, fields) gives self.componentsMention(fields, walk: walk)
+			functionAlias(name) gives self.functionAliasMention(name, walk: walk)
+		end 'node'
+	end 'nodeComponentsMention'
+
+	function instanceArgumentsMention(gid GenericInstanceId, walk ParameterMentionWalk) returns ParameterMention
+		var mention = ParameterMention.none
+
+		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
+			mention = combinedParameterMention(mention, next: self.parameterMentionOf(self.substitutedInstanceArg(gid, position: position), walk: walk))
+		end 'eachArg'
+
+		return mention
+	end 'instanceArgumentsMention'
+
+	function functionAliasMention(name immutable ByteArray, walk ParameterMentionWalk) returns ParameterMention
+		let components = try self.functionAliasComponentsOf(name) otherwise return ParameterMention.none
+		return self.componentsMention(components, walk: walk)
+	end 'functionAliasMention'
+
+	function componentsMention(components MaxonTypeArray, walk ParameterMentionWalk) returns ParameterMention
+		var mention = ParameterMention.none
+
+		for component in components 'eachComponent'
+			mention = combinedParameterMention(mention, next: self.parameterMentionOf(component, walk: walk))
+		end 'eachComponent'
+
+		return mention
+	end 'componentsMention'
+
+	function openAggregateAnswer(subject MaxonType, shareSettled ClonerSet) returns SendableBoundAnswer
+		let leaves = MaxonTypeArray.create(0)
+		let walked = ClonerSet.create()
+		self.collectShareReach(subject, standingIn: walked, settled: shareSettled, parameters: TypeParamIdArray.create(0), leaves: leaves)
+
+		for leaf in leaves 'eachLeaf'
+			match self.slotShareRefusalOf(leaf, judgement: ShareJudgement.everyCause) 'refusal'
+				walkable then continue
+				refused(noun) then return SendableBoundAnswer.refused(SendableRefusal.graph(graphReachNoun(self.boundSubjectDisplay(subject), reached: noun)))
+			end 'refusal'
+		end 'eachLeaf'
+
+		for key in walked 'eachWalkedComposite'
+			shareSettled.insert(key)
+		end 'eachWalkedComposite'
+
+		return SendableBoundAnswer.admitted
+	end 'openAggregateAnswer'
+
 	function sharedGraphAnswer(subject MaxonType, readerFilePath FilePath) returns SendableBoundAnswer
-		if self.typeIsBuiltOnATypeParameter(subject) 'itsGraphWaitsOnAParameter'
-			return SendableBoundAnswer.openArgument
-		end 'itsGraphWaitsOnAParameter'
+		if self.typeIsBuiltOnATypeParameter(subject) 'anOpenGraph'
+			match self.shareReachDischarge(self.shareReachedParameters(subject)) 'reachedParameters'
+				bounded then break
+				unproven(why) then return self.unprovenReachAnswer(subject, why: why)
+			end 'reachedParameters'
+		end 'anOpenGraph'
 
 		match self.registryValueKindOf(subject, readerFilePath: readerFilePath) 'kind'
 			service then panic("ProgramSignatures.sharedGraphAnswer: `registryValueKindOf` answers `service` for no value type")
-			value(dropCallee, retainCallee, shareWalk) then return self.sharedWalkAnswer(dropCallee, retainCallee: retainCallee, shareWalk: shareWalk)
+			value(dropCallee, _, shareWalk) then return self.sharedWalkAnswer(dropCallee, shareWalk: shareWalk)
 		end 'kind'
 	end 'sharedGraphAnswer'
 
-	function sharedWalkAnswer(dropCallee OwnershipCallee, retainCallee OwnershipCallee, shareWalk TransferWalk) returns SendableBoundAnswer
+	function unprovenReachAnswer(subject MaxonType, why UnprovenParameter) returns SendableBoundAnswer
+		return SendableBoundAnswer.refused(SendableRefusal.graph(unprovenShareReachNoun(self.boundSubjectDisplay(subject), why: why)))
+	end 'unprovenReachAnswer'
+
+	function boundSubjectDisplay(subject MaxonType) returns String
+		if maxonTypeTag(subject) == ValueTypeTag.genericInstance 'anInstance'
+			return String.from(self.instanceDisplayName(genericInstanceIdOf(subject)))
+		end 'anInstance'
+
+		return self.typeDisplayName(subject)
+	end 'boundSubjectDisplay'
+
+	function sharedWalkAnswer(dropCallee OwnershipCallee, shareWalk TransferWalk) returns SendableBoundAnswer
 		match dropCallee 'drop'
-			inert then return SendableBoundAnswer.admitted(TransferWalk.closed, retainCallee: retainCallee)
+			inert then return SendableBoundAnswer.admitted
 			named then break
 		end 'drop'
 
@@ -1968,7 +2099,7 @@ extension ProgramSignatures
 
 			closed or
 			walkedBy or
-			walkedThroughWitness gives SendableBoundAnswer.admitted(shareWalk, retainCallee: retainCallee)
+			walkedThroughWitness gives SendableBoundAnswer.admitted
 		end 'walk'
 	end 'sharedWalkAnswer'
 

@@ -772,7 +772,15 @@ function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	end 'theUniverseIsUnreadable'
 
 	let declared = declaredConformanceIndex(project)
-	let regionBoundPass = RegionBoundPass.create()
+	let siteInstances = GenericInstanceIdSet.create()
+	collectSiteInstances(aliasSites, into: siteInstances)
+	collectSiteInstances(project.inferredInstantiationSites, into: siteInstances)
+	collectSiteInstances(constSites, into: siteInstances)
+	let regionBoundPass = RegionBoundPass.create(siteInstances)
+
+	recordInstancesWrittenAtSites(project, signatures: signatures, sites: aliasSites, pass: regionBoundPass)
+	recordInstancesWrittenAtSites(project, signatures: signatures, sites: project.inferredInstantiationSites, pass: regionBoundPass)
+	recordInstancesWrittenAtSites(project, signatures: signatures, sites: constSites, pass: regionBoundPass)
 
 	// The DECLARED sites first, so a program whose alias and whose literal both name an inadmissible argument
 	// is reported against the declaration the author wrote before the one the compiler inferred.
@@ -780,6 +788,12 @@ function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: project.inferredInstantiationSites, regionBoundPass: regionBoundPass)
 	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: constSites, regionBoundPass: regionBoundPass)
 end 'checkWhereConstraints'
+
+function collectSiteInstances(sites GenericInstantiationSiteArray, into GenericInstanceIdSet)
+	for site in sites 'eachSite'
+		into.insert(site.gid)
+	end 'eachSite'
+end 'collectSiteInstances'
 
 function checkInstantiationSites(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, sites GenericInstantiationSiteArray, regionBoundPass RegionBoundPass)
 	for site in sites 'eachSite'
@@ -878,10 +892,14 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 	// OBLIGATION.** `Seq with Integer` binds an associated type; `Box with Integer` fills a type parameter with
 	// a `where` clause to satisfy. Both are `Base with Args` and both are recorded as the same instantiation
 	// site, so the split is made here, at the one walk over those sites, rather than by a second list.
+	let walk = RegionBoundWalk.create(site, pass: regionBoundPass)
+
 	match lookupInterface(project.interfaces, name: baseName) 'base'
 		found(iface) then checkInterfaceInstantiationBindings(project, signatures: signatures, site: site, iface: iface)
-		notFound then checkStructInstantiationConstraints(project, signatures: signatures, declared: declared, site: site, baseName: baseName, regionBoundPass: regionBoundPass)
+		notFound then checkStructInstantiationConstraints(project, signatures: signatures, declared: declared, site: site, baseName: baseName, walk: walk)
 	end 'base'
+
+	judgeInstancesWrittenAt(project, signatures: signatures, walk: walk)
 end 'checkOneInstantiation'
 
 // ⭐⭐ **A WRITTEN `with` ARGUMENT ON AN EXISTENTIAL IS A CLAIM, AND E3125 IS WHAT MAKES IT ONE.**
@@ -979,7 +997,7 @@ function requireWrittenBindingMatchesConformers(project Project, signatures Prog
 	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{signatures.aliasIdentityDisplay(written)}', but '{String.from(conformer.typeName)}' binds it to '{String.from(binding)}' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'requireWrittenBindingMatchesConformers'
 
-function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray, regionBoundPass RegionBoundPass)
+function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray, walk RegionBoundWalk)
 	let constraints = signatures.structWhereConstraints(baseName)
 
 	for i in 0 upto constraints.count() 'eachConstraint'
@@ -993,8 +1011,88 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 		reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 	end 'eachConstraint'
 
-	_ = checkRegionBoundsOfInstance(project, signatures: signatures, instance: site.gid, template: RegionBoundTemplate.judgedHere, walk: RegionBoundWalk.create(site, pass: regionBoundPass))
+	_ = checkRegionBoundsOfInstance(project, signatures: signatures, instance: site.gid, template: RegionBoundTemplate.judgedHere, walk: walk)
 end 'checkStructInstantiationConstraints'
+
+function recordInstancesWrittenAtSites(project Project, signatures ProgramSignatures, sites GenericInstantiationSiteArray, pass RegionBoundPass)
+	for site in sites 'eachSite'
+		if instanceNamesATypeFromAFailedFile(project, signatures: signatures, gid: site.gid) 'aTypeOfAFileThatFailedToParse'
+			continue
+		end 'aTypeOfAFileThatFailedToParse'
+
+		pass.judgedRows.insert(site.gid)
+
+		if pass.walkedInstances.contains(site.gid) 'walkedBefore'
+			continue
+		end 'walkedBefore'
+
+		let written = GenericInstanceIdArray.create(0)
+		recordArgumentsWrittenIn(signatures, instance: site.gid, pass: pass, written: written)
+
+		if not written.isEmpty() 'someWrittenInside'
+			pass.writtenInside.upsert(site.gid, value: written)
+		end 'someWrittenInside'
+	end 'eachSite'
+end 'recordInstancesWrittenAtSites'
+
+function recordInstancesWrittenIn(signatures ProgramSignatures, instance GenericInstanceId, pass RegionBoundPass, written GenericInstanceIdArray)
+	if pass.siteInstances.contains(instance) or pass.walkedInstances.contains(instance) 'judgedElsewhere'
+		return
+	end 'judgedElsewhere'
+
+	recordArgumentsWrittenIn(signatures, instance: instance, pass: pass, written: written)
+
+	let mentionsAParameter = match signatures.nodeParameterMention(MentionNode.instance(instance), walk: pass.sendableMemo.mentions) 'mention'
+		none gives false
+
+		allBounded or
+		unproven gives true
+	end 'mention'
+
+	if mentionsAParameter 'judgedWhereWritten'
+		pass.judgedRows.insert(instance)
+		written.push(instance)
+	end 'judgedWhereWritten'
+end 'recordInstancesWrittenIn'
+
+function recordArgumentsWrittenIn(signatures ProgramSignatures, instance GenericInstanceId, pass RegionBoundPass, written GenericInstanceIdArray)
+	pass.walkedInstances.insert(instance)
+
+	for position in 0 upto signatures.genericInstanceArgCount(instance) 'eachArgument'
+		recordInstancesWrittenInType(signatures, written: signatures.substitutedInstanceArg(instance, position: position), pass: pass, into: written)
+	end 'eachArgument'
+end 'recordArgumentsWrittenIn'
+
+function recordInstancesWrittenInType(signatures ProgramSignatures, written MaxonType, pass RegionBoundPass, into GenericInstanceIdArray)
+	let subject = try signatures.typeOwnershipSubject(written) otherwise return
+
+	match subject 'subject'
+		instance(id) then recordInstancesWrittenIn(signatures, instance: id, pass: pass, written: into)
+		aggregate(name) then recordInstancesWrittenInTuple(signatures, tupleName: name, pass: pass, written: into)
+	end 'subject'
+end 'recordInstancesWrittenInType'
+
+function recordInstancesWrittenInTuple(signatures ProgramSignatures, tupleName immutable ByteArray, pass RegionBoundPass, written GenericInstanceIdArray)
+	if not isTupleTypeName(tupleName) or pass.walkedTuples.contains(tupleName) 'notAnUnwalkedTuple'
+		return
+	end 'notAnUnwalkedTuple'
+
+	pass.walkedTuples.insert(tupleName)
+	let layout = signatures.structLayoutOf(tupleName)
+
+	for index in 0 upto layout.fieldCount() 'eachElement'
+		recordInstancesWrittenInType(signatures, written: signatures.layoutFieldType(layout, structName: tupleName, index: index as FieldIndex), pass: pass, into: written)
+	end 'eachElement'
+end 'recordInstancesWrittenInTuple'
+
+function judgeInstancesWrittenAt(project Project, signatures ProgramSignatures, walk RegionBoundWalk)
+	let written = try walk.pass.writtenInside.get(walk.site.gid) otherwise return
+	_ = walk.pass.writtenInside.remove(walk.site.gid)
+
+	for instance in written 'eachWrittenInside'
+		_ = checkRegionBoundsOfInstance(project, signatures: signatures, instance: instance, template: RegionBoundTemplate.judgedHere, walk: walk)
+	end 'eachWrittenInside'
+end 'judgeInstancesWrittenAt'
 
 union RegionBoundTemplate
 	judgedHere
@@ -1056,14 +1154,22 @@ type RegionBoundNodes
 	end 'recordUnderRow'
 end 'RegionBoundNodes'
 
+typealias RegionBoundWrittenInside = Map with (GenericInstanceId, GenericInstanceIdArray)
+
 type RegionBoundPass
 	let verdicts as RegionBoundVerdictMemo
 	let nodes as RegionBoundNodes
 	let reported as RegionBoundReportOrdinals
+	let siteInstances as GenericInstanceIdSet
+	let walkedInstances as GenericInstanceIdSet
+	let walkedTuples as ClonerSet
+	let judgedRows as GenericInstanceIdSet
+	let writtenInside as RegionBoundWrittenInside
+	let sendableMemo as SendableBoundMemo
 	var sites = 0 as RegionBoundSiteOrdinal
 
-	static function create() returns Self
-		return Self{verdicts: RegionBoundVerdictMemo.create(), nodes: RegionBoundNodes.create(), reported: RegionBoundReportOrdinals.create()}
+	static function create(siteInstances GenericInstanceIdSet) returns Self
+		return Self{verdicts: RegionBoundVerdictMemo.create(), nodes: RegionBoundNodes.create(), reported: RegionBoundReportOrdinals.create(), siteInstances: siteInstances, walkedInstances: GenericInstanceIdSet.create(), walkedTuples: ClonerSet.create(), judgedRows: GenericInstanceIdSet.create(), writtenInside: RegionBoundWrittenInside.create(), sendableMemo: SendableBoundMemo.create()}
 	end 'create'
 end 'RegionBoundPass'
 
@@ -1221,6 +1327,7 @@ end 'regionBoundTemplateRow'
 union RegionBoundRefusal
 	notIsolated
 	sendable(why SendableRefusal)
+	unprovenParameter(why UnprovenParameter)
 end 'RegionBoundRefusal'
 
 union RegionBoundVerdict
@@ -1232,33 +1339,32 @@ end 'RegionBoundVerdict'
 typealias RegionBoundVerdictArray = Array with RegionBoundVerdict
 typealias RegionBoundVerdictMemo = Map with (GenericInstanceId, RegionBoundVerdictArray)
 
-function regionBoundVerdictsOf(signatures ProgramSignatures, instance GenericInstanceId, bounds RegionBoundArray, readerFilePath FilePath, memo RegionBoundVerdictMemo) returns RegionBoundVerdictArray
-	if let judged = try memo.get(instance) 'alreadyJudged'
+function regionBoundVerdictsOf(signatures ProgramSignatures, instance GenericInstanceId, bounds RegionBoundArray, readerFilePath FilePath, pass RegionBoundPass) returns RegionBoundVerdictArray
+	if let judged = try pass.verdicts.get(instance) 'alreadyJudged'
 		return judged
 	end 'alreadyJudged'
 
 	let verdicts = RegionBoundVerdictArray.create(bounds.count(), zeroed: false)
 
 	for bound in bounds 'eachRegionBound'
-		verdicts.push(regionBoundVerdict(signatures, instance: instance, bound: bound, readerFilePath: readerFilePath))
+		verdicts.push(regionBoundVerdict(signatures, instance: instance, bound: bound, readerFilePath: readerFilePath, sendableMemo: pass.sendableMemo))
 	end 'eachRegionBound'
 
-	memo.upsert(instance, value: verdicts)
+	pass.verdicts.upsert(instance, value: verdicts)
 	return verdicts
 end 'regionBoundVerdictsOf'
 
-function regionBoundVerdict(signatures ProgramSignatures, instance GenericInstanceId, bound RegionBound, readerFilePath FilePath) returns RegionBoundVerdict
+function regionBoundVerdict(signatures ProgramSignatures, instance GenericInstanceId, bound RegionBound, readerFilePath FilePath, sendableMemo SendableBoundMemo) returns RegionBoundVerdict
 	return match bound.kind 'kind'
-		sendable gives sendableBoundVerdict(signatures.sendableBoundAnswer(instance, position: bound.typeParamIndex, readerFilePath: readerFilePath))
+		sendable gives sendableBoundVerdict(signatures.sendableBoundAnswer(instance, position: bound.typeParamIndex, readerFilePath: readerFilePath, memo: sendableMemo))
 		isolated gives isolatedBoundVerdict(signatures.isolatedBoundAnswer(instance, position: bound.typeParamIndex))
 	end 'kind'
 end 'regionBoundVerdict'
 
 function sendableBoundVerdict(answer SendableBoundAnswer) returns RegionBoundVerdict
 	return match answer 'answer'
-		openArgument or
+		typeParameter(discharge) gives opaqueRegionVerdict(discharge)
 		admitted gives RegionBoundVerdict.meets
-
 		undeclared gives RegionBoundVerdict.undeclared
 		refused(why) gives RegionBoundVerdict.refused(RegionBoundRefusal.sendable(why))
 	end 'answer'
@@ -1266,13 +1372,19 @@ end 'sendableBoundVerdict'
 
 function isolatedBoundVerdict(answer IsolatedBoundAnswer) returns RegionBoundVerdict
 	return match answer 'answer'
-		openArgument or
+		typeParameter(discharge) gives opaqueRegionVerdict(discharge)
 		admitted gives RegionBoundVerdict.meets
-
 		undeclared gives RegionBoundVerdict.undeclared
 		refused gives RegionBoundVerdict.refused(RegionBoundRefusal.notIsolated)
 	end 'answer'
 end 'isolatedBoundVerdict'
+
+function opaqueRegionVerdict(discharge OpaqueRegionDischarge) returns RegionBoundVerdict
+	return match discharge 'discharge'
+		bounded gives RegionBoundVerdict.meets
+		unproven(why) gives RegionBoundVerdict.refused(RegionBoundRefusal.unprovenParameter(why))
+	end 'discharge'
+end 'opaqueRegionVerdict'
 
 function reportRegionBoundRefusals(project Project, signatures ProgramSignatures, instance GenericInstanceId, template RegionBoundTemplate, walk RegionBoundWalk) returns bool
 	let baseName = signatures.genericInstanceBaseName(instance)
@@ -1282,7 +1394,7 @@ function reportRegionBoundRefusals(project Project, signatures ProgramSignatures
 		return false
 	end 'declaresNoRegionBound'
 
-	let verdicts = regionBoundVerdictsOf(signatures, instance: instance, bounds: bounds, readerFilePath: walk.site.filePath, memo: walk.pass.verdicts)
+	let verdicts = regionBoundVerdictsOf(signatures, instance: instance, bounds: bounds, readerFilePath: walk.site.filePath, pass: walk.pass)
 	var refuses = false
 
 	for (iter, bound) in bounds.withIterator() 'eachRegionBound'
@@ -1306,14 +1418,18 @@ end 'reportRegionBoundRefusals'
 function templateRefusesRegionBound(signatures ProgramSignatures, template RegionBoundTemplate, bounds RegionBoundArray, position ElementIndex, walk RegionBoundWalk) returns bool
 	match template 'template'
 		judgedHere then return false
-		heldBy(row) then return match regionBoundVerdictAt(regionBoundVerdictsOf(signatures, instance: row, bounds: bounds, readerFilePath: walk.site.filePath, memo: walk.pass.verdicts), position: position) 'verdict'
-			refused gives true
-
-			meets or
-			undeclared gives false
-		end 'verdict'
+		heldBy(row) then return walk.pass.judgedRows.contains(row) and rowVerdictIsDecided(signatures, row: row, bounds: bounds, position: position, walk: walk)
 	end 'template'
 end 'templateRefusesRegionBound'
+
+function rowVerdictIsDecided(signatures ProgramSignatures, row GenericInstanceId, bounds RegionBoundArray, position ElementIndex, walk RegionBoundWalk) returns bool
+	return match regionBoundVerdictAt(regionBoundVerdictsOf(signatures, instance: row, bounds: bounds, readerFilePath: walk.site.filePath, pass: walk.pass), position: position) 'verdict'
+		meets or
+		refused gives true
+
+		undeclared gives false
+	end 'verdict'
+end 'rowVerdictIsDecided'
 
 function regionBoundVerdictAt(verdicts RegionBoundVerdictArray, position ElementIndex) returns RegionBoundVerdict
 	return try verdicts.get(position) otherwise panic("regionBoundVerdictAt: verdicts.get OOB at {position} below count {verdicts.count()} — `regionBoundVerdictsOf` judges every bound of the instance's base")
@@ -1328,8 +1444,8 @@ function reportRegionBoundViolated(project Project, signatures ProgramSignatures
 	let shown = signatures.aliasIdentityDisplay(argument)
 	let parameter = String.from(constrainedTypeParamName(signatures, baseName: baseName, position: bound.typeParamIndex as FieldIndex))
 
-	let word = match refusal 'boundWord'
-		notIsolated gives String.from(IsolatedCapabilityWord)
+	let word = match bound.kind 'boundWord'
+		isolated gives String.from(IsolatedCapabilityWord)
 		sendable gives String.from(SendableBoundWord)
 	end 'boundWord'
 
@@ -1338,15 +1454,21 @@ function reportRegionBoundViolated(project Project, signatures ProgramSignatures
 	let message = match refusal 'refusal'
 		notIsolated gives "'{shown}' is not isolated, {head}: the bound takes a value, a service handle or a `unique` type"
 		sendable(why) gives sendableRefusalMessage(why, shown: shown, parameter: parameter, head: head)
+		unprovenParameter(why) gives unprovenParameterMessage(why, word: word, head: head)
 	end 'refusal'
 
 	reportPositioned(project, code: ErrorCode.semanticRegionBoundRefused, message: message, line: walk.site.nameLine, column: walk.site.nameColumn, filePath: walk.site.filePath)
 end 'reportRegionBoundViolated'
 
+function unprovenParameterMessage(why UnprovenParameter, word String, head String) returns String
+	return "{unprovenParameterNoun(why)} is not bounded `{word}`, {head}{unprovenParameterRemedy(why, word: word)}"
+end 'unprovenParameterMessage'
+
 function sendableRefusalMessage(why SendableRefusal, shown String, parameter String, head String) returns String
 	return match why 'refusal'
 		standing(reason) gives unsendableStandingMessage(reason, shown: shown, parameter: parameter, head: head)
 		graph(noun) gives "'{shown}' cannot be shared with another thread, {head}: it is {noun}"
+		builtOver(parameterWhy) gives "'{shown}' is built over {unprovenParameterNoun(parameterWhy)}, which is not bounded `{String.from(SendableBoundWord)}`, {head}{unprovenParameterRemedy(parameterWhy, word: String.from(SendableBoundWord))}"
 	end 'refusal'
 end 'sendableRefusalMessage'
 

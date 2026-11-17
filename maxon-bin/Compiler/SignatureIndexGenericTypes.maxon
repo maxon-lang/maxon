@@ -1898,14 +1898,14 @@ extension ProgramSignatures
 		let argument = self.substitutedInstanceArg(gid, position: position)
 
 		return match self.boundArgumentStanding(argument) 'standing'
-			openArgument gives IsolatedBoundAnswer.openArgument
+			typeParameter(token) gives IsolatedBoundAnswer.typeParameter(self.typeParamRegionDischarge(token, kind: RegionBoundKind.isolated))
 			undeclared gives IsolatedBoundAnswer.undeclared
 
 			valueOrHandle or
 			unique gives IsolatedBoundAnswer.admitted
 
-			notAValue gives IsolatedBoundAnswer.admitted if self.typeHoldsAUnique(argument) else IsolatedBoundAnswer.refused
-			aggregate(subject) gives IsolatedBoundAnswer.openArgument if self.typeIsBuiltOnATypeParameter(subject) else IsolatedBoundAnswer.refused
+			notAValue or
+			aggregate gives IsolatedBoundAnswer.admitted if self.typeHoldsAUnique(argument) else IsolatedBoundAnswer.refused
 		end 'standing'
 	end 'isolatedBoundAnswer'
 
@@ -1924,7 +1924,7 @@ extension ProgramSignatures
 		end 'anUndeclaredPart'
 
 		match maxonTypeTag(argument) 'tag'
-			typeParameter then return BoundArgumentStanding.openArgument
+			typeParameter then return BoundArgumentStanding.typeParameter(typeParamIdOf(argument))
 
 			boolean or
 			integer or
@@ -4510,9 +4510,30 @@ extension ProgramSignatures
 
 	export function shareReachOfType(openType MaxonType) returns ParameterPositions
 		let reached = ParameterPositions.create()
-		self.collectShareReach(openType, standingIn: ClonerSet.create(), into: reached)
+
+		for token in self.shareReachedParameters(openType) 'eachReachedParameter'
+			reached.insert(self.opaqueTypeParamPosition(MaxonType.typeParameter(token)))
+		end 'eachReachedParameter'
+
 		return reached
 	end 'shareReachOfType'
+
+	function shareReachedParameters(openType MaxonType) returns TypeParamIdArray
+		let reached = TypeParamIdArray.create(0)
+		self.collectShareReach(openType, standingIn: ClonerSet.create(), settled: ClonerSet.create(), parameters: reached, leaves: MaxonTypeArray.create(0))
+		return reached
+	end 'shareReachedParameters'
+
+	function shareReachDischarge(reached TypeParamIdArray) returns OpaqueRegionDischarge
+		for token in reached 'eachReachedParameter'
+			match self.typeParamRegionDischarge(token, kind: RegionBoundKind.sendable) 'discharge'
+				bounded then continue
+				unproven(why) then return OpaqueRegionDischarge.unproven(why)
+			end 'discharge'
+		end 'eachReachedParameter'
+
+		return OpaqueRegionDischarge.bounded
+	end 'shareReachDischarge'
 
 	export function shareReachOfBase(base ByteArray) returns ParameterPositions
 		if not self.structDeclaresTypeParams(base) 'noParametersToReach'
@@ -4522,30 +4543,30 @@ extension ProgramSignatures
 		return self.shareReachOfType(MaxonType.genericInstance(self.ownRecordSelfInstance(base)))
 	end 'shareReachOfBase'
 
-	function collectShareReach(slotType MaxonType, standingIn ClonerSet, into ParameterPositions)
+	function collectShareReach(slotType MaxonType, standingIn ClonerSet, settled ClonerSet, parameters TypeParamIdArray, leaves MaxonTypeArray)
 		if maxonTypeTag(slotType) == ValueTypeTag.typeParameter 'anOpaqueSlot'
-			into.insert(self.opaqueTypeParamPosition(slotType))
+			parameters.push(typeParamIdOf(slotType))
 			return
 		end 'anOpaqueSlot'
 
 		match self.shareNodeOfSlot(slotType, from: self.typeNames) 'node'
-			leaf or
+			leaf then leaves.push(slotType)
 			existential then break
-			composite(composite) then self.collectCompositeShareReach(composite, standingIn: standingIn, into: into)
+			composite(composite) then self.collectCompositeShareReach(composite, standingIn: standingIn, settled: settled, parameters: parameters, leaves: leaves)
 		end 'node'
 	end 'collectShareReach'
 
-	function collectCompositeShareReach(composite ShareConformer, standingIn ClonerSet, into ParameterPositions)
+	function collectCompositeShareReach(composite ShareConformer, standingIn ClonerSet, settled ClonerSet, parameters TypeParamIdArray, leaves MaxonTypeArray)
 		let key = self.shareConformerKey(composite)
 
-		if standingIn.contains(key) 'alreadyReached'
+		if standingIn.contains(key) or settled.contains(key) 'alreadyReached'
 			return
 		end 'alreadyReached'
 
 		standingIn.insert(key)
 
 		for slot in self.shareSlotsOf(composite) 'eachSlot'
-			self.collectShareReach(slot.slotType, standingIn: standingIn, into: into)
+			self.collectShareReach(slot.slotType, standingIn: standingIn, settled: settled, parameters: parameters, leaves: leaves)
 		end 'eachSlot'
 	end 'collectCompositeShareReach'
 
@@ -4587,11 +4608,11 @@ extension ProgramSignatures
 
 	export function typeMentionedParameters(openType MaxonType, policy MentionPolicy) returns ParameterPositions
 		let mentioned = ParameterPositions.create()
-		self.collectMentionedParameters(openType, into: mentioned, policy: policy)
+		self.collectMentionedParameters(openType, into: mentioned, policy: policy, expanded: ClonerSet.create())
 		return mentioned
 	end 'typeMentionedParameters'
 
-	function collectMentionedParameters(t MaxonType, into ParameterPositions, policy MentionPolicy)
+	function collectMentionedParameters(t MaxonType, into ParameterPositions, policy MentionPolicy, expanded ClonerSet)
 		let resolved = self.typeArgumentType(t)
 		let tag = maxonTypeTag(resolved)
 
@@ -4606,17 +4627,17 @@ extension ProgramSignatures
 
 			for position in 0 upto self.genericInstanceArgCount(id) 'eachArg'
 				if policy.keeps(self, base: base, position: position) 'theArgumentIsFollowed'
-					self.collectMentionedParameters(self.substitutedInstanceArg(id, position: position), into: into, policy: policy)
+					self.collectMentionedParameters(self.substitutedInstanceArg(id, position: position), into: into, policy: policy, expanded: expanded)
 				end 'theArgumentIsFollowed'
 			end 'eachArg'
 
 			return
 		end 'aNestedInstance'
 
-		let components = try self.aggregateComponentsOf(resolved, functions: policy.functions) otherwise return
+		let components = try self.mentionComponentsOf(resolved, functions: policy.functions, expanded: expanded) otherwise return
 
 		for component in components 'eachComponent'
-			self.collectMentionedParameters(component, into: into, policy: policy)
+			self.collectMentionedParameters(component, into: into, policy: policy, expanded: expanded)
 		end 'eachComponent'
 	end 'collectMentionedParameters'
 
@@ -4751,7 +4772,7 @@ extension ProgramSignatures
 		let display = String.from(self.instanceDisplayName(id))
 
 		if kind == TransferKind.share and self.instanceGraphHoldsAPromise(id, atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster) 'aSharedPromise'
-			return TransferWalk.refused("a `{display}` whose graph reaches {PromiseSharedNoun}")
+			return TransferWalk.refused(graphReachNoun(display, reached: PromiseSharedNoun))
 		end 'aSharedPromise'
 
 		if not self.instanceSupportsTransfer(id, kind: kind) 'someNestedTypeHasNoWalk'
@@ -4800,7 +4821,7 @@ extension ProgramSignatures
 		end 'aWordRecord'
 
 		if kind == TransferKind.share and self.aggregateGraphHoldsAPromise(name, atInterfaces: PromiseWalkAtInterfaces.leftToTheRoster) 'aSharedPromise'
-			return TransferWalk.refused("a `{String.from(name)}` whose graph reaches {PromiseSharedNoun}")
+			return TransferWalk.refused(graphReachNoun(self.aggregateNameDisplay(name), reached: PromiseSharedNoun))
 		end 'aSharedPromise'
 
 		// `structHasManagedField` cannot see a slot standing at a bare type parameter, and a reference handed to a

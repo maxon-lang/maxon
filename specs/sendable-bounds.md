@@ -35,17 +35,25 @@ typealias JobPool    = Pool with immutable Job      // accepted: Job's graph is 
 ```
 
 Each refusal is reported at the instantiation the program wrote, naming the argument as the program wrote it.
-A type parameter passed on as the argument is judged by the bound of the declaration it belongs to, at the
-instantiation that fixes it. A `spawn` that infers a generic service's argument from its factory's arguments is
-an instantiation too, reported at the factory the `spawn` calls.
+A `spawn` that infers a generic service's argument from its factory's arguments is an instantiation too, reported
+at the factory the `spawn` calls.
 
-An argument written inside a generic type is judged there, with the type's parameters unknown. When it is refused
-whatever the parameter is (a function type; under `sendable` also a tuple, a plain record or a container
-instance), it is reported once, where the generic type writes it, and no instantiation of the type reports it
-again. When the verdict depends on the
-parameter (a bare `T`; an `immutable` argument whose graph reaches `T`; under `isolated`, an aggregate built over
-`T`, which is `unique` when `T` is), nothing is reported in the generic type and each instantiation is judged where
-it is written.
+An argument written inside a generic type `D` that is or mentions a parameter `P` of `D` is judged there, from
+`D`'s own `where` clause alone, and no instantiation of `D` judges it again. `D with X` is judged against `D`'s own
+bounds and nothing else.
+
+- A bare `P` meets `sendable` only when `D` declares `where P is sendable`, and meets `isolated` only when `D`
+  declares `where P is isolated`. Neither bound proves the other; a type that fills both kinds of position declares
+  both (`where P is sendable and isolated`).
+- An `immutable` aggregate over `P` meets `sendable` when every parameter it mentions is bounded `sendable` in `D`,
+  it is not `unique`, and the rest of its graph can be shared. A bare aggregate over `P` (a tuple, a container
+  instance, an instance of a generic record, a union) never meets `sendable`.
+- Under `isolated`, an aggregate over `P` is met only when it is `unique` whatever `P` is: a generic record
+  declared `is unique`, or one holding a `unique` part that does not come from `P`.
+- A function type, an interface type and a promise are refused in `D` whatever `P` is.
+
+Each refusal is reported once, where `D` writes the argument, however many instantiations `D` has, none included, and
+names the parameter, `D` and the bound that would prove it.
 
 A generic service's factory parameter or reply whose declared type is the bare type parameter of a `sendable`
 bound is judged by the bound alone, so a refused argument is reported once, by the bound. A type built over the
@@ -872,9 +880,9 @@ end 'main'
 error E3215: <fragment>:18:11: 'Holder' is `unique`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: a unique value moves between owners instead of being shared; bound 'T' with `isolated` instead
 ```
 
-<!-- test: a-sendable-bound-reaches-a-function-type-made-through-a-type-parameter -->
-`Outer uses T` holds `Pool with T`; `StepOuter` fills `T` with a function type, so the `Pool with Step` it makes
-breaks the `sendable` bound even though no typealias spells it.
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-once-whatever-it-is-instantiated-with -->
+`Outer uses T` holds `Pool with T` and declares no bound on `T`. The instance is refused once, where `Outer` writes
+it; `StepOuter` fills `T` with a function type and adds no report.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -908,12 +916,370 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:23:11: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+error E3215: <fragment>:14:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
-<!-- test: a-sendable-bound-judges-an-argument-holding-a-type-parameter-where-it-is-fixed -->
-`Pool with immutable Held` inside `Outer uses T` still holds `T`, so the template is not judged; `TextOuter` fixes
-`T` to `String`, and `Pool with immutable (Box with String)` meets the bound.
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-in-a-generic-type-nothing-instantiates -->
+`Outer uses T` declares no bound, so the `Pool with T` it writes is refused where `Outer` writes it although no
+program names an `Outer with` anything.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Inner = Pool with T
+
+	export var pool as Inner
+
+	static function create(pool Inner) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:11:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-once-for-two-instantiations -->
+`Outer with Tally` and `Outer with String` are two instantiations of the same unbounded `Outer`. The `Pool with T`
+it writes is refused once, where `Outer` writes it, and neither instantiation adds a report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Inner = Pool with T
+
+	export var pool as Inner
+
+	static function create(item T) returns Self
+		return Self{pool: Inner.create(item)}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+typealias TextOuter = Outer with String
+
+function main() returns ExitCode
+	let tally = TallyOuter.create(1)
+	let text = TextOuter.create("hello")
+	print("{tally.pool.item} {text.pool.item}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:13:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-accepts-a-type-parameter-its-owner-bounds-sendable -->
+`Outer` declares `where T is sendable`, which proves the `sendable` bound of the `Pool with T` it writes, so
+`Outer with Tally` is built and used.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is sendable
+	typealias Inner = Pool with T
+
+	export var pool as Inner
+
+	static function create(item T) returns Self
+		return Self{pool: Inner.create(item)}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+
+function main() returns ExitCode
+	let outer = TallyOuter.create(7)
+	print("{outer.pool.item}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: a-sendable-bound-on-the-owner-refuses-a-plain-record-at-its-own-instantiation-only -->
+`Outer` bounds `T` `sendable`, so `Outer with Job` is judged against that bound alone: the plain record is refused
+once, at `JobOuter`, naming `Outer`, and the `Pool with Job` it makes is not judged again.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Job
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is sendable
+	typealias Inner = Pool with T
+
+	export var pool as Inner
+
+	static function create(item T) returns Self
+		return Self{pool: Inner.create(item)}
+	end 'create'
+end 'Outer'
+
+typealias JobOuter = Outer with Job
+
+function main() returns ExitCode
+	let outer = JobOuter.create(Job.create(1))
+	print("{outer.pool.item.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:30:11: 'Job' is not sendable, so it cannot be 'T' of 'Outer', which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value or a service handle
+```
+
+<!-- test: a-sendable-bound-on-the-owner-refuses-a-function-type-at-its-own-instantiation-only -->
+`Outer` bounds `T` `sendable`, so `Outer with Step` is refused once, at `StepOuter`, naming `Outer`, and the
+`Pool with Step` it makes is not judged again.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is sendable
+	typealias Inner = Pool with T
+
+	export var pool as Inner
+
+	static function create(item T) returns Self
+		return Self{pool: Inner.create(item)}
+	end 'create'
+end 'Outer'
+
+typealias StepOuter = Outer with Step
+
+function main() returns ExitCode
+	let outer = StepOuter.create(function(n) gives n + 1)
+	let step = outer.pool.item
+	print("{step(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:23:11: 'Step' is a function type, so it cannot be 'T' of 'Outer', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: an-isolated-bound-on-the-owner-does-not-prove-a-sendable-position -->
+`Outer` declares `where T is isolated`, which admits `unique` types that `sendable` refuses, so it does not prove
+the `sendable` bound of the `Pool with T` it writes.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is isolated
+	typealias Inner = Pool with T
+
+	export var pool as Inner
+
+	static function create(pool Inner) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:11:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: an-isolated-bound-on-the-owner-does-not-prove-an-immutable-sendable-argument-over-it -->
+`Outer` bounds `T` `isolated`, which admits a `unique` `Token`, but `Pool with immutable Rows`, `Rows` being
+`Array with (T, Tally)`, is a `sendable` position and an `isolated` bound does not prove it. It is refused where `Outer`
+writes it, once, and `Outer with Token` adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is isolated
+	typealias Pair = (T, Tally)
+	typealias Rows = Array with Pair
+	typealias Inner = Pool with immutable Rows
+
+	export var pool as Inner
+
+	static function create(pool Inner) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+typealias TokenOuter = Outer with Token
+typealias TokenOuters = Array with TokenOuter
+
+function main() returns ExitCode
+	let outers = TokenOuters.create(0)
+	print("{outers.count()} {Token.create(1).n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:23:12: 'Outer.Rows' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-on-the-owner-does-not-prove-an-isolated-position -->
+`Outer` declares `where T is sendable`, which admits `immutable` aggregates that `isolated` refuses, so it does not
+prove the `isolated` bound of the `Cell with T` it writes.
+
+```maxon
+type Cell uses T where T is isolated
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Cell'
+
+type Outer uses T where T is sendable
+	typealias Inner = Cell with T
+
+	export var cell as Inner
+
+	static function create(cell Inner) returns Self
+		return Self{cell: cell}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:11:12: 'T' of 'Outer' is not bounded `isolated`, so it cannot be 'T' of 'Cell', which declares `where T is isolated`: declare `where T is isolated` on 'Outer'
+```
+
+<!-- test: a-generic-type-bounding-its-parameter-both-ways-fills-a-sendable-and-an-isolated-position -->
+`Outer` declares `where T is sendable and isolated`, so it proves both bounds: the `Pool with T` and the `Cell with T`
+it writes are met, and `Outer with Tally` runs.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Cell uses T where T is isolated
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Cell'
+
+type Outer uses T where T is sendable and isolated
+	typealias Sent = Pool with T
+	typealias Held = Cell with T
+
+	export var sent as Sent
+	export var held as Held
+
+	static function create(item T) returns Self
+		return Self{sent: Sent.create(item), held: Held.create(item)}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+
+function main() returns ExitCode
+	let outer = TallyOuter.create(5)
+	print("{outer.sent.item} {outer.held.item}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 5
+```
+
+<!-- test: a-sendable-bound-refuses-an-immutable-record-over-a-type-parameter-its-owner-does-not-bound -->
+`Pool with immutable Held`, `Held` being `Box with T`, inside `Outer uses T` is an `immutable` record over a `T` that `Outer` does not
+bound `sendable`. It is refused where `Outer` writes it, once, and `TextOuter` adds no report.
 
 ```maxon
 type Box uses T
@@ -944,30 +1310,24 @@ type Outer uses T
 end 'Outer'
 
 typealias TextOuter = Outer with String
-typealias TextBox = Box with String
-typealias TextPool = Pool with immutable TextBox
+typealias TextOuters = Array with TextOuter
 
 function main() returns ExitCode
-	let outer = TextOuter.create(TextPool.create(TextBox.create("hello")))
-	print("{outer.pool.item.item}\n")
+	let outers = TextOuters.create(0)
+	print("{outers.count()}\n")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-hello
+```maxoncstderr
+error E3215: <fragment>:20:12: 'Outer.Held' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
-<!-- test: a-sendable-bound-refuses-an-argument-holding-a-type-parameter-where-it-is-fixed -->
-`Outer with Step` makes `Outer`'s `Pool with immutable Held` a pool of `Box with Step`, whose graph reaches a
-function value. The refusal is reported at the instantiation that fixes the parameter.
+<!-- test: a-sendable-bound-accepts-an-immutable-record-over-a-type-parameter-its-owner-bounds -->
+`Outer` bounds `T` `sendable`, so `Pool with immutable Held`, `Held` being `Box with T`, meets the bound in `Outer`: every parameter it
+mentions is bounded, the `Box` is not `unique`, and the rest of its graph can be shared. `TextOuter` is judged
+against `Outer`'s own bound only.
 
 ```maxon
-typealias Tally = int(0 to 1024)
-typealias Step = function(Tally) returns Tally
-
 type Box uses T
 	export let item as T
 
@@ -984,13 +1344,178 @@ type Pool uses T where T is sendable
 	end 'create'
 end 'Pool'
 
-type Outer uses T
+type Outer uses T where T is sendable
 	typealias Held = Box with T
 	typealias Inner = Pool with immutable Held
 
 	export var pool as Inner
 
 	static function create(pool Inner) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+typealias TextOuter = Outer with String
+typealias TextOuters = Array with TextOuter
+
+function main() returns ExitCode
+	let outers = TextOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: a-sendable-bound-refuses-an-immutable-record-over-a-bounded-type-parameter-whose-graph-reaches-a-function-value -->
+`Outer` bounds `T` `sendable`, but `Box` also holds a function value, so `Pool with immutable Held`, `Held` being `Box with T`, cannot be
+shared whatever `T` is. It is refused where `Outer` writes it, once, and `Outer with String` adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Box uses T
+	export var item as T
+	export var step as Step
+
+	static function create(item T, step Step) returns Self
+		return Self{item: item, step: step}
+	end 'create'
+end 'Box'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is sendable
+	typealias Held = Box with T
+	typealias Inner = Pool with immutable Held
+
+	export var pool as Inner
+
+	static function create(pool Inner) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+typealias TextOuter = Outer with String
+typealias TextOuters = Array with TextOuter
+
+function main() returns ExitCode
+	let outers = TextOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:24:12: 'Outer.Held' cannot be shared with another thread, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: it is a `Outer.Held` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread
+```
+
+<!-- test: a-sendable-bound-refuses-an-immutable-container-over-a-type-parameter-its-owner-does-not-bound -->
+`Pool with immutable Held`, `Held` being `Array with T`, inside `Outer uses T` is an `immutable` container over a `T` that `Outer` does
+not bound `sendable`. It is refused where `Outer` writes it, once.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Held = Array with T
+	typealias Items = Pool with immutable Held
+
+	export var items as Items
+
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:12:12: 'Outer.Held' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-accepts-an-immutable-container-over-a-type-parameter-its-owner-bounds -->
+`Outer` bounds `T` `sendable`, so `Pool with immutable Held`, `Held` being `Array with T`, meets the bound in `Outer`, and
+`Outer with String` is judged against `Outer`'s own bound only.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is sendable
+	typealias Held = Array with T
+	typealias Items = Pool with immutable Held
+
+	export var items as Items
+
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Outer'
+
+typealias TextOuter = Outer with String
+typealias TextOuters = Array with TextOuter
+
+function main() returns ExitCode
+	let outers = TextOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: a-sendable-bound-refuses-an-immutable-tuple-over-a-type-parameter-its-owner-does-not-bound -->
+`Pool with immutable Pair`, `Pair` being `(T, Tally)`, inside `Outer uses T` is an `immutable` tuple over a `T` that
+`Outer` does not bound `sendable`. It is refused where `Outer` writes it, once, and `Outer with Step` adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Pair = (T, Tally)
+	typealias PairPool = Pool with immutable Pair
+
+	export var pool as PairPool
+
+	static function create(pool PairPool) returns Self
 		return Self{pool: pool}
 	end 'create'
 end 'Outer'
@@ -1005,13 +1530,46 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:32:11: 'Box with Step' cannot be shared with another thread, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: it is a `Box with Step` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread
+error E3215: <fragment>:15:12: '(T, Tally)' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
-<!-- test: a-sendable-bound-judges-an-immutable-container-over-a-type-parameter-where-it-is-fixed -->
-`Pool with immutable Items` inside `Wrapper uses T` is an `immutable` container over `T`, so whether its graph can be
-shared depends on `T`. It is not judged in `Wrapper`; `Wrapper with Tally` fixes `T` to a number, and the pool of
-`immutable Array with Tally` meets the bound.
+<!-- test: a-sendable-bound-names-the-first-declared-of-two-unbounded-parameters-an-argument-is-built-over -->
+`Pair` is `(U, T)` inside `Outer uses T, U`, so `Pool with immutable Pair` is built over two parameters `Outer` does not bound
+`sendable`. The refusal names `T`, the one `Outer` declares first, although `Pair` writes `U` first.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T, U
+	typealias Pair = (U, T)
+	typealias PairPool = Pool with immutable Pair
+
+	export var pool as PairPool
+
+	static function create(pool PairPool) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:12:12: '(U, T)' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-accepts-an-immutable-tuple-over-a-type-parameter-its-owner-bounds -->
+`Outer` bounds `T` `sendable`, so `Pool with immutable Pair`, `Pair` being `(T, Tally)`, meets the bound in `Outer`: every
+parameter the tuple mentions is bounded and the rest of its graph can be shared. `Outer with String` is judged against
+`Outer`'s own bound only.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -1024,23 +1582,23 @@ type Pool uses T where T is sendable
 	end 'create'
 end 'Pool'
 
-type Wrapper uses T
-	typealias Items = Array with T
-	typealias ItemsPool = Pool with immutable Items
+type Outer uses T where T is sendable
+	typealias Pair = (T, Tally)
+	typealias PairPool = Pool with immutable Pair
 
-	export var pool as ItemsPool
+	export var pool as PairPool
 
-	static function create(pool ItemsPool) returns Self
+	static function create(pool PairPool) returns Self
 		return Self{pool: pool}
 	end 'create'
-end 'Wrapper'
+end 'Outer'
 
-typealias TallyWrapper = Wrapper with Tally
-typealias TallyWrappers = Array with TallyWrapper
+typealias TextOuter = Outer with String
+typealias TextOuters = Array with TextOuter
 
 function main() returns ExitCode
-	let tallies = TallyWrappers.create(0)
-	print("{tallies.count()}\n")
+	let outers = TextOuters.create(0)
+	print("{outers.count()}\n")
 	return 0
 end 'main'
 ```
@@ -1051,13 +1609,18 @@ end 'main'
 0
 ```
 
-<!-- test: a-sendable-bound-refuses-an-immutable-container-over-a-type-parameter-where-it-is-fixed -->
-`Wrapper with Step` makes `Wrapper`'s `Pool with immutable Items` a pool of `Array with Step`, whose graph reaches a
-function value. The refusal is reported at the instantiation that fixes the parameter.
+<!-- test: a-sendable-bound-refuses-an-immutable-phantom-record-over-a-type-parameter-its-owner-does-not-bound -->
+`Tag uses T` holds only a `String`, so its graph never reaches `T`, but `Tagged` is `Tag with T` and so mentions `T`.
+`Pool with immutable Tagged` inside `Outer uses T` is refused where `Outer` writes it, once, and `TextOuter` adds no report.
 
 ```maxon
-typealias Tally = int(0 to 1024)
-typealias Step = function(Tally) returns Tally
+type Tag uses T
+	export let s as String
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Tag'
 
 type Pool uses T where T is sendable
 	export var item as T
@@ -1067,28 +1630,77 @@ type Pool uses T where T is sendable
 	end 'create'
 end 'Pool'
 
-type Wrapper uses T
-	typealias Items = Array with T
-	typealias ItemsPool = Pool with immutable Items
+type Outer uses T
+	typealias Tagged = Tag with T
+	typealias Inner = Pool with immutable Tagged
 
-	export var pool as ItemsPool
+	export var pool as Inner
 
-	static function create(pool ItemsPool) returns Self
+	static function create(pool Inner) returns Self
 		return Self{pool: pool}
 	end 'create'
-end 'Wrapper'
+end 'Outer'
 
-typealias StepWrapper = Wrapper with Step
-typealias StepWrappers = Array with StepWrapper
+typealias TextOuter = Outer with String
+typealias TextOuters = Array with TextOuter
 
 function main() returns ExitCode
-	let steps = StepWrappers.create(0)
-	print("{steps.count()}\n")
+	let outers = TextOuters.create(0)
+	print("{outers.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:24:11: 'Array with Step' cannot be shared with another thread, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: it is a `Array with Step` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread
+error E3215: <fragment>:20:12: 'Outer.Tagged' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-an-immutable-phantom-record-over-a-function-type-over-a-type-parameter-its-owner-does-not-bound -->
+`Tag uses T` holds only a `String`, so its graph never reaches `T`, but `Tagged` is `Tag with Maker` and `Maker` is a function type over `T`, so `Tagged` mentions `T`.
+`Pool with immutable Tagged` inside `Outer uses T` is refused where `Outer` writes it, once.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Tag uses T
+	export let s as String
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Tag'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Maker = function(T) returns Tally
+	typealias Tagged = Tag with Maker
+	typealias Inner = Pool with immutable Tagged
+
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function f(a Inner) returns Tally
+		_ = a
+		return self.n
+	end 'f'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:23:12: 'Outer.Tagged' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
 <!-- test: a-sendable-bound-refuses-a-function-type-through-a-nested-alias -->
@@ -1573,10 +2185,171 @@ end 'main'
 error E3215: <fragment>:12:12: 'Wrapper.Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
 ```
 
-<!-- test: a-sendable-bound-reports-a-fixed-and-an-open-argument-of-one-generic-type-each-where-it-is-decided -->
-`Outer` writes `Pool with Step`, refused there, and `Pool with T`, left to each instantiation. `Outer with Step` makes
-both the same pool, and each is still reported where it is decided: one in `Outer`, one at `Outer with Step`,
-whichever field is declared first.
+<!-- test: a-recursive-function-alias-held-in-nested-containers-compiles -->
+A function alias that names itself in its own parameter list is a finite type. Finding which type parameters an
+argument mentions looks inside function types, and meets `Loop` again inside `Loop`: it answers once per alias
+and stops there, so the program compiles and runs.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Loop = function(Loop) returns Tally
+typealias Loops = Array with (Array with Loop)
+
+function main() returns ExitCode
+	let l = Loops.create(0)
+	print("{l.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: a-sendable-bound-refuses-each-of-two-mutually-recursive-function-aliases-over-a-type-parameter -->
+`Loop2` and `Loop` name each other and only `Loop` names `T`, so both mention `T`, whichever of them the walk meets first.
+`First` is `Tag with Loop` and `Second` is `Tag with Loop2`; each `Pool with immutable` of them is refused where `Outer` writes it.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Tag uses P
+	export let s as String
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Tag'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Loop2 = function(Loop) returns Tally
+	typealias Loop = function(Loop2, T) returns Tally
+	typealias First = Tag with Loop
+	typealias Second = Tag with Loop2
+	typealias A = Pool with immutable First
+	typealias B = Pool with immutable Second
+
+	export var a as A
+	export var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:25:12: 'Outer.First' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+error E3215: <fragment>:26:12: 'Outer.Second' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-names-the-first-declared-parameter-for-each-member-of-a-cycle -->
+`Loop2` and `Loop` name each other, and between them they mention both `T` and `U`, neither of which `Outer` bounds
+`sendable`. Each `Pool with immutable` of `First` or `Second` is refused where `Outer` writes it, and both name `T`, the
+one `Outer` declares first, whichever of the two aliases is written first.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Tag uses P
+	export let s as String
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Tag'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T, U
+	typealias Loop2 = function(U, Loop) returns Tally
+	typealias Loop = function(T, Loop2) returns Tally
+	typealias First = Tag with Loop
+	typealias Second = Tag with Loop2
+	typealias A = Pool with immutable Second
+	typealias B = Pool with immutable First
+
+	export var a as A
+	export var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:25:12: 'Outer.Second' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+error E3215: <fragment>:26:12: 'Outer.First' is built over 'T' of 'Outer', which is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-function-type-over-a-type-parameter-nested-in-a-container-in-a-generic-type -->
+`Maker` is a function type over `T`, so `Pool with Maker` mentions `T` and is judged where `Outer` writes it, although it sits inside `Array`.
+It is refused once, where `Outer` writes it, whatever `Outer` is instantiated with.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Maker = function(T) returns Tally
+	typealias Pools = Array with (Pool with Maker)
+
+	export var pools as Pools
+
+	static function create(pools Pools) returns Self
+		return Self{pools: pools}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+typealias TallyOuters = Array with TallyOuter
+
+function main() returns ExitCode
+	let o = TallyOuters.create(0)
+	print("{o.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:14:12: 'Outer.Maker' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-reports-a-fixed-and-an-open-argument-of-one-generic-type-in-the-generic-type -->
+`Outer` writes `Pool with Step`, refused because a function type is refused whatever `T` is, and `Pool with T`,
+refused because `Outer` declares no bound on `T`. Both are reported where `Outer` writes them, in source order, and
+`Outer with Step` adds no report.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -1613,12 +2386,12 @@ end 'main'
 ```
 ```maxoncstderr
 error E3215: <fragment>:14:12: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
-error E3215: <fragment>:25:11: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+error E3215: <fragment>:15:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
-<!-- test: a-sendable-bound-reaches-an-instance-held-in-a-container-of-a-generic-type -->
-An instance a generic type holds only as the element of a container is an instantiation too: `Outer with Step`
-makes `Outer`'s `Array with (Pool with T)` an array of pools of `Step`, refused where `T` is fixed.
+<!-- test: a-sendable-bound-on-the-owner-refuses-a-function-type-whose-pool-it-holds-in-a-container -->
+`Outer` bounds `T` `sendable`, so the `Pool with T` it holds as the element of a container is met in `Outer`.
+`Outer with Step` is refused at its own instantiation, against `Outer`'s own bound, and no line names `Pool`.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -1632,7 +2405,7 @@ type Pool uses T where T is sendable
 	end 'create'
 end 'Pool'
 
-type Outer uses T
+type Outer uses T where T is sendable
 	typealias Inner = Pool with T
 	typealias Inners = Array with Inner
 
@@ -1652,11 +2425,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:24:11: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+error E3215: <fragment>:24:11: 'Step' is a function type, so it cannot be 'T' of 'Outer', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
 ```
 
-<!-- test: a-sendable-bound-reaches-an-instance-held-in-a-tuple-of-a-generic-type -->
-An instance a generic type holds only as the element of a tuple is reached the same way.
+<!-- test: a-sendable-bound-on-the-owner-refuses-a-function-type-whose-pool-it-holds-in-a-tuple -->
+`Outer` bounds `T` `sendable`, so the `Pool with T` it holds as the element of a tuple is met in `Outer` too, and
+`Outer with Step` is refused once, at its own instantiation.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -1670,7 +2444,7 @@ type Pool uses T where T is sendable
 	end 'create'
 end 'Pool'
 
-type Outer uses T
+type Outer uses T where T is sendable
 	typealias Inner = Pool with T
 	typealias Pair = (Inner, Tally)
 
@@ -1692,7 +2466,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:24:11: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+error E3215: <fragment>:24:11: 'Step' is a function type, so it cannot be 'T' of 'Outer', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
 ```
 
 <!-- test: a-sendable-bound-reports-an-instance-a-generic-type-holds-in-a-container-once -->
@@ -1735,6 +2509,218 @@ end 'main'
 ```
 ```maxoncstderr
 error E3215: <fragment>:14:12: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-in-a-method-body -->
+`Outer uses T` writes `Pool with T` and uses it in a method body. `Outer` declares no bound, so the instance is
+refused once, where `Outer` writes it, and `StepOuter` adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Inner = Pool with T
+
+	export var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	function wrap(item T) returns T
+		let pool = Inner.create(item)
+		return pool.item
+	end 'wrap'
+end 'Outer'
+
+typealias StepOuter = Outer with Step
+
+function main() returns ExitCode
+	let outer = StepOuter.create()
+	let step = outer.wrap(function(n) gives n + 1)
+	print("{step(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:14:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-held-only-by-a-function-type-field -->
+The only holder of `Pool with T` is the return type of a function-typed field. The instance is refused once, where
+`Outer` writes it.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Inner = Pool with T
+	typealias Maker = function(Tally) returns Inner
+
+	export var make as Maker
+
+	static function create(make Maker) returns Self
+		return Self{make: make}
+	end 'create'
+end 'Outer'
+
+typealias StepOuter = Outer with Step
+typealias StepOuters = Array with StepOuter
+
+function main() returns ExitCode
+	let outers = StepOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:14:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-held-only-as-a-promise-payload -->
+The only holder of `Pool with T` is the payload of a promise a field holds. The instance is refused once, where
+`Outer` writes it, although nothing instantiates `Outer`.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Inner = Pool with T
+	typealias Pending = Promise with Inner
+
+	export var pending as Pending
+
+	static function create(pending Pending) returns Self
+		return Self{pending: pending}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:11:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-under-a-phantom-parameter -->
+`Phantom uses P` holds no value of `P`, so `Phantom with (Pool with T)` is a record of a number. The `Pool with T`
+inside it is still written in `Outer`, which declares no bound, so it is refused there, once.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Phantom uses P
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Phantom'
+
+type Outer uses T
+	typealias Held = Phantom with (Pool with T)
+
+	export var held as Held
+
+	static function create() returns Self
+		return Self{held: Held.create()}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+
+function main() returns ExitCode
+	let outer = TallyOuter.create()
+	print("{outer.held.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:21:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-under-an-interface-base -->
+The only holder of `Pool with T` is the argument of an interface instance, `Seq with (Pool with T)`, that `Outer`
+writes. The `Pool with T` is refused once, where `Outer` writes it, and `Outer with Step` adds no report. No type
+conforms to `Seq`: a use of an interface states the binding its conformers settled, so a conformer could not fill
+`Element` with a `Pool`.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Element
+	function first() returns Element
+end 'Seq'
+
+type Outer uses T
+	typealias Items = Seq with (Pool with T)
+
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function inspect(items Items) returns Tally
+		_ = items
+		return self.n
+	end 'inspect'
+end 'Outer'
+
+typealias StepOuter = Outer with Step
+typealias StepOuters = Array with StepOuter
+
+function main() returns ExitCode
+	let outers = StepOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:18:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
 <!-- test: a-sendable-bound-names-a-function-alias-through-an-instance-of-a-generic-type-as-unknown -->
@@ -1872,6 +2858,344 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:17:33: Unknown type 'Shape.Items'
+```
+
+<!-- test: a-sendable-bound-accepts-an-associated-type-in-an-extension-of-an-interface-bound-to-a-value -->
+`extension Seq` writes `Pool with Item`, and `Jobs` binds `Item` to a `Tally`, which is a value. The alias is judged as `Pool with Tally` for that conformer, and it meets the bound.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+extension Seq
+	typealias SP = Pool with Item
+
+	function pooled() returns Tally
+		let p = SP.create(self.first())
+		_ = p
+		return 1
+	end 'pooled'
+end 'Seq'
+
+type Jobs implements Seq with Tally
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Tally
+		return self.n
+	end 'first'
+end 'Jobs'
+
+function main() returns ExitCode
+	print("{Jobs.create(3).pooled()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+
+<!-- test: a-sendable-bound-refuses-an-associated-type-in-an-extension-of-an-interface-bound-to-a-plain-record -->
+An interface's associated type is not a type parameter: `extension Seq` declares `SP` once per conformer, with `Item` replaced by that conformer's binding. `Tasks` binds `Item` to a plain record `Job`, so its `SP` is `Pool with Job`, refused where the extension writes the alias.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Job
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+extension Seq
+	typealias SP = Pool with Item
+
+	function pooled() returns Tally
+		let p = SP.create(self.first())
+		_ = p
+		return 1
+	end 'pooled'
+end 'Seq'
+
+type Tasks implements Seq with Job
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Job
+		return Job.create(self.n)
+	end 'first'
+end 'Tasks'
+
+function main() returns ExitCode
+	print("{Tasks.create(4).pooled()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:25:12: 'Job' is not sendable, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value or a service handle
+```
+
+
+<!-- test: a-sendable-bound-refuses-an-associated-type-in-an-extension-of-an-interface-once-for-the-conformer-that-fails -->
+The same `extension Seq` with two conformers: `Jobs` binds `Item` to a `Tally` and meets the bound, `Tasks` binds it to a plain record `Job` and does not. The refusal is reported once, for the conformer that fails.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Job
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+extension Seq
+	typealias SP = Pool with Item
+
+	function pooled() returns Tally
+		let p = SP.create(self.first())
+		_ = p
+		return 1
+	end 'pooled'
+end 'Seq'
+
+type Jobs implements Seq with Tally
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Tally
+		return self.n
+	end 'first'
+end 'Jobs'
+
+type Tasks implements Seq with Job
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function first() returns Job
+		return Job.create(self.n)
+	end 'first'
+end 'Tasks'
+
+function main() returns ExitCode
+	print("{Jobs.create(3).pooled()} {Tasks.create(4).pooled()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:25:12: 'Job' is not sendable, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value or a service handle
+```
+
+
+<!-- test: a-sendable-bound-refuses-an-associated-type-bound-to-a-generic-conformers-unbounded-parameter -->
+`Box` binds `Item` to its own parameter `T` and declares no `where` clause, so the alias in `extension Seq` is judged from `Box`'s clause alone, and `T` is not bounded `sendable`. It is reported once, although `Box` is never instantiated.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+extension Seq
+	typealias SP = Pool with Item
+
+	function pooled() returns Tally
+		let p = SP.create(self.first())
+		_ = p
+		return 1
+	end 'pooled'
+end 'Seq'
+
+type Box uses T implements Seq with T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function first() returns T
+		return self.item
+	end 'first'
+end 'Box'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:17:12: 'T' of 'Box' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Box'
+```
+
+
+<!-- test: a-sendable-bound-refuses-an-associated-type-bound-to-a-generic-conformers-unbounded-parameter-once-for-two-instantiations -->
+The same unbounded `Box`, instantiated at `Tally` and at `String` and used. The refusal comes from `Box`'s own clause, so it is reported once, whatever the instantiations.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+extension Seq
+	typealias SP = Pool with Item
+
+	function pooled() returns Tally
+		let p = SP.create(self.first())
+		_ = p
+		return 1
+	end 'pooled'
+end 'Seq'
+
+type Box uses T implements Seq with T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function first() returns T
+		return self.item
+	end 'first'
+end 'Box'
+
+typealias TallyBox = Box with Tally
+typealias TextBox = Box with String
+
+function main() returns ExitCode
+	print("{TallyBox.create(3).pooled()} {TextBox.create("a").pooled()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:17:12: 'T' of 'Box' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Box'
+```
+
+
+<!-- test: a-sendable-bound-accepts-an-associated-type-bound-to-a-generic-conformers-bounded-parameter -->
+`Box` binds `Item` to its parameter `T` and declares `where T is sendable`, so the alias in `extension Seq` is judged from that clause and meets the bound; `Box with Tally` runs.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+interface Seq uses Item
+	function first() returns Item
+end 'Seq'
+
+extension Seq
+	typealias SP = Pool with Item
+
+	function pooled() returns Tally
+		let p = SP.create(self.first())
+		_ = p
+		return 1
+	end 'pooled'
+end 'Seq'
+
+type Box uses T implements Seq with T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function first() returns T
+		return self.item
+	end 'first'
+end 'Box'
+
+typealias TallyBox = Box with Tally
+
+function main() returns ExitCode
+	print("{TallyBox.create(3).pooled()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
 ```
 
 <!-- test: a-sendable-bound-accepts-a-string -->
@@ -2209,6 +3533,63 @@ end 'main'
 1
 ```
 
+<!-- test: a-sendable-bound-accepts-the-handle-of-a-generic-service-over-a-type-parameter-its-owner-does-not-bound -->
+`Counter.handle with T` is the handle of a service instance, so it is sendable as it stands, whatever `T` is. `Outer`
+bounds nothing and `Pool with Counter.handle with T` meets the bound there.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Counter uses T
+	var item as T
+	var seen as Tally
+
+	static function create(item T) returns Self
+		return Self{item: item, seen: 0}
+	end 'create'
+
+	export function bump() returns Tally
+		self.seen = self.seen + 1
+		return self.seen
+	end 'bump'
+end 'Counter'
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Handles = Pool with Counter.handle with T
+
+	export var handles as Handles
+
+	static function create(handles Handles) returns Self
+		return Self{handles: handles}
+	end 'create'
+end 'Outer'
+
+typealias TextOuter = Outer with String
+typealias TextOuters = Array with TextOuter
+
+function main() returns ExitCode
+	let outers = TextOuters.create(0)
+	let counter = spawn Counter.create("text")
+	let seen = try await counter.bump() otherwise 0
+	print("{outers.count()} {seen}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 1
+```
+
 <!-- test: a-sendable-bound-accepts-an-immutable-record-of-text-and-numbers -->
 `immutable Job` stands as sendable, and a `Job`'s graph is a `String` and an array of numbers, which a share walk
 marks, so the bound holds.
@@ -2531,6 +3912,58 @@ end 'main'
 error E3215: <fragment>:27:28: 'Job' is not sendable, so it cannot be 'T' of 'Keeper', which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value or a service handle
 ```
 
+<!-- test: a-generic-function-called-with-its-callers-type-parameter-is-refused-at-the-call-before-any-bound -->
+A method of `Outer uses T` calls `startKeeper(self.item)`, which would infer `U` as `Outer`'s own `T`. A generic
+function's type parameter is never inferred as another declaration's type parameter, so the call is refused in
+`Outer`, where the author must change it, and no copy of `startKeeper` exists for the bound of `Keeper` to judge.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Keeper uses T where T is sendable
+	var item as T
+	var seen as Tally
+
+	static function create(item T) returns Self
+		return Self{item: item, seen: 0}
+	end 'create'
+
+	export function bump() returns Tally
+		self.seen = self.seen + 1
+		return self.seen
+	end 'bump'
+end 'Keeper'
+
+function startKeeper(item U) uses U returns Tally
+	let keeper = spawn Keeper.create(item)
+	return try await keeper.bump() otherwise 0
+end 'startKeeper'
+
+type Outer uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function start() returns Tally
+		let seen = startKeeper(self.item)
+		return seen
+	end 'start'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+
+function main() returns ExitCode
+	let outer = TallyOuter.create(1)
+	print("{outer.start()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3181: <fragment>:31:14: type parameter 'U' of 'startKeeper' cannot be 'type parameter': a generic function's type parameter is inferred as a number (a ranged typealias included), `String`, `bool`, `Character`, a `type` declaration or an enum; a generic instance, whichever typealias names it, is none of these
+```
+
 <!-- test: a-sendable-service-bound-spawns-with-a-string -->
 A `String` is a value, so `spawn Keeper.create("text")` infers `Keeper with String`, which meets the bound,
 and the service runs.
@@ -2800,10 +4233,10 @@ end 'main'
 error E3215: <fragment>:14:12: 'Wrapper.Step' is not isolated, so it cannot be 'T' of 'Cell', which declares `where T is isolated`: the bound takes a value, a service handle or a `unique` type
 ```
 
-<!-- test: an-isolated-bound-judges-an-aggregate-over-a-type-parameter-where-it-is-fixed -->
-`Cell with Held` inside `Outer uses T` holds a `Box with T`, which is `unique` when `T` is, so the verdict depends on
-`T` and `Outer` is not judged. `Outer with Token` fixes `T` to a `unique` type, and the `Box with Token` meets the
-bound.
+<!-- test: an-isolated-bound-refuses-an-aggregate-over-a-type-parameter-its-owner-does-not-bound -->
+`Cell with (Box with T)` inside `Outer uses T` holds a plain `Box` over `T`, which is not `unique` whatever `T` is.
+It is refused where `Outer` writes it, once, and `Outer with Token` adds no report even though that `Box` would be
+`unique`.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -2833,8 +4266,7 @@ type Cell uses T where T is isolated
 end 'Cell'
 
 type Outer uses T
-	typealias Held = Box with T
-	typealias HeldCell = Cell with Held
+	typealias HeldCell = Cell with (Box with T)
 
 	export var cell as HeldCell
 
@@ -2852,27 +4284,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-0
+```maxoncstderr
+error E3215: <fragment>:29:12: 'Box with T' is not isolated, so it cannot be 'T' of 'Cell', which declares `where T is isolated`: the bound takes a value, a service handle or a `unique` type
 ```
 
-<!-- test: an-isolated-bound-refuses-an-aggregate-over-a-type-parameter-where-it-is-fixed -->
-`Outer with Tally` makes `Outer`'s `Cell with Held` a cell of `Box with Tally`, which is neither a value nor `unique`.
-The refusal is reported at the instantiation that fixes the parameter.
+<!-- test: an-isolated-bound-refuses-an-aggregate-over-a-type-parameter-its-owner-bounds-isolated -->
+`Outer` bounds `T` `isolated`, but a plain `Box` over `T` is neither a value nor `unique`, so `Cell with (Box with T)`
+is refused where `Outer` writes it, once. `Outer with Tally` is judged against `Outer`'s own bound only.
 
 ```maxon
 typealias Tally = int(0 to 1024)
-
-type Token is unique
-	export var n as Tally
-
-	static function create(n Tally) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Token'
 
 type Box uses T
 	export var item as T
@@ -2890,30 +4311,76 @@ type Cell uses T where T is isolated
 	end 'create'
 end 'Cell'
 
-type Outer uses T
-	typealias Held = Box with T
-	typealias HeldCell = Cell with Held
+type Outer uses T where T is isolated
+	typealias Held = Cell with (Box with T)
 
-	export var cell as HeldCell
+	export var cell as Held
 
-	static function create(cell HeldCell) returns Self
+	static function create(cell Held) returns Self
 		return Self{cell: cell}
 	end 'create'
 end 'Outer'
 
-typealias TallyBox = Box with Tally
 typealias TallyOuter = Outer with Tally
 typealias TallyOuters = Array with TallyOuter
 
 function main() returns ExitCode
 	let tallies = TallyOuters.create(0)
-	let box = TallyBox.create(0)
-	print("{tallies.count()} {box.item}\n")
+	print("{tallies.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:40:11: 'TallyBox' is not isolated, so it cannot be 'T' of 'Cell', which declares `where T is isolated`: the bound takes a value, a service handle or a `unique` type
+error E3215: <fragment>:21:12: 'Box with T' is not isolated, so it cannot be 'T' of 'Cell', which declares `where T is isolated`: the bound takes a value, a service handle or a `unique` type
+```
+
+<!-- test: an-isolated-bound-accepts-a-unique-aggregate-over-a-type-parameter-its-owner-does-not-bound -->
+A generic `Box` declared `is unique` is `unique` whatever `T` is, so `Cell with (Box with T)` meets the `isolated` bound
+inside an unbounded `Outer`, and `Outer with Tally` adds nothing.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Box is unique uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+type Cell uses T where T is isolated
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Cell'
+
+type Outer uses T
+	typealias Held = Cell with (Box with T)
+
+	export var cell as Held
+
+	static function create(cell Held) returns Self
+		return Self{cell: cell}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+typealias TallyOuters = Array with TallyOuter
+
+function main() returns ExitCode
+	let tallies = TallyOuters.create(0)
+	print("{tallies.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
 ```
 
 <!-- test: an-isolated-bound-accepts-a-record-packed-in-a-word -->
@@ -3204,9 +4671,9 @@ end 'main'
 error E3011: <fragment>:10:33: Unknown type 'Bogus.Inner'
 ```
 
-<!-- test: an-isolated-bound-reaches-an-instance-held-in-a-container-of-a-generic-type -->
-An `isolated`-bounded instance a generic type holds only as the element of a container is judged where the
-parameter is fixed.
+<!-- test: an-isolated-bound-on-the-owner-refuses-a-plain-container-whose-cell-it-holds-in-a-container -->
+`Outer` bounds `T` `isolated`, so the `Cell with T` it holds in a container is met in `Outer`. `Outer with Tallies`
+is refused at its own instantiation, against `Outer`'s own bound, and no line names `Cell`.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -3220,7 +4687,7 @@ type Cell uses T where T is isolated
 	end 'create'
 end 'Cell'
 
-type Outer uses T
+type Outer uses T where T is isolated
 	typealias Inner = Cell with T
 	typealias Inners = Array with Inner
 
@@ -3240,6 +4707,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:24:11: 'Tallies' is not isolated, so it cannot be 'T' of 'Cell', which declares `where T is isolated`: the bound takes a value, a service handle or a `unique` type
+error E3215: <fragment>:24:11: 'Tallies' is not isolated, so it cannot be 'T' of 'Outer', which declares `where T is isolated`: the bound takes a value, a service handle or a `unique` type
 ```
 
