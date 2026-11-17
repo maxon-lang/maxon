@@ -17,7 +17,7 @@ Your answer becomes binding on every contributor, so the thinking is the job.
 
 Read `AGENTS.md` first. Its design principles bind you: Maxon never avoids a breaking change; a
 deterministic error that names the fix beats slower code; a syntax error is the parser's generic error.
-For compiler questions, read `maxon-bin/AGENTS.md` too. Then read every `design` issue on the Maxon
+For compiler questions, read `maxon-bin/AGENTS.md` and `.claude/skills/maxon-coder/compiler.md` too. Then read every `design` issue on the Maxon
 Roadmap and every wiki `Design-*` page the question touches (`gh issue view <n> -R maxon-lang/maxon`;
 clone `https://github.com/maxon-lang/maxon.wiki.git` into your scratchpad), and the code and specs the
 work is about. Read as much as the answer needs; do not rule or plan on a summary.

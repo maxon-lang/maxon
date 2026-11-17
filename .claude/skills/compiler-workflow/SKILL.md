@@ -76,7 +76,7 @@ exactly one byte for that reason alone — a difference that reads as a miscompi
 ## Hosting the x64-linux lane locally
 
 `--target=` cross-compiles the PROGRAMS and never hosts the compiler — that rule, and the defect that
-proved it, are in `maxon-bin/AGENTS.md`. To actually host the lane:
+proved it, are in the `maxon-tools` skill. To actually host the lane:
 
 ⇒ **CROSS-BUILD ONCE AND THEN STAY INSIDE WSL.** `stdlib/` resolves by walking UP from the executable,
 so a binary under `temp/` in this tree reaches this tree's library. WSL starts in the Windows working

@@ -122,9 +122,13 @@ the grammar accepts.
 This file holds what binds EVERY tree in the repository. The compiler is a project inside it, with its
 own build, gates and traps, and those rules load with it:
 
-- **`maxon-bin/AGENTS.md`** — the compiler: how to build it, the seed, one self-compile (two only for an emitted-runtime change), the
-  `maxon` MCP tools, targets, `spec-test`, `tests/`, `fmt`, the error-code registry, spec fragments.
-  `stdlib/`, `specs/`, `tests/`, `scripts/` and `examples/` import it, because work there is compiler work.
+- **`maxon-bin/AGENTS.md`** — the compiler: how to build and lint it, the seed, one self-compile (two only
+  for an emitted-runtime change), the compiler that must live in the tree, the targets, and where the rest
+  lives. `stdlib/`, `specs/`, `tests/`, `scripts/` and `examples/` import it, because work there is compiler work.
+- **the `maxon-tools` skill** — the `maxon` MCP tools, `spec-test`'s filters and flags, running a suite by
+  hand and reading its result, `maxon fmt`, the cross and wasm lanes by hand.
+- **the `maxon-coder` skill** — writing Maxon; with it, `compiler.md` (compiler and `runtime/` source,
+  memory safety, ranged aliases, the error-code registry) and `specs.md` (writing and re-pinning spec cases).
 - **the `compiler-workflow` skill** — the long procedures: the `run_scale_test` ladder, `fixpoint.sh`,
   hosting the x64-linux lane under WSL, staging `vendor/`.
 - **the skills** — each named skill is `.claude/skills/<name>/SKILL.md`. An agent that cannot invoke a

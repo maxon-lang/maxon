@@ -22,7 +22,7 @@ reading. Cite them as references, never as decisions already made.
 | Cancellation | Go | cooperative cancellation; a `SharedValue` read stands in for an atomic or `context` | `Design-verona-regions` |
 | Network poller | Go netpoll | `netpollinit`, `netpollBreak`, `netpoll` | `IR/Std/StdDialect.maxon` |
 | Allocator | Go mheap / mcentral | 68 size classes, 8 KiB chunks, `lfstack`, per-processor span caches | `specs/slab-allocator.md`; `docs/internals/memory-allocator.md` |
-| Reference counting | Swift, Perceus, Lobster | reference counting with elision, not a borrow checker | `maxon-bin/AGENTS.md` |
+| Reference counting | Swift, Perceus, Lobster | reference counting with elision, not a borrow checker | `.claude/skills/maxon-coder/compiler.md` |
 | Hashing | Go `hash/maphash` | `Hasher` in maphash's shape; per-process seeds; `==` on a Map or Set refused | `stdlib/Hasher.maxon`; #78; wiki `Design-hashing` |
 | Array growth | Go `nextslicecap` | double below 256 elements, then ease toward 1.25× | `docs/optimization-log.md` |
 | Sorting | Rust driftsort (Peters and Bergdoll, 2024) | the same family | `stdlib/helpers/sort/driftsort.maxon` |

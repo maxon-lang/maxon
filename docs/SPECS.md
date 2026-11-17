@@ -134,8 +134,9 @@ Three things pin what the compiler emits:
   fence is always qualified, and the target is one of `x64-windows`, `x64-linux`, `arm64-macos` or `arm64-linux`: an
   unqualified fence, or `wasm32-wasi`, which renders no Target IR, is refused, naming the case. A pin is
   compared against the COMPILE, so a lane this host cannot run (`--target=arm64-macos` on Windows) still
-  checks it. A case carrying any `TargetIr` block always compiles and runs on its own. The cases that pin
-  emitted code live in `ir-specs/`.
+  checks it, and its cases report NOTRUN. A case carrying any `TargetIr` block always compiles and runs on its own. The cases that pin
+  emitted code live in `ir-specs/`, and `specs/` pins none. CI runs `spec-test ir-specs` natively on every
+  lane beside the suite, and each Linux runner also compiles and compares every other native lane's pins.
 
   The blocks of an inline slab pop, where an asynchronous stop is declined, carry `[async-unsafe]` after their
   labels. A function a stop can land in ends with one `async-unsafe [a, b)` line per code range those blocks
@@ -346,6 +347,29 @@ line:
 | `<!-- runs: alone -->` | Run the case's program with no other case's program running beside it: the harness runs a spec's `alone` cases as a job of their own, after every other job has finished, and starts nothing else while it runs. It is for a program whose peak memory is set by a runtime limit, such as a green thread's stack grown to its 1 GiB maximum; `alone` is the only value |
 | `<!-- tier: stdlib -->`, `<!-- tier: stdlib/<directory> -->` | Compile the case as library-tier source: its files are staged inside a private copy of `stdlib/`, so the case may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`, `__ManagedMemory`, `cstring`; E3185 elsewhere) and sees the unmarked declarations of `stdlib/` that a program outside it cannot (E3008). An unmarked declaration is visible in its declaring directory's subtree, so `stdlib` stages the case at the `stdlib/` root, where it sees the root files' unmarked declarations, and `stdlib/<directory>` (for example `stdlib/helpers/tls`) stages it in that directory, where it sees that directory's as well as the root files'; a directory that does not exist is refused. It is for a case whose subject is that surface; a case that only uses one reaches it through the safe standard-library API. The case runs in a program of its own. |
 | `<!-- process: own -->` | Keep the case out of every batch program: it compiles and runs in a program of its own. It is for a case that observes state the whole process shares, which no check of its source can see (a named resource an earlier case still holds, a per-process counter). `runs: alone` also changes when the case is scheduled; `own` changes only which process it runs in, and is the only value |
+
+#### Which lanes a case excludes
+
+The `unsupported-targets` marker names the lanes that cannot serve a case, never the ones that can, so a
+backend that lands inherits every unmarked case. A case that runs nowhere is fixed or deleted.
+
+A lane with no substrate for a family answers **E3104**, and the harness reports that case as a counted
+SKIP naming it; a marker removes the case from selection with nothing said anywhere. So a case the compiler
+already refuses carries no marker: on `wasm32-wasi`, async and green threads, the uptime and thread-CPU
+clocks, file and directory IO and console stdin are counted skips. A marker is for a case that would
+otherwise go RED — an ISA-specific codegen reading (register pressure, `.rdata`, emitted symbol names), a
+POSIX or Windows shell spelling, a diagnostic displaced by E3104 — and the prose above it states its reason.
+E3104 waits for the Maxon-tier checks, so only a diagnostic decided after them (`InsertRangeChecks`' E3005,
+the backend's, a missing intrinsic's E3004) is displaced by it.
+
+A run case whose marker leaves exactly one lane FAILS there on an E3104 (`SpecTest.runsOnOneLane`): it exists
+for that lane, which is what lets a `runs-on-wasm` case go red.
+
+Subprocess is the exception: a target that can never host a child process answers **E3074**, ahead of E3104
+(`requireTargetSupportsCallee`), and only E3104 is a SKIP, so a subprocess case carries
+`<!-- unsupported-targets: wasm32-wasi -->`.
+
+#### Blocks
 
 A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode `, one each of the portable
 ` ```stdout `, ` ```stderr ` and ` ```maxoncstderr `, one target-qualified block per target, and one

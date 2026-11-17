@@ -23,10 +23,10 @@ defect: fix the doc in the same change (the `documenter` skill owns that step).
 
 | Where | Extra rules |
 |---|---|
-| `maxon-bin/` — the compiler | Read `maxon-bin/AGENTS.md` first. A diagnostic names `ErrorCode.<case>`, never `"E3010"`; `maxon-bin/Compiler/ErrorCodeRegistry.maxon` is hand-authored — add a case there. A change to emitted runtime (`Compiler/Runtime/` or `Compiler/Targets/*/*Runtime*.maxon`) needs two self-compiles; `maxon run build` does both by itself. |
-| `runtime/` | The tier rules in `maxon-bin/AGENTS.md`: no managed values (E3153), a restated geometry figure owes its pin. |
+| `maxon-bin/` — the compiler | Read `maxon-bin/AGENTS.md` and this skill's `compiler.md` first. A diagnostic names `ErrorCode.<case>`, never `"E3010"`; `maxon-bin/Compiler/ErrorCodeRegistry.maxon` is hand-authored — add a case there. A change to emitted runtime (`Compiler/Runtime/` or `Compiler/Targets/*/*Runtime*.maxon`) needs two self-compiles; `maxon run build` does both by itself. Run `maxon fmt` on every file you change: nothing gates `maxon-bin/`'s formatting. |
+| `runtime/` | Read `runtime/README.md` and the tier rules in this skill's `compiler.md`: no managed values (E3153), a restated geometry figure owes its pin. |
 | `stdlib/` | A symbol callers outside the stdlib use is `public`, not `export`. No instrumentation (no `Log` calls) in stdlib algorithms. |
-| `specs/` | The language's canonical definition. Under `/land` it is read-only except to the agent briefed to write the cases. A case is a program in a spec `.md` file, pinned by `exitcode` / `stdout` / `maxoncstderr` blocks. |
+| `specs/`, `ir-specs/` | The language's canonical definition. Under `/land` it is read-only except to the agent briefed to write the cases. A case is a program in a spec `.md` file, pinned by `exitcode` / `stdout` / `maxoncstderr` blocks; `docs/SPECS.md` is the format, and this skill's `specs.md` the traps in writing and re-pinning cases. |
 | `tests/` | Read `tests/README.md` first. A fixture `.maxon` is stored as `<name>.fixture`; one test per `.maxtest` file; expectations are generated, never hand-written. |
 | anywhere else | A standalone program or example: `main` returns `ExitCode`. |
 
@@ -54,6 +54,9 @@ After each edit:
 | a spec case | `mcp__maxon__run_spec_test` (`filter:` a case-sensitive substring of `<spec>/<test>`, or an array of them selecting their union in one run; the failures come back in `failures`, and `cases: true` adds every case's verdict) |
 | `maxon-bin/` | build the slot — `./maxon-bin/.maxon/maxon run build` — then `./maxon-bin/.maxon/maxon lint maxon-bin` and the spec filter that owns the behaviour |
 | `stdlib/` or `runtime/` | the spec filter that owns the behaviour — the suite compiles both from source. Build the slot too when a driver command (`fmt`, `test`, the LSP) must see the change |
+
+The `maxon-tools` skill holds the MCP tool table, `spec-test`'s filters and flags, and how to run a suite by
+hand without losing its failures.
 
 ⚠ **Traps in the instruments:**
 

@@ -1,623 +1,135 @@
 ## The compiler
 
 One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, binary
-`maxon-bin/.maxon/maxon`, suite `specs/`. On Windows the binary is `maxon.exe`; commands below show
-the Windows form.
+`maxon-bin/.maxon/maxon` (`maxon.exe` on Windows; commands below show the Windows form), suite `specs/`.
+Every compile reads two source tiers at the checkout root: `stdlib/`, the standard library, and `runtime/`,
+the language runtime. The compiler finds `stdlib/` by walking UP from its own executable and reaches
+`runtime/` as its sibling, so a tree holding one without the other compiles nothing. `scriptlib/` beside
+them holds the USER's own packages (gitignored, nothing shipped), read only by a program whose root is one
+file; harnesses and gates pass `ScriptlibLoad.omitted`, so a developer's `scriptlib/` never reaches them.
 
-**Two source tiers are read on every compile, and both live at the checkout root.** `stdlib/` is the
-standard library; `runtime/` beside it is the language runtime. The compiler locates `stdlib/` by
-walking UP from its own executable and reaches `runtime/` as its sibling, so a tree holding one without
-the other compiles nothing. A third, `scriptlib/` beside them, holds the USER's own packages (gitignored,
-nothing shipped) and is read only by a program whose root is one file; harnesses and gates pass
-`ScriptlibLoad.omitted`, so a developer's own `scriptlib/` never reaches what they compile.
-
-⛔ **A `runtime/` FILE IS NOT COMPILER SOURCE AND NEEDS ONE SELF-COMPILE, NOT TWO.** It is input the
-compiler READS. `Compiler/Runtime/` and the per-target `*Runtime*.maxon` files, which the compiler WRITES
-into every program including itself, need two — see the box below.
-
-**Before changing `runtime/`, or the compiler's handling of it, read `runtime/README.md`** — the tier's
-families, the reserved-name doors, reach and dead-function elimination, the `.data` layout, the `__Raw`
-rows and the pinned geometry. The rules that bind every tier edit: no managed value in tier source
-(E3153); a restated geometry figure owes its pin, and moving one takes a staged build; tier source does
-not discard a declared callee's result; a new unprefixed tier entry owes the declaration and call doors
-`maxon_force_segfault` has; a new family the compiler reaches by minting a call owes a line in
-`StdlibSource.runtimeTierFileIsCompilerCalled`.
-
-- **Build it:** `./maxon-bin/.maxon/maxon run build` at the repo root. The root `maxon.maxtasks`'s
-  `build` task delegates to `maxon-bin/maxon.maxproj`, whose `build` target is where the git-derived
-  version comes from; `cd maxon-bin && maxon build` is the same build said from inside. ⛔ **`maxon build
-  maxon-bin` from the root is a PATH build** — the root holds no `.maxproj`, so the word is a path: it
-  compiles the same sources and stamps NO version, which is what the seed rule below relies on and what
-  you keep away from the slot.
+- **Build it:** `./maxon-bin/.maxon/maxon run build` at the repo root. The root `maxon.maxtasks`'s `build`
+  task delegates to `maxon-bin/maxon.maxproj`, whose `build` target stamps the git-derived version;
+  `cd maxon-bin && maxon build` is the same build. ⛔ **`maxon build maxon-bin` from the root is a PATH
+  build**: the root holds no `.maxproj`, so it compiles the same sources and stamps NO version. Keep it away
+  from the slot.
 - **Lint it:** `./maxon-bin/.maxon/maxon lint maxon-bin`. A build compiles past the lint rules (E3064 and
-  E3065, a dropped result; E3092, an unused `export`; E3219, an unused unexported declaration), so the
-  self-compile reports none of them; this does. `--target=<lane>` lints for a lane other than the host's,
-  which matters where `#if` branches differ.
-- **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the pinned seed's binary at
-  `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **The seed is the `seed-*`
-  pre-release that `scripts/seed-tag` names, a frozen compiler:** it changes only when a commit moves the
-  pin, so re-run the script after pulling one that does. Maxon compiles Maxon, so there is no second
-  implementation here — a previous build of this compiler is the only thing that can build it.
-  ⛔ **A TREE THAT DECLARES WHAT THE PINNED SEED DOES NOT KNOW IS REFUSED BY THE SEED** — E2015 on a
-  `__Managed*` entry this tree adds, or E3004 on a `__Builtins` intrinsic the stdlib calls, which no
-  re-fetch can cure. The cure is a new seed frozen from the refused commit, which lands with it through
-  `land.yml` instead of `git push`, from a bootstrap chain of commits the pinned seed can build its way
-  through; `docs/RELEASING.md` owns the procedure. Land it without asking: publishing the seed and pushing
-  its pin are standing-authorized (user ruling).
-  ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
-  ```
-  ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon
-  ```
-  A seed older than named manifest targets reads `maxon-bin` as a path, not a target: a path build names
-  its own output, leaves the slot empty and exits 0, so the next command fails with a bare `127`.
-  `scripts/build-from-seed.sh` passes `--output=` for this reason; `CONTRIBUTING.md` spells it too.
-  A seed build that fails on E6002 (a slot it could not replace: read-only, or held open in a way that
+  E3065, a dropped result; E3092, an unused `export`; E3219, an unused unexported declaration), so only
+  `lint` reports them. `--target=<lane>` lints another lane, which matters where `#if` branches differ.
+- **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`. Exit code **101** means a memory leak.
+
+## The seed
+
+**Maxon compiles Maxon: a previous build of this compiler is the only thing that can build it.**
+`scripts/fetch-seed.sh` places the pinned seed at `.bootstrap/maxon.exe`; run it directly when the slot
+is empty. The seed is the `seed-*` pre-release `scripts/seed-tag` names, a frozen compiler that changes
+only when a commit moves the pin, so re-run the script after pulling one that does.
+
+⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
+`./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon`. A seed older than named
+manifest targets reads `maxon-bin` as a path: a path build names its own output, leaves the slot empty
+and exits 0, so the next command fails with a bare `127`. `scripts/build-from-seed.sh` passes `--output=`
+for this reason, and `CONTRIBUTING.md` spells it too.
+
+- A seed build failing on **E6002** (a slot it could not replace: read-only, or held open in a way that
   forbids a rename) is a lock, not a refusal; the message names which. A slot binary that is only running,
-  an editor's language server for one, is renamed aside and replaced. A slot binary's version stamp names the last commit, never the
-  working tree, so a compiler built while uncommitted or stashed edits were applied carries a stamp that
-  looks clean: it does not vouch for the source. When a build fails on a name or constant the tree plainly
-  declares, rebuild with `scripts/build-from-seed.sh` before believing the diagnostic.
-- **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
-- Exit code **101** means a memory leak was detected.
-- There is **no `maxon clean`**; `maxon cache clear` empties the run and library caches. Clearing the cache
-  rules the cache OUT; it is not a fix. If a hand-built program crashes after a compiler change while the
-  suite is green, suspect a real miscompile first (the suite may not exercise the pattern) and read the
-  emitted code with `dump_ir` or a disassembler.
+  such as an editor's language server, is renamed aside and replaced.
+- **A slot binary's version stamp names the last commit, never the working tree**, so a compiler built
+  over uncommitted or stashed edits carries a clean-looking stamp that does not vouch for its source. When
+  a build fails on a name or constant the tree plainly declares, rebuild with `scripts/build-from-seed.sh`
+  before believing the diagnostic.
 
-> ### ⭐ A SELF-REBUILD RENAMES ITS RUNNING IMAGE OUT OF THE SLOT, THEN RENAMES THE NEW ONE IN
->
-> A compiler cannot overwrite its own running image, and a half-written slot is a compiler that answers
-> as though it were whole. So every build writes into `.staging-<hex>/` beside its output, and a compiler
-> rebuilding its own slot RENAMES its running image to `maxon-bin/.maxon/maxon.previous` — an OS will not
-> let a running executable be deleted, but will let one be renamed — and its `.mxdbg` travels with it,
-> then renames the staged image into the empty slot. ⭐ **THE RENAME HAPPENS ONLY AFTER THE COMPILE
-> SUCCEEDS**, so a FAILED build (a compile error included) leaves the running compiler in the slot, able to
-> build the fix; a staged image that cannot be renamed in moves the running one back (E6002). An older
-> `.previous` that another process is still running (an `mcp-server` or `lsp-server` started before the
-> last rebuild) is renamed aside to `maxon.retired.<block>` (`Run/ScratchName.maxon`). A self-rebuild, and
-> any build into a slot that has a `.previous` image beside it (the seed building into the slot, or another
-> tree's compiler), deletes the retired images nothing holds any longer; only a self-rebuild also deletes
-> the older numbered `maxon.retired-<digits>` spelling.
->
-> ⛔ **`maxon-bin/.maxon/` IS A CLOSED DIRECTORY.** It holds the slot's `maxon[.exe]`, `maxon.previous[.exe]`, their
-> `.mxdbg` sidecars, the compiler-minted `maxon.retired.<block>` images, `.staging-<hex>/`, and the
-> `maxon-<cpu>-linux` guest compilers `spec-test` builds on a macOS host — the names
-> `scripts/allowed-ignored-paths.txt` lists under `closed-directory: maxon-bin/.maxon`. The `/land` "No leftovers"
-> gate and CI's "No file left behind" step (both `scripts/check-ignored-files.py`) fail any other name there.
-> A compiler image you want to keep goes in `temp/<task>/` (`--output=temp/<task>/maxon.exe`); never
-> rename the slot's own image to keep it.
->
->
-> ⛔ **A CHANGE TO EMITTED RUNTIME — `Compiler/Runtime/` OR `Compiler/Targets/*/*Runtime*.maxon` — NEEDS
-> *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES THAT WAY.** The compiler EMITS the runtime
-> into every program it builds — including into itself — so
-> with `C0` the old compiler and `S` the fixed sources:
->
-> - `C0` builds `S` → `C1`. `C1`'s emitter logic is fixed, so **programs C1 builds get the new
->   runtime** — but `C1`'s OWN embedded runtime was emitted by `C0`, and is old.
-> - `C1` builds `S` → `C2`. Now the compiler's own runtime is new too.
->
-> ⇒ **It bites hardest where the compiler is the program under test**: `spec-test`'s worker IS the
-> compiler, so a runtime fix to subprocess, the scheduler or memory management does not change what the
-> HARNESS does until the second build.
->
-> ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds two stages under `temp/fixpoint/` and compares
-> them — both are past the convergence point, so they agree while the SLOT still holds `C1`.
->
-> **`maxon run build` does the second build itself.** The compiler stamps the commit it was built
-> from, so *"has any runtime file changed since the running compiler was built"* is a `git diff` — it
-> counts uncommitted changes too — and `maxon-bin/maxon.maxproj` asks it on every `run build`. When the
-> answer is yes, or unknown, it prints the reason to stderr and describes the build with
-> `rebuildWithOutput: true`; the driver then runs the compiler it just wrote with the same command line
-> and `MAXON_SECOND_STAGE=1`, which ends the repetition. While a runtime edit is uncommitted, every
-> `run build` therefore compiles twice.
-> ⇒ **To iterate on runtime with ONE build, set `MAXON_SECOND_STAGE=1` for that `run build`.** Programs
-> `C1` builds already get the new runtime; only the compiler's own process — the spec harness, the
-> self-compile timing — needs `C2`. The MCP `build` tool with path `maxon-bin` is a path build: it runs
-> no manifest, so it builds once.
-> ⛔ **A `MAXON_SECOND_STAGE=1` BUILD IS NOT A SELF-COMPILE.** The previous compiler does the compiling, so a
-> rule the change adds is never applied to the compiler's own source: a compiler that refuses its own tree
-> builds cleanly here. Only a build run BY the new compiler answers "does it compile itself".
-> ⛔ **THIS RULE IS ONLY ABOUT EMITTED RUNTIME. EVERY OTHER CHANGE NEEDS ONE BUILD**, and a needless
-> self-compile is a minute off every task that touches the compiler.
-> ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` and its sibling `runtime/` are
-> found by walking up from the EXECUTABLE, so an installed `maxon` on PATH compiles this repository
-> against the RELEASE's sources — MEASURED: it succeeds and exits 0, having built a compiler from a
-> library that is not this tree's. Run `.bootstrap/maxon` or the slot binary, never a PATH one.
->
-> ⛔ **`.bootstrap/` HOLDS THE BINARY AND NOTHING ELSE.** A release archive ships its own `stdlib/` and
-> `runtime/`, and the compiler resolves both by walking UP from its own executable — so an archive
-> unpacked whole would leave a RELEASED stdlib and runtime one directory above the compiler and the
-> tree's own would never be reached. The build would succeed and compile the wrong sources, silently.
-
-⛔ **A COMPILER BUILT BY A WRONG COMPILER STAYS WRONG AFTER THE SOURCE IS REVERTED.** A probe or defect in a
-pass or in emitted runtime acted on the compiler's own code, so the binary it builds carries the damage:
-filtered specs stay green, because they exercise the compiler's logic and not its own codegen, and a real
-program then panics; a runtime probe fires in every later build. Keep probe builds at
-`--output=temp/<task>/…`. When one reached the slot, rebuild with `scripts/build-from-seed.sh`, then compile
-a real program (`examples/fannkuch-redux.maxon`) before trusting a filtered green.
-
-⛔ **THE SEED ALSO JUDGES THE COMPILER'S OWN SOURCES BY ITS OLDER RULES.** A language form newer than the seed
-is refused there, and a tier the seed cannot credit fails too: under a seed whose `build` runs the lint rules,
-an `export` that only a rule in this tree makes used is E3092 to the seed, on every lane. A seed-built first
-stage applies the seed's rules, never this tree's. Either is a refusal, so the commit lands with its own seed. When an
-editor's lock stops `build-from-seed.sh`, prove the chain by hand into `temp/<task>/`:
-`.bootstrap/maxon.exe build maxon-bin --output=temp/<task>/c1.exe`, then
-`temp/<task>/c1.exe build maxon-bin --output=temp/<task>/c2.exe`.
-
-⚠ **Every file's tokens are read twice:** the declaration sweep (`foldDeclaredSignaturesInto`) and the real
-parse. A feature that changes WHICH DECLARATIONS EXIST belongs in the token tier (`queryActiveTokens`), where
-both consumers read one array, because the two disagreeing is a wrong field offset with no diagnostic.
-
-A `__Builtins` intrinsic that can be refused signals it through per-handle STATE answered as a corpus enum
-(`__SubprocessStreamState`; ordinals read through `requireCorpusDeclaredEnum`), never through an empty record,
-a null or a last-error global: a managed-returning builtin cannot carry "refused" in-band.
+⛔ **THE SEED REFUSES A TREE THAT NEEDS WHAT IT DOES NOT KNOW, AND NO RE-FETCH CURES IT:** E2015 on a
+`__Managed*` entry the tree adds, E3004 on a `__Builtins` intrinsic the stdlib calls, a language form newer
+than the seed, or a tier the seed cannot credit (under a seed whose `build` runs the lint rules, an `export`
+that only a rule in this tree makes used is E3092, on every lane). A seed-built first stage applies the
+seed's rules, never this tree's. The cure is a new seed frozen from the refused commit, which lands with it
+through `land.yml` instead of `git push`, from a bootstrap chain of commits the pinned seed can build
+through; `docs/RELEASING.md` owns the procedure and the `compiler-workflow` skill runs it. Land it without
+asking: publishing the seed and pushing its pin are standing-authorized (user ruling). When an editor's lock
+stops `build-from-seed.sh`, prove the chain by hand: `.bootstrap/maxon.exe build maxon-bin
+--output=temp/<task>/c1.exe`, then `temp/<task>/c1.exe build maxon-bin --output=temp/<task>/c2.exe`.
 
 ⛔ **A COMPILER THAT STARTS DEPENDING ON A RUNTIME BEHAVIOUR THE SAME CHANGE ADDS NEEDS THE SEED CHAIN.**
-When the compiler's OWN code relies on a transfer, scheduler, allocator or walk semantic the change
+When the compiler's own code relies on a transfer, scheduler, allocator or walk semantic the change
 introduces, every local self-compile stays green, because the slot compiler is always a post-change
-builder. CI builds from the pinned seed, whose runtime lacks the behaviour, so seed → C1 → C2 can die
-(exit 96). Run `scripts/fetch-seed.sh` then `scripts/build-from-seed.sh` before pushing. Stage the
-dependency behind a builder-set `static let` capability that defaults to the old-safe path, as
-`FrontEndPool.RuntimeSharesAnyGraph` does (a seed-built `C1` runs its front end in process), and remove it
-once a release carries the runtime.
+builder; CI builds from the pinned seed, whose runtime lacks it, so seed → C1 → C2 can die (exit 96). Run
+`scripts/fetch-seed.sh` then `scripts/build-from-seed.sh` before pushing. Stage the dependency behind a
+builder-set `static let` capability that defaults to the old-safe path, as `FrontEndPool.RuntimeSharesAnyGraph`
+does (a seed-built `C1` runs its front end in process), and remove it once a release carries the runtime.
 
-## maxon MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
+## One self-compile, two for emitted runtime
 
-**The server IS the compiler**: `maxon mcp-server --dev`, implemented under `maxon-bin/Compiler/Mcp/`.
-There is no separate project and nothing to build but the compiler itself, so a rebuild of the slot is
-a rebuild of the server. Prefer these tools over raw Bash invocations: faster (no shell startup),
-structured results. Use Bash only where no tool covers the case.
-
-⚠ **A RUNNING SERVER IS THE COMPILER YOU BUILT IT FROM.** Rebuilding the slot renames the running
-image to `maxon.previous` and writes a new one; the live process keeps serving from the vacated image
-until the host restarts it. So after a build, a tool answer still comes from the PREVIOUS compiler —
-restart the MCP server when you need the new one to answer. `tests/mcp/rebuild.maxtest` pins that the
-process keeps answering across the replacement.
-
-> ## 🟡 IN A WORKTREE, EVERY MCP TOOL NEEDS `repoRoot` — OR IT DRIVES THE **MAIN REPO**
+> ⛔ **A CHANGE TO EMITTED RUNTIME — `Compiler/Runtime/` OR `Compiler/Targets/*/*Runtime*.maxon` — NEEDS
+> *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES THAT WAY.** The compiler WRITES that runtime into
+> every program it builds, itself included. With `C0` the old compiler and `S` the fixed sources, `C0`
+> builds `S` → `C1`: programs `C1` builds get the new runtime, but `C1`'s OWN runtime was emitted by `C0`.
+> `C1` builds `S` → `C2`, whose own runtime is new too. It bites hardest where the compiler is the program
+> under test: `spec-test`'s worker IS the compiler, so a runtime fix to subprocess, the scheduler or memory
+> management does not change what the harness does until the second build. ⚠ `fixpoint.sh` does not catch
+> this: its two stages under `temp/fixpoint/` are both past convergence and agree while the slot holds `C1`.
 >
-> ONE stdio server process is shared by every agent in every worktree, and its default root is the
-> main checkout (derived from the SERVER's own binary path). **Say nothing and you are told
-> `success: true` about a tree containing none of your work.**
+> **`maxon run build` does the second build itself.** `maxon-bin/maxon.maxproj` asks on every `run build`
+> whether any emitted-runtime file changed since the running compiler's stamped commit (a `git diff`, which
+> counts uncommitted changes). On yes, or unknown, it prints the reason to stderr and describes the build
+> with `rebuildWithOutput: true`; the driver runs the compiler it just wrote with the same command line and
+> `MAXON_SECOND_STAGE=1`, which ends the repetition. So while a runtime edit is uncommitted, every
+> `run build` compiles twice. ⇒ **To iterate on runtime with ONE build, set `MAXON_SECOND_STAGE=1`** for
+> that `run build`: only the compiler's own process (the spec harness, the self-compile timing) needs `C2`.
+> The MCP `build` tool with path `maxon-bin` is a path build: it runs no manifest, so it builds once.
 >
-> ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree root — to EVERY tool call
-> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test`, and `execute`,
-> `test` and `fmt` when you mean YOUR tree's compiler to answer. Those last three default to the
-> host's working directory and name no tree, which is right for a path you wrote yourself and wrong
-> for a worktree whose compiler you want exercised. `check`, `dump_ir`, `lookup_error_code` and `info`
-> take no `repoRoot` at all: the first two compile INSIDE the server, so they always answer about the
-> server's own compiler — read the `executable` and `stdlibRoot` fields they carry before believing a
-> verdict about your tree.
+> ⛔ **A `MAXON_SECOND_STAGE=1` BUILD IS NOT A SELF-COMPILE.** The previous compiler does the compiling, so
+> a rule the change adds is never applied to the compiler's own source; only a build run BY the new compiler
+> answers "does it compile itself".
 >
-> ```
-> build(repoRoot: "<absolute path of your worktree>")
-> ```
+> ⛔ **EVERY OTHER CHANGE NEEDS ONE BUILD**, and a needless self-compile is a minute off every task. A
+> `runtime/` file is input the compiler READS, not compiler source: it needs one. Before changing
+> `runtime/` or the compiler's handling of it, read `runtime/README.md`; the `maxon-coder` skill carries the
+> rules that bind every tier edit.
+
+## The compiler that builds this tree must live inside it
+
+> ⛔ **RUN `.bootstrap/maxon` OR THE SLOT BINARY, NEVER A `maxon` ON PATH.** `stdlib/` and `runtime/` are
+> found by walking up from the EXECUTABLE, so an installed `maxon` compiles this repository against the
+> RELEASE's sources — measured: it succeeds and exits 0, having built a compiler from a library that is not
+> this tree's.
 >
-> - **Every result echoes the `repoRoot` it actually used**, in the payload's `repoRoot` field —
->   answers and refusals alike. **READ IT BACK.** A tool that named no tree leaves the field out
->   rather than reporting an empty one, so an absent `repoRoot` means "the host's directory".
-> - ⭐ **THE TREE'S OWN COMPILER RUNS, NOT THE SERVER'S.** A tool acting on `repoRoot` spawns
->   `<repoRoot>/maxon-bin/.maxon/maxon`, because `stdlib/` and `runtime/` are resolved by walking UP
->   from the EXECUTABLE — the server's binary would compile your worktree against the MAIN repo's
->   sources. A tree whose slot is empty is REFUSED, naming the `build` tool.
-> - **A `repoRoot` that is not a Maxon checkout is REFUSED** (`invalidParams`), never quietly swapped
->   for the main repo. Relative paths are refused too — they would resolve against the *server's* cwd.
->   A checkout is any tree holding `stdlib/`, `runtime/` and `maxon-bin/`, so a brand-new worktree qualifies
->   before anything is built in it.
+> ⛔ **`.bootstrap/` HOLDS THE BINARY AND NOTHING ELSE.** A release archive ships its own `stdlib/` and
+> `runtime/`; unpacked whole, it leaves a released library one directory above the compiler, the tree's own
+> is never reached, and the build silently compiles the wrong sources.
 >
-> ⚠ These tools **EDIT** the tree they are pointed at: `run_spec_test` with `updateRequired: true`
-> re-mints that tree's inline spec blocks, `run_scale_test` with `note:` writes a row into its
-> `docs/optimization-log.md`, and `fmt` rewrites files in place.
-
-| Task | Tool |
-|------|------|
-| Build the compiler | `./maxon-bin/.maxon/maxon run build` — MCP `build` with `path: "maxon-bin"` is a path build that writes `maxon-bin/maxon-bin.exe` and leaves the slot as it was; `from:` names the compiler to build WITH |
-| Run the spec suite | `run_spec_test` — the failures come back inline, in `failures` |
-| Per-test PASS/FAIL detail | `run_spec_test` with `cases: true` |
-| MEASURE per-phase memory + CPU scaling — an instrument, **no verdict** | `run_scale_test` |
-| Run an inline snippet or a file | `execute` — `source:` for a snippet, `path:` for a file |
-| Dump IR | `dump_ir` |
-| Format a file or snippet | `fmt` — `source:` returns the formatted text; `path:` rewrites in place |
-| Look up a 4-digit error code | `lookup_error_code` — number, `"E3014"`, or the case name |
-
-⭐ **AN ARGUMENT NO TOOL DECLARES IS REFUSED** (`invalidParams`), never dropped: a `mmTrace: true` run
-that never traced, reported back as a clean success, is indistinguishable from a leak-free run. The
-refusal is by ARRIVAL against the tool roster, so it covers `mmTrace` and `dumpStages` and every other
-argument nobody thought to reject. A contributor argument sent to a server started WITHOUT `--dev` is
-refused the same way.
-
-Always pair `updateRequired` with a `filter` — unfiltered, it re-mints the inline blocks of every selected case in the suite.
-
-⛔ **`build`'s `target:` IS A TRIPLE WHEN IT PARSES AS ONE OF THE FIVE, AND A PROJECT TARGET OTHERWISE.**
-`wasm32-wasi` becomes `--target=wasm32-wasi`; any other value becomes a positional naming a target of
-the `.maxproj` file, each `_` written `-` (`my-app` is `my_app`). A word naming no target is a SOURCE
-PATH to `maxon build`, so a triple has to travel as `--target=`.
-
-**A `spec-test` pattern is a CASE-SENSITIVE substring** of the `<spec>/<test>` label, and `--filter=`
-is repeatable: the run takes the union, as N jobs across the pool. **Select a set spanning several spec
-files in ONE run** — one `--filter=<spec>/` per file (MCP: a `filter` array) — never one run per file,
-which pays the startup per file and runs each on one worker. A comma is part of a pattern
-(`--filter=static-methods,enums` selects nothing and is refused). A pattern that selects no case refuses
-the whole run, naming it, so a typo'd member cannot run nowhere while the rest reads green. (`maxon test`
-lowercases its patterns and also splits a value on commas.)
-
-Program batching is `--batch=on|off`; how a lane's executions are grouped is `RunStrategy`, chosen by
-target and host. The runner always prints a line per test.
-
-### Common flags
-
-- `--filter=PATTERN` (repeatable), `--update-required`, `--batch=on|off`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
-  `--workers=<n>`, `--shard=K/N`, `--target=ARCH-OS`, `--network`.
-- ⛔ **There is no `--mm-trace` on any command.** The driver refuses an unimplemented flag loudly
-  (`Main.MaxonArgs.parse`, which cites this very spelling as the reason it must), so a leak is read off
-  the RUN: the runtime's leak gate is **exit 101**, and a case pinning `exitcode 0` reddens on one.
-- **`--workers=1` is a DEBUGGING TOOL, not a gate.** It is the same pool with one worker in it, and
-  the parent buffers results and reports in fixed order — **ordering cannot vary with pool size**.
-  The default pool is `defaultWorkerCount()`, this machine's CPU count, and that is the only count these
-  processes run the suite at.
-
-### Targets
-
-The compiler emits `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` and **`wasm32-wasi`** (a
-WASI Preview2 component).
-
-⛔ **`targets.tsv` IS THE ONE PLACE A TARGET IS LISTED.** `scripts/targets/generate.sh` writes
-`Compiler/TargetsGenerated.maxon` from it (`supportedTargets()`, `debuggerTargets()`) — run it after
-editing the table, never edit its output; `--check` is CI's drift gate. The scripts, workflows and
-installers read the same table. What a target MEANS — its `CpuArch`/`Os` case, backend, runtime and
-debug interface — stays compiler code, so a row naming a cpu or os the compiler lacks fails the build.
-`docs/RELEASING.md` owns adding a target.
-
-> #### `--target=` cross-compiles the programs; it never hosts the compiler
->
-> `spec-test --target=x64-linux` on a Windows host builds and runs the TEST binaries for Linux while
-> the compiler stays a Windows process. So that lane never runs the compiler's own `main` **as** a
-> Linux program — on a Linux green thread, through the Linux runtime, with that lane's frame layout —
-> and it is not evidence about anything that only happens there. **CI hosts every target on its own
-> architecture**: seed → `C1` → `C2` → the suite under `C2`, which is a whole class of defect a cross
-> lane cannot reach.
->
-> A defect that needs the compiler itself running on that OS (a Linux green thread's exact mmap'd stack,
-> the Linux runtime, that lane's frame layout) stays green on the cross lane.
->
-> ⇒ **TO HOST x64-linux LOCALLY, CROSS-BUILD ONCE AND THEN STAY INSIDE WSL** — the recipe is in the
-> `compiler-workflow` skill.
-
-**On arm64-macos, `spec-test --target=x64-linux` is a cross lane through OrbStack's Rosetta emulation:**
-every case is compiled on the Mac, and each spec's binaries run in one `orb run` entry on the
-`maxon-linux` machine. Rosetta must be enabled (`orb config set rosetta true`, then restart OrbStack);
-the preflight runs a minimal x86-64 ELF in the machine and names that remedy when the ELF fails.
-`--target=arm64-linux` hands the suite to a compiler built for the machine and run inside it.
-
-⛔ **NO NEW MECHANISM MAY CAP ARGUMENTS BELOW `MaxAbiArgs` (64).** A small cap refuses ordinary programs and
-regresses them silently, so arguments past the register files ride the stack. The 64 ceiling, its `bits(64)`
-position masks and its refusals stay; do not propose lifting them. A ceiling hit is a clear refusal, never
-silent mishandling.
-
-⚠ **A `mutable` PARAMETER MARKER IS A WHOLE-PROGRAM SWITCH.** `ProgramSignatures.programTakesAParamByRef` is
-false until some function marks a parameter `mutable`, and true turns on the name-keyed, over-approximating
-cell-local prescan in every body of the program, stdlib included. The prescan reads its callee out of tokens
-before the body parses, so it cannot resolve a method's receiver type. Read and write of a by-ref parameter
-are specified (`specs/pass-by-reference.md`).
-
-⚠ **AN INTERMITTENT COMPILER DEATH ON arm64 ALONE (EXIT 86, A SIGSEGV IN A POOL WORKER, EXIT 101 WITH EVERY
-TEST PASSING) POINTS AT MEMORY ORDERING FIRST.** x86-TSO forbids the reorder, so a clean x64 run is no
-evidence. A self-compile loop is a poor instrument: compare full suites per arm, control included, and read a
-clean arm against the base rate (at one death per suite, six clean suites is p≈0.25%). Instrumentation on a hot
-path moves the timing that causes the death, so a silent probe excludes nothing by itself.
-
-⚠ **A CHANGE THAT GROWS A FUNCTION'S LIVE-VALUE COUNT IS A CROSS-TARGET CHANGE** even when it touches no
-target-specific code: arm64 has 31 general registers and x64 about 14, so a self-compile on one host cannot
-see the other's E5001 — CI's lanes are the gate. An E5001 in straight-line, loop-depth-0 code is an
-allocator defect (it should have spilled), not a reason to shrink the function.
-
-`run_spec_test` takes `target: "wasm32-wasi"` and runs the output under the
-vendored wasmtime. By hand, for ONE program:
-
-```
-./maxon-bin/.maxon/maxon build f.maxon --output=out --target=wasm32-wasi
-./vendor/wasmtime/wasmtime run -S cli-exit-with-code=y -S inherit-env=y out.wasm
-./vendor/wasm-tools/wasm-tools print out.wasm      # attribute a wrong answer to an instruction
-```
-
-⛔ **`vendor/` IS GITIGNORED EXCEPT `vendor/wasi-wit/`, SO A CLONE HAS NONE OF THE TOOL BINARIES** —
-`scripts/fetch-vendor.sh` stages them; see the `compiler-workflow` skill.
-
-⚠ **THE wasm LANE IS NOT "SCALAR ONLY".** Heap, `String`, `print`, structs, arrays, closures,
-interfaces and **floats** (arithmetic AND shortest-round-trip printing) all work there; the two lanes
-run within a few hundred cases of each other. The families it has no substrate for (**async / green
-threads, the uptime and thread-CPU clocks, file and directory IO**) answer E3104 and are counted SKIPs (see the rule below). The
-x64-only CODEGEN cases (register pressure, `.rdata`, emitted symbol names), which are about x64's
-output rather than about wasm, carry an `<!-- unsupported-targets: … -->` exclusion. ⇒ **a float or
-String case failing on wasm is a BUG on that lane, not an out-of-slice case to refuse.**
-
-⚠ **A FAILURE ON wasm ALONE CAN BE A FACT THE OTHER LANES ARE BLIND TO.** A call-signature width
-disagreement (an i32 result declared as i64) is invisible on x64 and arm64, which pass both in one 64-bit
-register; wasm types every function value exactly and traps `indirect call type mismatch`. That means the
-other lanes cannot see the disagreement, not that the wasm backend is broken.
-
-⭐ **THE MARKER NAMES THE LANES THAT CANNOT SERVE A CASE, NEVER THE ONES THAT CAN**, so a backend that
-lands inherits every unmarked case instead of being excluded from all of them at once. The harness
-REFUSES a key naming no supported target or named twice, refuses a marker that excludes every one of
-them (a case that runs nowhere is fixed or deleted), and refuses the retired `<!-- targets: -->`
-spelling.
-
-**Do not mark a case the compiler already refuses.** A lane with no substrate answers **E3104**, and
-the harness reports that as a counted **SKIP** naming the case; a marker removes the case from selection
-with nothing said anywhere. The two are not two spellings of one fact — one is the fact and the other is
-the fact made invisible. So async, the thread-CPU clock, file and directory IO and console stdin
-carry NO marker on wasm: every one of those skips is a case a reader can count. A marker is for a case
-that would otherwise go RED — an ISA-specific codegen reading, a POSIX/Windows shell spelling, a
-diagnostic displaced by E3104 — and it states its reason. E3104 waits for the Maxon-tier checks, so only
-a diagnostic decided after them (`InsertRangeChecks`' E3005, the backend's, a missing intrinsic's E3004)
-is displaced by it.
-
-⚠ **A RUN CASE WHOSE MARKER LEAVES EXACTLY ONE LANE FAILS THERE ON AN E3104.** It exists for that lane,
-so the refusal is the case failing (`SpecTest.runsOnOneLane`) — which is what lets a `runs-on-wasm` case
-go red.
-
-⚠ **SUBPROCESS IS THE EXCEPTION, AND NEEDS THE MARKER.** A target that can never host a child process
-answers **E3074** ahead of E3104 (`requireTargetSupportsCallee`), and the harness counts only E3104 as a
-SKIP — so an unmarked subprocess case goes RED on wasm. Mark it `wasm32-wasi`.
-
-## Measuring and self-checking — the `compiler-workflow` skill
-
-Two instruments live in that skill, with their reading guides: `run_scale_test`, the per-phase memory/CPU
-doubling ladder to run after any change to a pass, the IR, or a data structure the compiler indexes by;
-and `scripts/fixpoint.sh`, which answers whether the compiler reproduces itself byte for byte — a
-difference there is a MISCOMPILE, and a green suite cannot see it. Load the skill before acting on either.
-
-⛔ **ANYTHING THAT RE-CHECKS A PROGRAM (THE LSP, A WATCH LOOP, A RE-RUN) STAYS ON THE QUERY SPINE** and costs in
-proportion to what changed; a fresh `Project` per check is the wrong foundation even though it is `maxon
-build`'s pipeline. Read `docs/internals/query-spine.md`, name which stages are memoized, and measure warm
-against cold. A stage that cannot be incremental is a finding to raise.
-
-⚠ **RUN `maxon verify-recheck <file|dir>` AFTER A CHANGE TO THE PIPELINE, THE QUERY SPINE OR PER-`Project`
-STATE.** The suite compiles each program once, so it stays green over a memo the pipeline mutated or a table no
-fold resets. A memo's content hash cannot see a mutation, and cloning per serve is too costly: drop the memo as
-the pipeline takes it, as `invalidateAllModuleCache` does.
-
-## `tests/` — fixture corpora for the DRIVER COMMANDS
-
-**`spec-test` is for the LANGUAGE — compiler syntax and emitted code. A DRIVER COMMAND is not that**
-(user ruling), and could not be gated there anyway: a spec case is a Maxon PROGRAM the harness
-compiles and runs, so it can reach `stdlib/` and `runtime/` and nothing else. Driver commands are
-gated by spawning the compiler at a fixture project and asserting what it reports.
-
-**`tests/README.md` is the authority** — it lists every corpus, the constant each is reached through,
-and the rules that keep the corpora honest. Read it before touching anything under `tests/`. The three
-facts worth knowing before you get there:
-
-- ⭐ **RUN EACH CORPUS AND READ ITS PASS/FAIL COUNT.** A runner broken badly enough to report green
-  having run nothing cannot detect itself, so the count is what closes the circularity.
-  ```
-  ./maxon-bin/.maxon/maxon.exe test tests/testCommand
-  ```
-  ⚠ **CI runs every corpus on every lane, and no workflow names one.** `scripts/run-test-corpora.sh <job>` finds
-  each tracked directory directly under `tests/` that holds a `.maxtest` and runs those assigned to the job
-  (`corpora`, or `tools` for `cli`, `lsp`, `profile` and the debugger corpora `debug`, `dap` and `mcp`). A corpus's
-  `tests/<corpus>/ci.txt` declares its job, the `targets.tsv` columns the lane must satisfy (`debug`, `dap` and `mcp`
-  need `debugger=yes`, `targets` the `targets-gate` role: a lane that does not satisfy one builds the corpus and runs none of it) and its timeout,
-  and a corpus with no file runs everywhere; `tests/README.md` has the grammar. A new corpus is run from the day it
-  is added. `/land` runs a corpus only filtered to the cases the change touched; the full corpora are CI's.
-  CI also runs `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
-  `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it,
-  and `scripts/lint-tree.sh`, which lints every first-party program: the compiler, the script programs, the
-  torture programs with their preludes, every corpus under `tests/` with `--tests`, and every real
-  `.maxproj` and `.maxtasks` file. `maxon test` compiles a corpus as `maxon build` does, past the lint rules;
-  `maxon lint --tests tests/<corpus>` checks it against them.
-- ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
-  tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
-  pins what the tool DOES rather than what its author expected. Re-run the generator after changing
-  any input, and read the diff: a generated expectation cannot tell you an answer is wrong.
-  **`tests/examples/` is the one exception**: it checks the example programs against answers that
-  exist outside this compiler (the Benchmarks Game's published output, an example's documented
-  result), because there a generated expectation would only record whatever the compiler said.
-- ⛔ **NOTHING STORED THERE IS A LIVE `.maxon` OR A REAL `.git`** unless its corpus's row says so.
-  Names are `<x>.fixture` and `dot-git/`, mapped back at staging time — git refuses to commit a path
-  with a `.git` component, and a real `.maxon` under `tests/` is walked by `maxon fmt`, which is the
-  tool under test rewriting its own oracle.
-
-One test per file is structural, not tidiness: a file is what ONE process runs and that process has one
-deadline, so twelve compiler-spawning tests in one file share it and report a spurious `TIMED OUT`.
-
-⚠ **MOST OF `tests/debug`'s CASES DEBUG A RUNNING PROGRAM**, which is a compile plus a
-debugged run inside one file's deadline.
-
-## `maxon fmt`
-
-`maxon fmt [<file|directory>]` — gated byte-for-byte by `tests/fmt/`.
-⚠ **With NO PATH it formats the whole current directory** — that is its documented
-default. `fmt <file>` formats only that file, `fmt <dir>` that directory; `fmt --check` and `fmt a b`
-are REJECTED, exit 1, nothing written. The walk prunes any directory holding `.git`, so it cannot
-descend into a nested checkout or an agent worktree.
-
-⛔ **A SUBTREE THAT IS NOT A CHECKOUT NEEDS A `.maxonignore`, AND `website/` IS THE ONE THAT DOES.**
-The `.git` rule protects a sibling repository, not a directory of this one — so without the marker a
-root `fmt` walks every directory under `website/node_modules/`. The marker is a FLAG whose contents are
-never read, and both walks honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
-
-⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
-every source in `tests/fmt/engine-cases/` with the real `maxon fmt`, twice, and
-goes red if an answer differs from its `.expected`, its content changed, `fmt` refuses one, or a second
-run moves anything. A source `fmt` refuses is pinned in `tests/fmt/fixtures/`. `UrlInPlainString`, `NoMultilineLiteral` and
-`PlainStringNoInterpolation` are negative controls that must stay GREEN. The content check is
-`contentChange` in `tests/fmt/content-gate.maxtest`: every comment line of the source must come out as
-exactly one comment line with the same opener and words, in order, and every code token must survive.
-A preservation check phrased as *presence* passes duplication, and a count passes a comment moved
-across code. What it cannot see is stated on `contentChange`. Run it with `maxon test tests/fmt`.
-
-⚠ **`stdlib/` AND `runtime/` ARE HELD FMT-CLEAN BY `tests/fmt/the-library-tiers-are-already-formatted.maxtest`**,
-which stages both and fails naming every file `maxon fmt` would rewrite. CI runs it with the rest of
-`tests/fmt` on every lane. `maxon-bin/` is not gated: run `maxon fmt` on a file you changed.
-
-## ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe through `head`/`tail`/`grep`.
-
-```
-./maxon-bin/.maxon/maxon.exe spec-test > <scratchpad>/spec.log 2>&1; echo "exit=$?"
-grep -n '^FAIL' <scratchpad>/spec.log
-```
-
-Then **read the file** at each hit for the full reason. **A pipe decides what to keep before you know
-what failed**, so when the run goes red the detail is already gone and the only way back is running
-the whole suite again. Grep alone is not enough either: a failed compile embeds the compiler's entire
-stderr, so the marker line is a headline, not the evidence.
-
-Do not assume the console is small: **the runner prints one line per test (thousands of them) and only
-then the summary**, with failures wherever those tests fall in declaration order — `tail` shows PASS lines
-while the reason sits thousands of lines above. `<scratchpad>` is the scratchpad directory your system
-prompt names (root `AGENTS.md`). The MCP tools need none of this.
-
-⛔ **A CHAINED OR BACKGROUNDED COMMAND REPORTS THE EXIT STATUS OF ITS LAST COMMAND:** `build > log; echo $?;
-tail log` reports `tail`'s 0 over a failed build. Write the status into the log (`…; echo EXIT=$? >> log`),
-read it back, and confirm the artifact exists. Join build and test with `&&`, so a failed build cannot be
-followed by a suite that runs the stale binary and reads green. A run that died before testing prints no
-`FAIL` lines, so require the `N passed, M failed` summary line. A tool-call timeout does not kill the
-compiler it spawned: the retry meets the tree lock (`error: … is BUSY … Nothing was run.`, non-zero
-exit) — the lock working, not a red gate; wait for the other command.
-
-⚠ **THE SUITE RUNS EVERY TEST BINARY WITH CWD `.spec-run-<pid>/`**, a directory of that run's own at the
-checkout root. An entry a case leaves there fails the run (`left .spec-run/<name>`), and so does a
-process a case leaves running ([SPECS.md](../docs/SPECS.md#what-a-case-leaves-behind)).
-
-⚠ A repeat-run loop counts the iterations that printed that summary line, never the iterations attempted: a
-refused run (stale binary, busy tree) prints none, and a loop over a control that never built reads
-`0 leaks in 6 runs`.
-
-⚠ **THE TREE LOCK JUDGES LIVENESS BY HEARTBEAT, NEVER BY PID** (`TreeLock.maxon`): pids are reused and a wedged
-process is alive forever. The BUSY refusal prints the holder's argv and its last progress, which is the whole
-answer: a live holder means wait, and a lock untouched for `AbandonedAfterSeconds` (60) breaks itself on the
-next command.
-
-⚠ **A RED RUN CAN BE THE MACHINE, NOT THE CODE.** Failures uniform across unrelated specs, with no compiler
-output and an OS status for the exit code (Windows `3221225794`, `0xC0000142`: the process never started), mean
-orphaned workers from a killed run, not a defect. Timeout failures that hit a disjoint set on each run mean a
-contended machine: re-measure alone on an idle box. Before killing anything, list parents (`Get-CimInstance
-Win32_Process`): a `spec-test` parent, or new start times between two listings, means the run is alive. A tool
-reporting a task killed is not evidence its process tree died.
-
-⛔ **A SEARCH THAT NEVER RAN READS AS ZERO HITS.** Never discard the stderr of a grep used as evidence of
-absence: `grep -P` is refused under some locales, and `2>/dev/null` turns that refusal into the cleanest possible
-answer. Prove the instrument on a hit you know exists, and prefer the Grep tool, which reports a failure.
-
-## Memory safety
-
-⛔ **THE REFERENCE COUNT IS THE SAFETY MECHANISM. NEVER ADD A REFUSAL WHOSE ONLY JOB IS TO PROTECT AN UNCOUNTED
-REFERENCE: COUNT IT.** An analysis mistake must cost speed, never a use-after-free, so a count is left out only
-where it is proved unneeded. Counts are added where needed, never added and then cancelled: the parser emits hold
-markers and `HoldResolution.maxon` decides each one once the whole-program summaries exist. Trading soundness for
-speed is never an option; a self-compile slowdown is cured by a better proof. The models are reference counting
-with elision (Swift, Perceus, Lobster) and no shared mutable data between threads (Pony, Erlang), not Rust's
-borrow checker.
-
-**A leak can be masking a double free:** a spurious reference pins a record at rc=1 so its destructor never
-runs. Fixing such a leak turns exit 101 into an access violation. Follow the fault; the fix was right.
-
-## Ranged aliases
-
-**A ranged alias is entered by its own type or by a cast, and checked at run time where it is not proven.**
-- A literal outside the range is E3005.
-- A value of another named integer type (another alias, `ExitCode`) is E3005, and the message names the crossing:
-  `as T`.
-- A value typed `T`, including arithmetic on `T` values (`a - b` over a narrower `T`), a plain unnamed `int`, and a
-  value cast with `as T` all land in `T` with a range check. That check is elided where the compiler proves the value fits, and panics
-  ("Range check failed: value outside typealias 'T'") where it does not.
-- **`+`, `-` and `*` over a full-width unsigned alias are checked AT THE OPERATION, not at a door.** That is
-  `int(0 to u64.max)` (`Count`, `ElementIndex`, `BytePos`; `aliasChecksItsArithmetic`, which excludes `bits(64)`).
-  Every 64-bit pattern is a value of the alias, so a wrapped result is indistinguishable from a real one at any later
-  door. The check is elided where `Parser.unsignedArithmeticIsProvablyInRange` proves the result fits, and a
-  constant expression that wraps is E3005. Unary `-` over one is E3218 and `shl` is unchecked; arithmetic meant to
-  wrap is written over `bits(64)` (`MachineWord`).
-
-"Proves" is a normative spec rule over the parser's analysis (`valueIsProvablyInRange`), never an optimizer
-outcome, so whether a check is emitted is a property of the program. A stronger prover removes checks. It never
-changes which programs compile.
-
-## Error codes — ONE registry, and it is the enum itself
-
-**`maxon-bin/Compiler/ErrorCodeRegistry.maxon` IS the registry.** It carries the number, the canonical
-name and the doc text for every code, and it is AUTHORED — edit it directly.
-
-**To add a diagnostic:** take the next free number in the right band, add a case, write the code that
-emits it.
-
-⛔ **Not its doc comment.** That block is a documentation surface, not a code comment —
-`Mcp/McpErrorCodes.maxon` re-parses this file at runtime to serve `lookup_error_code`, and the site's
-Error Codes page is generated from it — so the `documenter` skill writes it, with every other comment
-the change gets, just before the commit. ⚠ `website/scripts/sync-docs.mjs` fails closed on a case with
-no doc comment, which is how it finds them.
-
-- **A duplicate NAME does not compile**, and `ErrorCode.Foo` does not compile unless the enum declares
-  it — both are structural, so neither needs a checker.
-- **A duplicate NUMBER is neither**: two cases may carry one `"E3099"` and the program is well-formed.
-  `website/scripts/sync-docs.mjs` refuses one while it reads the registry, naming BOTH lines —
-  `website.yml` runs it on every change to the registry, and `/land` §8 runs it with `--check`. `spec-test`
-  does not check this.
-- **The stage is derived from the leading digit** (1xxx lexer … 9xxx internal) and is never written
-  down, so it cannot disagree.
-- **NEVER REFERENCE A CODE BY ITS NUMBER OUTSIDE THE REGISTRY.** Use the registry's member
-  (`ErrorCode.semanticUnneededCast`, plus `.rawValue` for the `"E3010"` spelling). A literal `"E3010"`
-  in a source file is a second copy of the number space: renumber the code and every gate stays green
-  while the code that matched it silently stops matching anything.
-
-- **A diagnostic that lists what the compiler supplies is DERIVED.** Join the sentence from the constants the
-  dispatch arms match on where you can (`specs/builtin-member-rosters.md`), and never state what is absent: an
-  "are not built" clause rots the moment someone builds the thing, across every pin that quotes it. Before
-  widening a roster, grep the message's stable half across `specs/` and `ir-specs/`; re-pin those cases with
-  the change, and grep again after a rebase, which can bring fresh pins of the old wording.
-
-## Spec files
-
-- **`specs/` pins no emitted code; `ir-specs/` is the emitted-code suite.** `maxon spec-test
-  ir-specs` runs the cases whose subject is the emitted code; each carries a ` ```TargetIr:<lane> ` block per
-  native lane (`x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux`) holding the Target IR the compiler
-  renders for it, and a block for the lane being run is a GATE: a differing compile fails the case and shows
-  the first differing line. A pin is compared against the COMPILE, so `--target=arm64-macos` on Windows checks
-  it too (the cases report NOTRUN). A change that moves emitted code re-mints the pins it moves with
-  `--update-required --filter=<spec>/` on each lane, reads the diff, and commits it with the change; CI runs
-  `spec-test ir-specs` natively on every lane beside the suite, and each Linux runner also compiles and
-  compares every other native lane's pins.
-- **A default run batches.** A spec's plain run cases compile into the fewest programs whose type names and
-  extension methods do not overlap, and run once each; a case whose end marker is missing or reports green
-  threads still live, and every case of a program that exited non-zero, reruns alone from the same binary,
-  and output outside every marker FAILS every case of that program. A batched FAIL is compiled alone only
-  to diagnose it: a solo PASS turns into a FAIL naming the batching gap, which is fixed by a new
-  `SoloReason` or a `<!-- process: own -->` marker. `SpecBatch.placementOf` is the one list of reasons a
-  case runs alone. `--batch=off` runs every case alone, and the summary line says how many ran batched
-  in how many programs.
-- **`<!-- tier: stdlib -->` compiles a case as library-tier source** (staged under a private copy of
-  `stdlib/`), so it may name `__Builtins`, `.managed`, `__ManagedMemory` and `cstring` (E3185 elsewhere) and
-  sees `stdlib/`'s unmarked declarations (E3008 elsewhere). `<!-- tier: stdlib/helpers/tls -->` stages the case
-  in that directory instead, because an unmarked declaration is visible only in its declaring directory's
-  subtree and a case at the `stdlib/` root cannot see one under `helpers/`. It is for a case whose SUBJECT is that surface; a
-  case that merely uses one moves to the safe stdlib API.
-  The compiler's own sources under `maxon-bin/` are user tier too.
-- ⚠ A diagnostic added to an early pass can pre-empt the subject of an older compile-error case: the
-  pipeline stops at the first pass that reports, so a case pinning a later pass's code starts failing with
-  the new code. That reads as message churn, and re-minting it makes the case silently test nothing. Change
-  the case's program so it no longer trips the new check and the original diagnostic fires again. A
-  construct in a case's scaffolding that a lane refuses with E3104 does the same.
-- ⚠ A new refusal redirects programs onto the spellings that are left, and those may be untested or absent.
-  For each spelling it removes, ask what the program must now say and whether anything has ever said it: the
-  suite wrote the closed spelling everywhere, so green measures the road being closed, never the one being
-  opened. The refusal binds everything that generates Maxon too: `Testing/ScaleCorpus.maxon` emitting a
-  now-illegal program takes `run_scale_test` down before it reports a number. Never sed a binding away
-  file-wide when sweeping cases: a pinned diagnostic or a later read may name it.
-- Before changing a diagnostic, grep the current message in `specs/` and `ir-specs/` inside `maxoncstderr` and
-  `Maxoncstderr:<target>` blocks only: prose quotes old messages constantly, and an unfiltered grep
-  over-reports. Read the pinned PROGRAMS, not just the sentences. What they share is the discriminator that
-  lets the change narrow so every pinned shape keeps its wording. A pin inside a test PROGRAM shows up only in
-  the run.
-- A scripted edit in text mode on Windows (Python `open(p,'w')`) rewrites every line ending in the file, and
-  `git diff` cannot show it because `.gitattributes` normalises to LF. A case whose `stdout` block gained a
-  `\r` fails with `expected:` and `actual:` printing identically. Edit spec files binary-safe and check
-  `file <path>` for `CRLF`; when expected and actual look identical, suspect line endings first.
-  The same flip reaches compiler sources: the compiler reads the disk, and a tool writing platform line endings
-  leaves a file `w/crlf` until the next checkout. A `b"…"` literal spanning a line break (`GtTraceNewlineText`)
-  then holds `\r\n`, and the emitted runtime prints it. After an agent edits sources, `git ls-files --eol` over
-  the changed files must show no `w/crlf`. Read a mismatch whose two sides look identical with `od -c`.
-- A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
-- `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) and the
-  ` ```TargetIr:<lane> ` pins in a spec file but **not** its `maxoncstderr` blocks — an error-code renumber
-  moves those by hand.
+> ⛔ **`maxon-bin/.maxon/` IS A CLOSED DIRECTORY.** Only the names `scripts/allowed-ignored-paths.txt` lists
+> under `closed-directory: maxon-bin/.maxon` may be there; `/land`'s "No leftovers" gate and CI's "No file
+> left behind" step (both `scripts/check-ignored-files.py`) fail any other. A compiler image you want to
+> keep goes in `temp/<task>/` (`--output=temp/<task>/maxon.exe`); never rename the slot's own image to keep
+> it. How a rebuild swaps the slot is in the `maxon-tools` skill.
+
+## A compiler built by a wrong compiler stays wrong
+
+⛔ **REVERTING THE SOURCE DOES NOT CURE IT.** A probe or defect in a pass or in emitted runtime acted on the
+compiler's own code, so the binary it builds carries the damage: filtered specs stay green, because they
+exercise the compiler's logic and not its own codegen, while a real program panics; a runtime probe fires
+in every later build. Keep probe builds at `--output=temp/<task>/…`. When one reached the slot, rebuild with
+`scripts/build-from-seed.sh`, then compile a real program (`examples/fannkuch-redux.maxon`) before trusting
+a filtered green.
+
+## Targets
+
+- `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` — the native lanes; CI hosts each on its own
+  architecture, and `--target=` cross-compiles programs without hosting the compiler there.
+- `wasm32-wasi` — a WASI Preview2 component, run under the vendored wasmtime.
+
+`maxon-bin/targets.tsv` is the one place a target is listed.
+
+## Where the rest lives
+
+- **The `maxon-tools` skill** — the `maxon` MCP tools (`repoRoot` in a worktree, the tool table, what
+  they refuse), `spec-test` filters and flags, running a suite by hand and reading a red or empty result,
+  the slot's rename, `maxon fmt`, cross and wasm lanes by hand. Load it before running any of them.
+- **The `maxon-coder` skill** — writing Maxon; its `compiler.md` holds the rules for compiler source
+  (tier edits, memory safety, ranged aliases, error codes, `targets.tsv`, cross-target register pressure,
+  the query spine) and its `specs.md` the traps in writing and re-pinning spec cases.
+- **The `compiler-workflow` skill** — `run_scale_test`, `fixpoint.sh` (a difference is a miscompile a
+  green suite cannot see), hosting a lane locally, the Mac, `vendor/`, landing with a new seed.
+- **`docs/SPECS.md`** — the spec format: markers, batching, tiers, `ir-specs/` and its `TargetIr` pins.
+- **`tests/README.md`** — the driver-command corpora under `tests/`. Read it before touching anything there.

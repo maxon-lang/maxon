@@ -49,7 +49,7 @@ drains one of those issues is judged by the same test: the issue and what it nee
 **Invoked standalone**, steps 6–7 below are yours: the gates and the commit. Skip them when you were
 dispatched.
 
-Prefer the `maxon` MCP tools for build/test/format — `maxon-bin/AGENTS.md` has the task→tool table. You
+Prefer the `maxon` MCP tools for build/test/format — the `maxon-tools` skill has the task→tool table. You
 work in the main checkout, so no tool needs `repoRoot`.
 
 Create a task list to perform these steps.

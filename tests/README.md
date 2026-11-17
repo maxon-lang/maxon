@@ -1,7 +1,7 @@
 # `tests/` — fixture corpora for the driver commands
 
 A `specs` case is a Maxon **program** the harness compiles and runs, so it can
-reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
+reach `stdlib/` and `runtime/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 2026-09-02): `fmt`, `test`, `build` and friends are gated by spawning the compiler at
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
@@ -40,6 +40,21 @@ driver, its DAP server and its MCP tools are exercised by those three corpora an
 drive letter, `FilePath.equals` being case-insensitive on Windows alone), and what a host gets wrong
 there is a wrong answer that only its own lane shows. A change under
 `tests/` other than this file triggers `ci.yml`.
+
+⭐ **RUN A CORPUS AND READ ITS PASS/FAIL COUNT** (`./maxon-bin/.maxon/maxon.exe test tests/<corpus>`): a
+runner broken badly enough to report green having run nothing cannot detect itself, so the count is what
+closes the circularity. `/land` runs a corpus only filtered to the cases the change touched; the full
+corpora are CI's. `maxon test` compiles a corpus as `maxon build` does, past the lint rules, and
+`maxon lint --tests tests/<corpus>` checks it against them. Beside the corpora, CI runs
+`scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory;
+`maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program
+calls it; and `scripts/lint-tree.sh`, which lints every first-party program — the compiler, the script
+programs, the torture programs with their preludes, every corpus under `tests/` with `--tests`, and every
+real `.maxproj` and `.maxtasks` file.
+
+**One test per file is structural, not tidiness:** a file is what ONE process runs and that process has one
+deadline, so twelve compiler-spawning tests in one file share it and report a spurious `TIMED OUT`. Most of
+`debug/`'s cases debug a running program, which is a compile plus a debugged run inside one file's deadline.
 
 The last column names the constant each corpus is reached through. Two are not one constant
 naming a directory, and both say so in the row: `fmt/`'s is written three times because its
@@ -1200,8 +1215,33 @@ One run takes its files one after another, so two tests naming one fixture take 
 
 ### 6. Expectations are GENERATED, never hand-written
 
-`generate-expectations.py` runs the compiler and records its real answers. Re-run it after
-changing any input; never hand-edit an `expected-*` file.
+`generate-expectations.py` runs the compiler and records its real answers, so a corpus pins what the
+tool DOES rather than what its author expected. Re-run it after changing any input, never hand-edit an
+`expected-*` file, and read the diff: a generated expectation cannot tell you an answer is wrong.
+**`examples/` is the one corpus whose answers are not generated**: it checks the example programs against
+answers that exist outside this compiler (the Benchmarks Game's published output, an example's documented
+result), because there a generated expectation would only record whatever the compiler said.
+
+### The formatter's gates
+
+`maxon fmt [<file|directory>]` is gated byte-for-byte by this corpus; `spec-test` does not gate the
+formatter. `engine-cases.maxtest` formats every source in `engine-cases/` with the real `maxon fmt`, twice,
+and goes red if an answer differs from its `.expected`, its content changed, `fmt` refuses one, or a second
+run moves anything; a source `fmt` refuses is pinned in `fixtures/`. `UrlInPlainString`,
+`NoMultilineLiteral` and `PlainStringNoInterpolation` are negative controls that must stay GREEN. The
+content check is `contentChange` in `content-gate.maxtest`: every comment line of the source must come out
+as exactly one comment line with the same opener and words, in order, and every code token must survive. A
+preservation check phrased as presence passes duplication, and a count passes a comment moved across code;
+what it cannot see is stated on `contentChange`. Run them with `maxon test tests/fmt`.
+
+`the-library-tiers-are-already-formatted.maxtest` stages `stdlib/` and `runtime/` and fails naming every
+file `maxon fmt` would rewrite; CI runs it with the rest of `tests/fmt` on every lane. `maxon-bin/` is not
+gated.
+
+The walk prunes any directory holding `.git`, which protects a sibling repository but not a directory of
+this one, so a subtree that is not a checkout needs a `.maxonignore`: `website/` carries one, and without it
+a root `fmt` walks every directory under `website/node_modules/`. The marker is a flag whose contents are
+never read, and both walks honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
 ⚠ A generated expectation now pins BEHAVIOUR AGAINST REGRESSION and nothing more. It used to
 prove agreement with a second implementation, and that is a real loss: a wrong answer both halves

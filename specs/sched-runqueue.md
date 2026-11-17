@@ -144,7 +144,7 @@ machine running the dropper — so no processor count exposes it.
 programs, and the green-thread substrate exists on exactly the lanes that have written it — all four native
 lanes. A lane without it refuses the program at its own span,
 which the harness counts as a SKIP naming the case; a marker would make the same fact invisible
-(`maxon-bin/AGENTS.md`, *do not mark a case the compiler already refuses*). `async-scheduler.md`'s *Targets*
+(`docs/SPECS.md`, *Which lanes a case excludes*). `async-scheduler.md`'s *Targets*
 section is the one statement of that gate.
 
 ## Tests

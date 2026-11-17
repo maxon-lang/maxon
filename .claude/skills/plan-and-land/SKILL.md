@@ -61,7 +61,7 @@ default — pass `run_in_background: false`**: the plan cannot be written withou
 `file:line`; the call sites; what each existing mechanism already does; which targets have an arm;
 whether this lands in emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`), `runtime/`,
 `stdlib/` or plain compiler source, **and which of
-`maxon-bin/AGENTS.md`'s obligations that triggers**.
+the obligations in `maxon-bin/AGENTS.md` and the `maxon-coder` skill's `compiler.md` that triggers**.
 
 **B — SPEC SURFACE** (`Explore`), briefed with `/land` §1's three fields **verbatim**: which `specs` files
 own this behaviour; every existing case that touches it with file + line and **the verbatim text** of any
@@ -87,7 +87,7 @@ Decide and write down: **the mechanism**, named — what it extends, what new vo
 op, an `ErrorCode` case and its band, a tier entry); **the alternatives rejected**, one line each; **the
 blast radius** — the file list, and for more than one implementer the **disjoint partition** (`/land`:
 *"never two agents in one checkout on overlapping files"*); **the obligations** inherited from
-`maxon-bin/AGENTS.md`; **the candidate acceptance set** — file, case name, assertion, and **why it must
+`maxon-bin/AGENTS.md` and the `maxon-coder` skill's `compiler.md`; **the candidate acceptance set** — file, case name, assertion, and **why it must
 be RED today**; **the staging decision**.
 
 - **A blocker you measured is the first blocker, never the count**: the rest are invisible until it clears.
