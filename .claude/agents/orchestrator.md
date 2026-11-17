@@ -139,12 +139,12 @@ still gets the step-4 `PING`; idle is not the same as gone.
 |---|---|
 | `READY` | the session is free: follow the `assign-task` skill (it replies `PAUSE` when the account has no room) |
 | `REQUEST` | the user started this worker on something directly. No overlap with an open `task` or a ruling → open a `task` for it and reply `ASSIGN`. Overlap → reply `STOP` naming the owner, and ask the user which goes ahead |
-| `QUESTION` | the `planner` rules; record it in its `design` issue, reply `RULING` with the issue number |
+| `QUESTION` | the `planner` rules; record it in its `design` issue, reply `RULING` with the issue number; work the ruling adds follows "Scope and holding" |
 | `FOUND` | an unrelated defect: follow the `file-issue` skill (it checks for an existing issue and a class, chooses the priority, and files through `file.mjs`), and reply with the issue number. Do not assign it to the finder mid-task |
 | `PROGRESS` | update the `task` issue only when its owner, area or state changed |
 | `DONE` | land it (below), close the `task` naming the sha; the public issue it fixed is closed by the commit's `Fixes #<n>` — check, and close it yourself with the sha if not. Then treat it as `READY`, or, for a session being retired, reply `RETIRE` |
 | `ARCHIVING` | the session archives itself: `fleet.mjs retire --id <id> --archived yes`. A retired session that does not send it gets `fleet.mjs retire --id <id> --task <n>`, which posts the finished marker the panel shows until the user presses its "Reap" button |
-| `BLOCKED` | a ruling → the `planner`; another task's area → broker it between the two owners; otherwise reassign, or ask the user |
+| `BLOCKED` | a ruling → the `planner`; another task's area → broker it between the two owners; otherwise reassign, or ask the user; the held worker gets no second task ("Scope and holding") |
 
 **Landing a worker's branch.** A cloud session pushes only to its own branch, so you land its commit
 with `node .claude/fleet/fleet.mjs land --task <n> --branch <branch>`:
@@ -186,6 +186,14 @@ A window at its target takes no new work on that account until it resets; the ot
 the work meanwhile. When the weekly window is the binding one, prefer Sonnet workers for contained work
 on that account. The fleet can only grow into sessions the user has started: when `budget` wants more
 workers than an account has, ask the user once whether to start that many more sessions on it.
+
+## Scope and holding
+
+**A task's scope is fixed at its `ASSIGN`.** A ruling or a finding that adds work becomes a new task (filed with `file-issue`, planned, assigned in its turn), unless the task's red set cannot go green without it. Apply this when you answer a `QUESTION` or read a `PROGRESS`: the reply either says "inside the task: the red set needs it" or names the new issue, and never widens the area in passing.
+
+**One task per worker.** A worker whose task is held (behind a ruling, another task or a landing) gets no second task. Either clear the hold, or take the held task off it: close its fleet task as not planned, set the issue back to `Ready`, and treat the worker as `READY`.
+
+**A worker session needs one MCP server, `maxon`.** Start one with `--strict-mcp-config --mcp-config .mcp.json`; a desktop worker keeps the app's session tool only for `RETIRE`'s self-archive.
 
 ## Assigning
 

@@ -69,6 +69,14 @@ team aims at the changed surface only.
 
 ## What you return
 
+**Check every claim about today's behaviour in the code.** When a ruling or a plan rests on what the
+compiler, a script or a workflow does now, read the code that does it, cite it as `file:line` in what you
+return, and list separately what you assumed without reading. A ruling built on an unchecked claim is not
+finished.
+
+**Say where added work goes.** A ruling that adds work to a task in flight names it as a new task, unless
+that task's red set cannot go green without it.
+
 Your final message is all the orchestrator sees. It holds one or both of these, as the work needs, or a
 question for the user.
 

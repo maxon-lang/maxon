@@ -32,6 +32,8 @@ It must be:
   the Backlog to the Roadmap is the user's decision.
 - **clear of every open task's area.** If the best candidate overlaps an active task, take the next one.
   If only overlapping work is left, park the worker, or the task, behind it (step 5's `Waits on:`).
+- **for a worker that holds no other open task.** A held task is cleared, or reopened for the next free
+  worker, first.
 - **runnable on this worker's host.** An OS-specific defect needs a worker on that OS. Otherwise the host
   only breaks ties when several workers are free: the heavier task goes to a desktop machine. Nothing a
   landing waits on goes to a host that may go offline. Never make work wait for a particular host.
@@ -65,7 +67,9 @@ the panel and `fleet.mjs` find the owner. The body holds:
 4. **the area**: the passes, directories or files it will change, as tightly as you can state them;
 5. every Roadmap ruling it touches, quoted with its issue number;
 6. what it must not touch, naming the tasks that own neighbouring areas;
-7. `Waits on: #<task>, …` as the first line, if it is parked behind other tasks.
+7. `Waits on: #<task>, …` as the first line, if it is parked behind other tasks;
+8. `Scope: fixed.` Work a ruling or a finding adds is a new task, unless this task's red set cannot go
+   green without it.
 
 ## 6. Send ASSIGN
 
@@ -76,6 +80,8 @@ ASSIGN <task> /land maxon-lang/maxon#<n> — <one-line goal>
 
 <the task body>
 
+Your scope is this task as written. If a ruling or a finding adds work your red set does not need,
+send it as FOUND or QUESTION and do not do it.
 Split the /land into pieces and pick each piece's model (AGENTS.md). Heartbeat with --task <task>.
 Test only what your change touches: `--filter`ed specs while you work, the §8 gates once at the end.
 The full suite, the wasm lane and the tree corpora are CI's; a hook refuses an unfiltered run.

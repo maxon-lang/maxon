@@ -39,6 +39,9 @@ checkout.
   `--state idle` (or `paused`) before you start it.
 - **Stay in the assigned area.** Needing a file outside it is a `PROGRESS` naming the file before you
   edit it; one that another task owns is a `BLOCKED`.
+- **Your scope is fixed at `ASSIGN`.** Work that a `RULING` or your own finding adds is a `FOUND` (or a
+  `QUESTION`), not part of your task, unless your red set cannot go green without it; say which in the
+  message. You hold one task: while it is held you wait, and you take no second one.
 - **Split your task, and pick each piece's model.** Break the `/land` into implementer pieces, and
   dispatch each on the model it needs, in place of the implementer's default:
   - `haiku` for an extremely simple, mechanical job, such as a comment, a rename or a doc line;
