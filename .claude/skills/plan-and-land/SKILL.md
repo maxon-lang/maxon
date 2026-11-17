@@ -67,7 +67,9 @@ whether this lands in emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*
 own this behaviour; every existing case that touches it with file + line and **the verbatim text** of any
 that already pins it; what the neighbouring cases look like.
 
-Both: read-only · write nothing into the checkout · run nothing · `file:line` for every claim.
+Both: read-only · write nothing into the checkout · run nothing · `file:line` for every claim. B is
+`/land`'s scout, and runs on the model `/land`'s model table gives the scout. Each writes its report as
+a file and returns its summary and path (`/land`'s brief item 8); the plan cites the paths.
 
 ⚠ **An issue, residual or TODO saying something is open is a claim about the past, and nothing re-checks
 it.** Before planning around one, build the compiler and run its own minimal reproduction; correct a stale
@@ -199,6 +201,12 @@ STAGE <n> of <N>. Your unit is the WHOLE of this stage. Your "One change, finish
    in one commit" box binds absolutely inside it: do not propose and do not accept any further
    division. Staging was decided before you started and is not reopened here.
 ```
+
+**`/land`'s rules for running agents bind every dispatch here, the surveys included, and are stated
+there once:** a result re-taken only when its inputs changed, fixture keys and the control sample (the
+box under its gate table); a located fix (its §1 — S1 already skips this change's scout); the handover
+bound (brief item 5); report files (brief item 8); the watchdog and the model per stage (after the brief
+list).
 
 ⛔ **Three things the skip does NOT skip**, because each would move a gate: the **set decision** (*"The
 scout returns FACTS; the set is yours"*), the **spec-author dispatch**, and the **RED read**. The skip

@@ -5,6 +5,8 @@ description: Author a finished change's comments and documentation in one pass, 
 
 # Document one finished change
 
+**Model:** its own fresh agent on `sonnet` (`/land`'s model table), never inline at a coordinator.
+
 Code in this repository is written with no comments; this pass, run once on the finished diff, is
 where every comment comes from. **The expected result is zero comment lines added.** Most changes
 need none, and a pass that adds more than a few lines has almost certainly over-written.

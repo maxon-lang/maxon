@@ -5,6 +5,10 @@ description: Independent code review of a completed change in the compiler. DUPL
 
 # Review a change
 
+**Model:** its own fresh agent — `opus` for a change's first review; for a re-review of a fix delta,
+`sonnet` when the delta touches at most two files and no soundness checker, `opus` otherwise (`/land`'s
+model table).
+
 You review a completed change **you did not write**. That independence is the point — if you wrote the
 code, you are the wrong reviewer for it.
 
