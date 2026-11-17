@@ -43,6 +43,9 @@ const PUBLIC_REPO = 'maxon-lang/maxon';
 const CI_WORKFLOW = 'ci';
 const RUN_COMPLETED = 'completed';
 const RUN_FAILED = 'failure';
+const RUN_PASSED = 'success';
+const RUN_VERDICTS = [RUN_PASSED, RUN_FAILED];
+const MAIN_RUNS_SCANNED = 20;
 
 function fail(message) {
   console.error(`fleet: ${message}`);
@@ -695,8 +698,9 @@ function commandWaiting() {
 }
 
 function redMain() {
-  const runs = JSON.parse(gh(['run', 'list', '-R', PUBLIC_REPO, '--branch', MAIN_BRANCH, '--workflow', CI_WORKFLOW, '--limit', '1', '--json', 'conclusion,headSha,status,url']));
-  return runs.filter(run => run.status === RUN_COMPLETED && run.conclusion === RUN_FAILED);
+  const runs = JSON.parse(gh(['run', 'list', '-R', PUBLIC_REPO, '--branch', MAIN_BRANCH, '--workflow', CI_WORKFLOW, '--limit', String(MAIN_RUNS_SCANNED), '--json', 'conclusion,headSha,status,url']));
+  const latestVerdict = runs.find(run => run.status === RUN_COMPLETED && RUN_VERDICTS.includes(run.conclusion));
+  return latestVerdict?.conclusion === RUN_FAILED ? [latestVerdict] : [];
 }
 
 const WAKE_CHECKS = [
