@@ -4,12 +4,9 @@ let BurstFinishedMarkerName = "burst-ran-to-its-end.txt"
 let BurstPidFileName = "burst-pid.txt"
 
 #if os(Windows)
-	let KillExecutable = "taskkill"
+	let KillExecutableName = "taskkill"
 	let KillForceFlag = "/F"
 	let KillProcessFlag = "/PID"
-#else
-	let KillExecutable = "sh"
-	let KillScriptFlag = "-c"
 #endif
 
 function burstProcessId(staged FilePath) returns Pid
@@ -19,16 +16,16 @@ function burstProcessId(staged FilePath) returns Pid
 	return id as Pid
 end 'burstProcessId'
 
-function killArguments(process Pid) returns StringArray
-	#if os(Windows)
-		return [KillForceFlag, KillProcessFlag, "{process}"]
-	#else
-		return [KillScriptFlag, "kill -9 {process}"]
-	#endif
-end 'killArguments'
-
 function killedOutright(process Pid)
-	let ran = try Subprocess.run(Executable.name(KillExecutable), arguments: killArguments(process)) otherwise (e) 'noKill'
+	#if os(Windows)
+		let killer = Executable.name(KillExecutableName)
+		let killerArguments = [KillForceFlag, KillProcessFlag, "{process}"]
+	#else
+		let killer = posixShell()
+		let killerArguments = [PosixShellCommandFlag, "kill -9 {process}"]
+	#endif
+
+	let ran = try Subprocess.run(killer, arguments: killerArguments) otherwise (e) 'noKill'
 		panic("the gate could not run — killing process {process} failed ({e.displayReason()}).")
 	end 'noKill'
 

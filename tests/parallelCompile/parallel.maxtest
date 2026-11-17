@@ -182,7 +182,6 @@ function pinnedEnvironment(staged FilePath, processors ProcessorPin, privateRunC
 end 'pinnedEnvironment'
 
 #if not os(Windows)
-	let PauseShellCommandFlag = "-c"
 	let PauseShellName = "sh"
 	let PauseScript = "dir=$1; pause=$2; shift 2; \"$@\" & pid=$!; tries=0; until [ -n \"$(find \"$dir\" -name '*.lock' 2>/dev/null)\" ] || [ $tries -ge 400 ]; do sleep 0.05; tries=$((tries + 1)); done; if [ $tries -ge 400 ]; then echo \"no output lock appeared under $dir within 20 s\" >&2; kill $pid; exit 97; fi; (sleep $pause; kill -CONT $pid 2>/dev/null) & resumer=$!; if ! kill -STOP $pid 2>/dev/null; then echo \"the build ended before it could be stopped\" >&2; kill $resumer; exit 98; fi; wait $resumer; wait $pid"
 	let PausedBuildTimeoutMs = 60000
@@ -190,16 +189,15 @@ end 'pinnedEnvironment'
 	// Both builds of a comparison come through here, the unpaused one with a 0 s pause: a compile's
 	// counted allocations follow its environment block, and `sh` changes it.
 	function pausedBuildMetricsTable(staged FilePath, label String, pauseSeconds String) returns MetricsTable throws TestFailure
-		let shell = try FilePath.from(PosixShellPath) otherwise panic("parallel-compile.test: {PosixShellPath} is a spellable path")
 		let build = buildArguments(staged.join(StagedProgramFileName), output: executableIn(staged, stem: OutputFileStem), extraArguments: metricsArguments(staged, extraArguments: StringArray.create(0)))
 
-		let arguments = [PauseShellCommandFlag, PauseScript, PauseShellName, staged.join(PrivateRunCacheDirName).toString(), pauseSeconds, testedCompilerPath().toString()].clone()
+		let arguments = [PosixShellCommandFlag, PauseScript, PauseShellName, staged.join(PrivateRunCacheDirName).toString(), pauseSeconds, testedCompilerPath().toString()].clone()
 
 		for word in build 'eachWord'
 			arguments.push(word)
 		end 'eachWord'
 
-		let run = spawnIn(Executable.path(shell), arguments: arguments, staged: staged, what: "the '{label}' build, paused", environment: pinnedEnvironment(staged, processors: ProcessorPin.machine, privateRunCache: true, runCacheDirName: PrivateRunCacheDirName, extraVariables: EnvMap.create()), deadline: WaitDeadline.within(PausedBuildTimeoutMs))
+		let run = spawnIn(posixShell(), arguments: arguments, staged: staged, what: "the '{label}' build, paused", environment: pinnedEnvironment(staged, processors: ProcessorPin.machine, privateRunCache: true, runCacheDirName: PrivateRunCacheDirName, extraVariables: EnvMap.create()), deadline: WaitDeadline.within(PausedBuildTimeoutMs))
 		try requireCompiled(run, label: label)
 
 		return metricsTableOf(staged, label: label)

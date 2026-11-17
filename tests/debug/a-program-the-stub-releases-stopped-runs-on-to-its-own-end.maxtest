@@ -1,0 +1,33 @@
+#if os(Macos)
+	let StoppedReleaseCaseLabel = "a-program-the-stub-releases-stopped-runs-on-to-its-own-end"
+
+	let StoppedReleaseRounds = 3
+	let StoppedReleaseExitCode = 0
+	let StoppedReleaseEndDeadlineMs = 30000
+	let StoppedReleaseTraceName = "proxy-trace.txt"
+#endif
+
+test 'a program the stub lets go of stopped is continued, so it is the session own running child and runs on to its own end'
+	#if os(Macos)
+		let staged = builtFixture(StoppedReleaseCaseLabel, fixture: ThreadBurstFixtureName)
+		let proxies = stubProxyDirectory(StoppedReleaseCaseLabel)
+		let trace = staged.join(StoppedReleaseTraceName)
+		let expectedEnd = "{ProgramExitedWording} {StoppedReleaseExitCode}"
+
+		for round in 0 upto StoppedReleaseRounds 'eachRound'
+			removedIfThere(trace)
+
+			let detached = DetachedRound.run(staged, environment: releasedStoppedProxyEnvironment(proxies, trace: trace), endWording: expectedEnd, endDeadlineMs: StoppedReleaseEndDeadlineMs)
+			let traced = try File.readText(trace) otherwise ""
+
+			Expect.contains(traced, needle: "{ProxyStoppedMarker}{detached.program}{ProxyStoppedParentWording}{detached.sessionId} (", message: "round {round}: the stub proxy did not see process {detached.program} stopped, with the session ({detached.sessionId}) as its parent, before it passed on the stub's acknowledgement of the detach, so the case measured nothing. Its trace: {traced}")
+			Expect.isTrue(detached.place.isALiveChildOf(detached.sessionId), message: "round {round}: ⛔ A PROGRAM A STUB LETS GO OF STOPPED IS LEFT STOPPED, AND THE SESSION WAITS ON IT FOREVER. The session ({detached.sessionId}) let go of process {detached.program}, which the stub released stopped, and {HandedBackRunningDeadlineMs} ms after the stub was gone {detached.place.displayReason()}. Over the round the session said: {detached.said}")
+			Expect.isTrue(detached.roundEnd.hasEnded(), message: "round {round}: the released program runs on and the session reports '{expectedEnd}' within {StoppedReleaseEndDeadlineMs} ms. {detached.roundEnd.displayReason(detached.program)}")
+			Expect.isTrue(detached.finished, message: "round {round}: the session ends once it is told to quit. {detached.said} {detached.evidence}")
+			Expect.isTrue(detached.markerPresent, message: "round {round}: the released program ran to its own end and wrote {BurstFinishedMarkerName}. The session said: {detached.said}")
+		end 'eachRound'
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
+	#endif
+end 'a program the stub lets go of stopped is continued, so it is the session own running child and runs on to its own end'

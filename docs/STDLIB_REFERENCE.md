@@ -2469,13 +2469,20 @@ The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
 | `cloneChild(parent DebuggeeThreadId)` | `DebuggeeThreadId` | `DebuggeeError.unreadable` | The id of the thread `parent` started, read while `parent` is stopped at the `cloneEvent` that reported it. The kernel has traced that thread since its birth, before its own first stop is reported. |
 | `threadState(process DebuggeeProcessId, thread DebuggeeThreadId)` | `TraceThreadState` | — | What `/proc` says of one thread of `process`. |
 | `signalThread(process DebuggeeProcessId, thread DebuggeeThreadId, signal DebuggeeSignal)` | `bool` | — | Send `signal` to one thread. |
-| `signalProcess(process DebuggeeProcessId, signal DebuggeeSignal)` | `bool` | — | Send `signal` to the process. |
 | `signalWasSentByKill(thread DebuggeeThreadId)` | `bool` | — | True when the signal that stopped the thread came from `kill`. |
 | `readMemory(process DebuggeeProcessId, address DebuggeeAddress, count DebuggeeByteCount)` | `ByteArray` | `DebuggeeError.unreadable` | `count` bytes of the debuggee's memory. |
 | `writeCode(thread DebuggeeThreadId, address DebuggeeAddress, content ByteArray)` | — | `DebuggeeError.unwritable` | Write `content` a word at a time, keeping the bytes around it. |
 | `registers(thread DebuggeeThreadId)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's general registers, as the kernel lays them out for the architecture. |
 | `setRegisters(thread DebuggeeThreadId, block RegisterBlock)` | — | `DebuggeeError.unwritable` | Set them from a block of that size. |
 | `vectorRegisters(thread DebuggeeThreadId)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's floating-point and vector registers. |
+
+Three free functions signal a process on Linux and macOS; on another host each panics.
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `signalProcess(process DebuggeeProcessId, signal DebuggeeSignal)` | `bool` | Send `signal` to the process; true when it was delivered. |
+| `continueProcess(process DebuggeeProcessId)` | `bool` | Send the process `SIGCONT`, which resumes a stopped one. |
+| `stopProcess(process DebuggeeProcessId)` | `bool` | Send the process `SIGSTOP`. |
 
 Three public constants name where the general-register block keeps the registers a frame walk starts from,
 as byte offsets for the architecture the program is built for:

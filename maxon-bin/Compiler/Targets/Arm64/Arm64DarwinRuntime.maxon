@@ -1462,6 +1462,16 @@ function buildArm64DarwinDirRemoveChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostDirRemoveName)
 end 'buildArm64DarwinDirRemoveChunk'
 
+function buildArm64DarwinProcessSignalChunk() returns FunctionCodeChunk
+	let asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.kill)
+	arm64DarwinEmitStashIfStatusFailed(asm)
+	arm64EmitWin32BoolFromZeroStatus(asm)
+
+	return asm.finishFunction(HostProcessSignalName)
+end 'buildArm64DarwinProcessSignalChunk'
+
 // ==========================================================================
 // mrt_darwin_file_rename(x0 = oldPathPtr, x1 = newPathPtr) -> x0 = BOOL
 // ==========================================================================
@@ -2497,6 +2507,10 @@ function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage Run
 	if usage.usesProcessNamespace 'processNamespace'
 		chunks.push(buildArm64DarwinProcessNamespaceChunk(globalData))
 	end 'processNamespace'
+
+	if usage.usesProcessDebug 'processSignal'
+		chunks.push(buildArm64DarwinProcessSignalChunk())
+	end 'processSignal'
 
 	if usage.usesEntropy 'entropy'
 		chunks.push(buildArm64DarwinRandomFillChunk())

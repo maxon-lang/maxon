@@ -73,6 +73,29 @@ export type DebugTarget
 		return self.statusIsOurs()
 	end 'awaitHandOver'
 
+	export function continueIfItRunsOn()
+		if self.hasSettled() 'nothingRunsOn'
+			return
+		end 'nothingRunsOn'
+
+		let runsOn = match self.child.pollExit() 'polled'
+			running gives true
+
+			exited or
+			reapedElsewhere gives false
+		end 'polled'
+
+		if not runsOn 'itHasEnded'
+			return
+		end 'itHasEnded'
+
+		let program = self.processId()
+
+		if not continueProcess(program as DebuggeeProcessId) 'refused'
+			panic("DebugTarget.continueIfItRunsOn: the kernel refused SIGCONT to process {program}, which is this session's own child, unreaped and in its own session, so neither ESRCH nor EPERM can apply to it")
+		end 'refused'
+	end 'continueIfItRunsOn'
+
 	function statusIsOurs() returns bool
 		return match self.child.pollExit() 'polled'
 			running or

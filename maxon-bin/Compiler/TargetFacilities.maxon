@@ -228,6 +228,8 @@ export enum HostFacility
 	// about a CPU as well as an OS even where the mechanism is not a debug port.
 	processDebug
 
+	processSignal
+
 	// The runtime's fault handler, which turns a hardware trap into `panic: nil pointer or invalid memory
 	// access`, a backtrace and exit 1. The fault probe (`maxon_force_segfault`) exists to reach it, and
 	// wasm32-wasi installs none: its store through address 0 lands in linear memory and traps nothing.
@@ -520,6 +522,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.processSampling)
 	end 'processSamplingBand'
 
+	if callee.equals(DebugHostProcessSignalName) 'processSignal'
+		return CalleeFacility.needs(HostFacility.processSignal)
+	end 'processSignal'
+
 	if isDebugHostRuntimeCallee(callee) 'processDebugBand'
 		return CalleeFacility.needs(HostFacility.processDebug)
 	end 'processDebugBand'
@@ -713,6 +719,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processSampling or
 			processDebug gives true
 
+			processSignal or
 			machTaskPorts or
 			microsecondSleep gives false
 		end 'f'
@@ -774,6 +781,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			faultHandler or
 			uptimeClock or
 			processSampling or
+			processSignal or
 			machTaskPorts or
 			microsecondSleep gives true
 
@@ -849,7 +857,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processDescendants or
 			microsecondSleep gives true
 
-			processDebug gives true
+			processDebug or
+			processSignal gives true
 
 			machTaskPorts or
 			trustStore gives false
@@ -914,7 +923,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processSampling or
 			microsecondSleep gives true
 
-			processDebug gives true
+			processDebug or
+			processSignal gives true
 
 			machTaskPorts or
 			trustStore gives false
@@ -969,6 +979,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			machTaskPorts or
 			microsecondSleep or
 			processDebug or
+			processSignal or
 			trustStore or
 			faultHandler gives false
 		end 'f'
