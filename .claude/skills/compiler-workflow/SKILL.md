@@ -208,11 +208,18 @@ faults on the first load.
 ## Landing a commit with its own seed
 
 The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins. A commit it refuses
-(E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002) lands with a seed frozen
-from it by `land.yml`, never by `git push` and never by a seed frozen on this machine.
+(E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002, which is a locked slot)
+lands with a seed frozen from it by `land.yml`, never by `git push` and never by a seed frozen on this
+machine.
+
+**`/land` §8's seed-chain gate** is that check: on a throwaway clone at a short path, with the diff applied
+and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`. Exit 0 passes;
+any failure but E6002 is a refusal.
 
 The commit goes on top of a bootstrap chain: commit first the intermediate tree that the pinned seed builds
-— the compiler change, before any source uses what it adds — so that its compiler builds your commit. Check
+— the compiler change, before any source uses what it adds; more than one commit when the change needs
+several — so that its compiler builds your commit. The chain is scaffolding: `main` receives your commit
+alone, squashed onto `origin/main` with a `Bootstrap-Chain:` trailer, plus the pin. Check
 each step locally as CI will: `scripts/land.sh chain origin/main HEAD` builds the chain from the pinned seed,
 two stages per commit, in `temp/land-branch/`, and names the commit no step could build. Then, from the main
 checkout:
@@ -227,8 +234,17 @@ session that can push only its own branch pushes the chain there instead, with t
 (or `Land: rehearsal`) on its head. CI freezes the seed from the chain's last compiler, proves it on every
 native lane's own runner, publishes it with the ref `<seed-tag>-chain`, and pushes the commit and its pin
 in one push. After a land from the main checkout, `git fetch origin main && git reset --keep origin/main`
-replaces the local chain with what landed. `docs/RELEASING.md` owns the procedure and the retraction on a
-failure.
+replaces the local chain with what landed. A failed or moved-`main` run retracts what it published:
+rebase, re-take each `/land` §8 gate whose inputs changed, and land again. `docs/RELEASING.md` owns the
+procedure and the retraction.
+
+**A chain land in flight holds `main`**: a push while `land.yml` publishes a seed costs that land its run.
+`scripts/land.sh in-flight --wait` prints `none` at once when no chain land is running; otherwise it names
+the branch and run and returns when they finish. A failure to read GitHub is a failure, not a `none`.
+
+**A session that can push only its own branch** lands an ordinary commit, one the seed accepts, the same
+way: one commit carrying the trailer `Land: main`, pushed to that branch; `land.yml` fast-forwards `main`
+to it, and the outcome is that commit's check runs.
 
 ⭐ **Land it WITHOUT ASKING (user ruling)** whenever the seed refuses a commit you are landing:
 publishing the seed and pushing its pin is standing-authorized, like the `git push` it replaces. Never

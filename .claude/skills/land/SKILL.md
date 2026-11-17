@@ -6,610 +6,257 @@ description: Implement one self-contained compiler change end to end and push it
 # Land one change
 
 **One invocation = ONE change, done WHOLE: specified, implemented, reviewed and pushed as a single
-commit.** You work directly in the main checkout, on `main` with no branch, and you run the landing gates
-**exactly once, at the end**. There is **no full local battery**: you commit and push on a build, filtered
-specs covering what changed and the codecs check, and CI runs the rest.
+commit**, in the main checkout, on `main`, with no branch. The landing gates run **exactly once, at the
+end**, and there is **no full local battery**: you push on a build, filtered specs covering what changed
+and the codecs check; CI runs the rest. **This is the process for all compiler work** — a bug just found,
+a missing diagnostic, a pass that answers wrong, a feature however large; there is no heavier sibling.
 
-**This is the process for compiler work:** the bug you just found, the diagnostic nobody wrote, the pass
-that answers wrong, a feature however large. There is no heavier sibling to escalate into.
+**Beside this file, read on demand:** `brief.md` before any brief; `situations.md` when a situation it
+names arises; `known-issues.md` for §10 outside the fleet. Seed-chain landing: `compiler-workflow`.
 
-> ## One change, finished here, in one commit
->
-> The person who invoked `/land` chose this process deliberately. Finish the change in it, however large
-> it turns out: no worktree, no contract or board, no recommendation to run a heavier process, no landing
-> half and filing the rest. Size, several passes, new IR ops, a design decision you can make, or hours of
-> work are not reasons to leave: `AGENTS.md` says there are no time constraints and complexity doesn't
-> matter. A big change is a longer §2 and §3, not more commits. The only stops are the HALT list at the
-> end, and each of those is a question answered in place, after which you carry on here.
->
-> Do not slice the deliverable. The task goes through §1–§9 once and reaches `main` as one commit, because:
-> - §8 runs once because the change is one chunk; four slices mean four rebases, gate runs, self-compiles
->   and reviews.
-> - between slices `main` carries half a mechanism (an `export` without its consumer is an E3092 that
->   fails CI's lint step; a diagnostic no case reaches is dead code; a lowering with no emitter is a
->   wrong answer waiting for a caller).
-> - §1's red set is the acceptance for the whole change; slices each invent a smaller one.
->
-> Delegating labour is the method: several implementers may run at once on disjoint files (sequentially
-> when files overlap), in your one tree, integrated as their work arrives. Fixing a pre-existing red you
-> did not cause, in its own commit first (§8), is also fine.
+> **Whoever invoked `/land` chose it deliberately: finish it here however large**: no worktree, contract or board, no heavier process, no landing half
+> and filing the rest. Size, several passes, new IR ops, a design decision you can make, or hours of work
+> are no reason to leave (`AGENTS.md`); a big change is a longer §2 and §3, not more commits. The only
+> stops are the HALT list, each answered in place, then you carry on. **Do not slice**: §1–§9 run once,
+> to one commit, since §8 runs once (slices multiply rebases, gates, self-compiles, reviews), a slice
+> leaves `main` half a mechanism (an `export` without its consumer is an E3092 failing CI's lint; an
+> unreached diagnostic is dead; a lowering with no emitter is a wrong answer waiting), and §1's red set
+> is the whole change's acceptance. Delegating labour is the method: several implementers at once on
+> disjoint files (sequentially when they overlap), in your one tree, integrated as work arrives. Fixing a
+> pre-existing red you did not cause, in its own commit first (§8), is fine.
 
-## The shape — who does what
+## The shape
 
-**You are the COORDINATOR. You do not write the change; you own the spec set, the integration, the
+**You are the COORDINATOR: you do not write the change; you own the spec set, the integration, the
 gates and the commit.** Agents do the reading and the typing.
 
-| | | who | red here means |
+| § | Step | Who | Red here means |
 |---|---|---|---|
-| **0** | Orient · clean tree · **build** | **you** | |
-| **1** | Decide the **MINIMAL** spec set, write it, **watch every case FAIL** | **scout** agent surveys · **you** decide · **spec-author** agent writes (a located fix: you write it, no scout) · **you** read the red | a case that is green *now* tests nothing about your change |
-| **2** | Write **all** the code | **implementer** agent(s) — one or more | |
-| **3** | Green the set — **on the FILTER, never the full suite** | same agent(s) · **you** integrate and confirm | keep going |
-| **4** | Optimization pass | the **`optimize`** skill, in a dispatched agent, on a trigger · **the ladder read is YOURS**; its row is minted in §8 | a ladder you cannot explain |
-| **5** | Independent review | the **`code-review`** skill, in a dispatched agent — never one that wrote the code | fix before the commit |
-| **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a non-empty code-identity proof |
-| **7** | **Rebase** on `origin/main` | **you** | resolve by hand |
-| **8** | THE LANDING GATES, once: build · filtered specs · codecs check · **lint**, **self-compile** and seed chain where the diff calls for them | **you** | **stop** |
-| **9** | Commit and push — do not wait for CI | **you** | a rejected push: rebase, then re-take each §8 gate whose inputs changed |
+| 0 | Orient, clean tree, build | you | |
+| 1 | MINIMAL spec set, **every case watched FAILING** | scout, then **you** pick, an author writes (located fix: you); **you** read the red | a case green now tests nothing |
+| 2 | All the code | implementer(s) | |
+| 3 | Green the set **on the FILTER** | same; **you** confirm | keep going |
+| 4 | Optimization | `optimize` on a trigger; **the ladder read is yours**, row in §8 | a ladder you cannot explain |
+| 5 | Review | `code-review`, never a writer of the code | fix before the commit |
+| 6 | Every comment, the `docs/` source | `documenter` | a non-empty code-identity proof |
+| 7 | Rebase on `origin/main` | you | resolve by hand |
+| 8 | THE LANDING GATES, once | you | **stop** |
+| 9 | Commit, push; do not wait for CI | you | rejected push: rebase, re-take gates whose inputs changed |
 
-**Every spec run, in §8 as before it, is `--filter`ed** — the whole set in ONE run, one `--filter=` per
-pattern (MCP: a `filter` array), so its spec files run as parallel jobs. That is what makes this lightweight — and it is only
-honest because §1's red was real. The filter is a *proxy* for the suite, and a proxy you never saw fail
-is a proxy for nothing. CI runs the suite.
+**Every spec run, in §8 as before it, is `--filter`ed**: the whole set in ONE run, one `--filter=` per
+pattern (MCP: a `filter` array), so its files run as parallel jobs. That is honest only because §1's red
+was real: a proxy you never saw fail is a proxy for nothing. CI runs the suite.
 
-⚠ **Steps 4–8 do not reorder.** Optimize *before* review (an optimizer rewrites code and can introduce
-the very duplication the review exists to catch). Review *before* commit (a review after the commit is a
-bug report; before it, it is a gate). **Document AFTER the review** — comments are written once, against
-code that has stopped moving, and a documenter running earlier would comment code the review then
-rewrites. **Rebase before the gates** — gates run on a tree you then rebase have tested something
-you are not pushing.
+⚠ **Steps 4–8 do not reorder.** Optimize before review (an optimizer can add the duplication review
+catches); review before commit (after it, a review is a bug report); document after review (comments are
+written once, on code that stopped moving); rebase before the gates (else they tested a tree you do not
+push).
 
-## Coordinating: what you delegate, what you keep, and what you never hand over
+## Coordinating
 
-> ### ⭐ THE LINE: **an agent may produce any amount of TEXT or CODE. You keep every NUMBER THAT GATES,
-> and every decision about what "done" means.**
+> ⭐ **THE LINE: an agent may produce any amount of TEXT or CODE. You keep every NUMBER THAT GATES, and
+> every decision about what "done" means.**
 
-**Delegate by default — every step above with an agent named in it, every time.** Not because you could
-not do it, but because **your context is the scarce resource**: an implementation is greps, dead ends,
-IR dumps and refuted hypotheses, and none of that is anything the *gates* need. The agent absorbs it and
-returns a report. You stay small enough to integrate, judge and land.
+**Delegate by default — every step with an agent named, every time**: your context is the scarce
+resource. ⚠ **Reading a third file to form a hypothesis is no longer coordinating**: hand it over. **Each
+stage is its own fresh agent, however small**: inline at your context it costs about 2.6 times as much,
+since every call you make re-reads all you hold. **The one exception:** a single edit you ALREADY located
+and can prove with one filtered run, and §1's located-fix cases; at a second hypothesis or file, hand it
+over, and **§5's review still runs**: independence is not a size question.
 
-⚠ **A coordinator who starts reading a third file to form a hypothesis has stopped coordinating.** Hand
-it over. **Each stage is its own fresh agent, however small** (the model table below): a stage run inline
-at the coordinator's context (a documenter, a re-review, a scout) costs about 2.6 times as much as its own
-fresh agent, because every call the coordinator makes re-reads everything it holds. **The one exception is
-narrow:** a single edit you have ALREADY located and can prove with one filtered run, and §1's located-fix
-cases. The moment it needs a second hypothesis or a second file, hand it over — and **§5's review still
-runs**, because independence is not a size question.
+**Never delegated**, since that would move the gate: **the choice of spec set** (the scout returns facts);
+**reading the red** (§1) and **confirming the green** (§3) with your own filtered run; **the ladder read**
+(§4) and its `optimization-log.md` row (§8); **the rebase, the gates, the commit, the push** (§7–§9).
 
-**What is NEVER delegated**, because delegating it would move the gate:
-
-- **The choice of spec set (§1).** An agent left to choose its own coverage tests what it remembered,
-  and declares done against cases nobody chose. The scout returns facts; the set is yours.
-- **Reading the RED (§1) and confirming the GREEN (§3)** with your own filtered run.
-- **The `scale-test` ladder read (§4) and its `optimization-log.md` row (§8)** — attribution is only
-  available to whoever knows what changed, and the row is minted on the tree you push.
-- **The rebase (§7), the landing gates (§8), the commit and the push (§9).**
-
-### ⛔ EACH GATE RUNS ONCE, AND THIS TABLE SAYS WHERE
-
-Every agent's brief independently tells it to be thorough, so without this table the suite runs three to
-five times per change and exactly one of those runs gates anything.
+### ⛔ Each gate runs once, where this table says
 
 | Work | Runs | Where | Everywhere else |
 |---|---|---|---|
-| **build** | **only when the binary is stale** | **you, §8** — §6's documenter is the last editor and does not build; its comment edits make the binary stale | ⛔ **nobody builds a current binary** — see the box below |
-| **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
-| **the §8 gates** — final filtered specs · codecs check · lint · self-compile · seed chain · docs check | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before them, on the identical tree, and runs no tests at all. The full suite, the wasm lane and the tree corpora are CI's |
-| **`scale-test` ladder** | **once to read, once to mint the row** | **you** — the read in §4, the row in §8 on the rebased, documented tree — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
-| **`git commit` / `git push` / `git rebase`** | **once** | **you, §7 and §9** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
+| **build** | only when stale | **you, §8** (the documenter, last editor, does not build) | ⛔ nobody builds a current binary |
+| **filtered specs** | many | each agent's own loop | the loop, not a gate |
+| **§8 gates** (final filtered specs, codecs, lint, self-compile, seed chain, docs check) | once | **you, §8** | ⛔ no agent runs any; the documenter runs no tests. Full suite, wasm lane, tree corpora: CI |
+| **`scale-test` ladder** | once to read, once to mint | **you**: read §4, row §8 on the rebased documented tree; plus the optimizer's before/after | ⛔ not the implementer's: a pre-review reading attributes nothing |
+| **`git commit`/`push`/`rebase`** | once | **you, §7, §9** | ⛔ no agent commits, pushes, rebases, stashes or opens a worktree |
 
-**When an agent suspects something it cannot cheaply confirm, it says so in its report** — a sentence
-feeding a gate that is going to run anyway beats a run nobody can attribute.
+Without this table each brief's thoroughness runs the suite 3–5 times per change, once gating. **An agent
+reports what it suspects but cannot cheaply confirm**: it feeds a gate that runs anyway.
 
 > ### ⭐⭐ NEVER REPEAT A BUILD OR A RUN WHOSE INPUTS HAVE NOT CHANGED (user directive)
-> A build's inputs are the sources compiled into the compiler; a run's are the binary, the tree and the
-> filter. Same inputs, same answer — so a repeat buys nothing and costs minutes.
-> - **Build only when the binary is STALE** — a compiled-in source (`maxon-bin/**.maxon`) is newer than
->   it: `find maxon-bin -type f -name '*.maxon' -newer maxon-bin/.maxon/maxon.exe | head -1` (`maxon` off
->   Windows) prints nothing when it is current, and a missing binary is stale. ⛔ **Never build "to be
->   safe"**: `spec-test` and `scale-test` refuse a stale binary by themselves
->   (`Testing/CompilerFreshness.maxon`). A `stdlib/` or `runtime/` edit needs no build for the SUITE,
->   which compiles both from source — but the compiler's own driver commands (`fmt`, `test`, the LSP)
->   carry the stdlib they were built with, so a change the tree corpora exercise does need one.
-> - **The one second build that is not a repeat: emitted runtime.** A change to `Compiler/Runtime/` or
->   `Compiler/Targets/*/*Runtime*.maxon` takes TWO self-compiles before the compiler itself — which is
->   also the spec harness — runs the new runtime. `maxon run build` does the second build itself, and
->   prints why; `MAXON_SECOND_STAGE=1` on that `run build` stops it at one.
-> - **A run already done on the same binary and tree is READ, not repeated.** Agents write every build
->   and run to a file in their scratchpad directory and report its path and exit code; you read that file. Re-run only
->   when something it depended on has changed since.
-> - **Every edit comes before the expensive runs, never beside them.** An edit to a compiled-in source
->   after a run started invalidates that run. So the landing gates start only once no agent can still edit:
->   **§6's documenter is the last editor** and builds nothing, so §8's build is the one build after
->   the review.
-> - **A red you did not cause is re-run by FILTER** — the failing cases alone — never by re-running the
->   whole suite.
-> - **A result is re-taken only when one of its inputs changed.** A gate's inputs are the files it reads:
->   for every compiler-dependent gate — build, filtered specs, corpora, IR pins, lint, self-compile, seed
->   chain — the sources under `maxon-bin/`, `stdlib/` and `runtime/` plus that gate's own data files (its
->   spec files, corpus, pins or lint subjects); for any other gate, the files it reads. After a fix round
->   or a manual rebase, **list the changed paths** — `git diff --name-only <tree the result was taken on>
->   <tree now>` — and re-take only the results with an input in that list. **A gate with no input in the
->   list stands**, and its log is what you quote. Name each tree when you take a result on it:
->   `GIT_INDEX_FILE=<scratchpad>/land.idx git add -A`, then `GIT_INDEX_FILE=<scratchpad>/land.idx git
->   write-tree`, records the working tree, untracked files included, without touching the shared index.
->   **A change made by others in a file you did not touch is not a change to your inputs**: after a
->   rebase, drop from the list every path your change does not touch. CI is where disjoint changes meet.
->   The ladder row carries the tree's digest, so any change to the tree re-mints it (§9).
-> - **A measurement over fixtures is re-taken only over the fixtures a fix round could have moved.**
->   Before its first full run, record for each fixture its result and **its key** — the compiler phase,
->   function or diagnostic that produced that fixture's number, which a fix can act through. After a fix
->   round, re-run the fixtures whose key names code the round's diff touched, plus **a fixed control
->   sample of ten fixtures, the same ten every round**. If any control moved, the key was wrong: re-take
->   every fixture once and re-key. The full set runs once more, on the final tree, as the figure the
->   commit quotes. No key recorded means every fixture is re-run.
+> A build's inputs are the compiled-in sources; a run's, the binary, the tree and the filter. Same inputs,
+> same answer: a repeat costs minutes and buys nothing.
+> - **Build only when STALE**: `find maxon-bin -type f -name '*.maxon' -newer maxon-bin/.maxon/maxon.exe
+>   | head -1` (`maxon` off Windows) prints nothing when current; a missing binary is stale. ⛔ **Never
+>   "to be safe"**: `spec-test` and `scale-test` refuse a stale binary. A `stdlib/`, `runtime/` or
+>   emitted-runtime edit: `situations.md`, "Deciding to build".
+> - **A run done on the same binary and tree is READ**: agents log every build and run to a scratchpad
+>   file and report its path and exit code. **Every edit precedes the expensive runs** (a later edit invalidates them): the documenter is
+>   the last editor, so §8's build is the one after review. **A red you did not cause is re-run by FILTER**,
+>   the failing cases alone.
+> - **A result is re-taken only when an input changed.** A compiler-dependent gate's inputs (build,
+>   filtered specs, corpora, IR pins, lint, self-compile, seed chain) are the sources under `maxon-bin/`,
+>   `stdlib/`, `runtime/` plus its own data files (spec files, corpus, pins, lint subjects); any other
+>   gate's, the files it reads. After a fix round or manual rebase **list the changed paths**
+>   (`git diff --name-only <tree then> <tree now>`, trees named per `situations.md`): **a gate with no
+>   input listed stands**, its log quoted. **Others' changes in files you did not touch are not your
+>   inputs**: drop them; CI is where disjoint changes meet. The ladder row carries the tree digest, so any
+>   tree change re-mints it. **A measurement over fixtures** re-takes only fixtures a round could move
+>   (`situations.md`).
 
-### Every brief carries these nine things
+### Agents
 
-1. **The change in one line**, and **the cases that must go green** — the acceptance, not a topic.
-2. **"This is a `/land` change"**: main checkout, no worktree, no branch, **one commit at the end, which
-   is the coordinator's**. ⛔ Do not commit, push, rebase or stash. No self-relaunching or polling loops,
-   and never copy a binary into `maxon-bin/.maxon/` — a probe build goes to `--output=temp/<task>/…`.
-3. **Its EXCLUSIVE file list**, when more than one agent is live. One file, one owner — and agents run in
-   parallel only on disjoint files, sequentially otherwise.
-4. **The DIAGNOSIS you already have** — symptoms, exit codes, stderr, the call sites you read, the
-   hypotheses you already refuted. Making an agent re-derive this is the one waste delegation exists to
-   prevent. ⚠ **Hand it over as a HYPOTHESIS to test against the red set, not a specification to
-   execute:** if the agent's measurement contradicts it, it reports the measurement and stops instead of
-   building the stated cure. Name a cure or a location as a candidate, never as the place to fix. Never
-   brief an unmeasured scope claim as a prohibition ("X is not affected, do not touch it"): say what was
-   checked and ask for any other route. Ask for `file:line` behind every load-bearing claim and a closing
-   list of what the agent asserted without reading. "Present but I could not reach it" bounds the agent's
-   search, not the code: assign that shape to the next agent explicitly.
-   A measurement is only as live as the tree it was taken on: one taken under a reverted mechanism, or
-   before a rebase, is re-taken before it is quoted. Give a stop condition a line of its own, and prescribe
-   the case that would FAIL if the premise is false: a sentence nobody is invited to doubt gets built.
-5. **Its STOP RULE**: stop when your filter is green; the §8 gates are the coordinator's, the full suite
-   is CI's. **A defect you
-   find that is NOT RELATED to this change (the test is §10's) you do not fix** — you name it in your
-   report: what is wrong, `file:line`, how you saw it, and a program that reproduces it.
-   An "iterate until X" goal carries a build budget: at most ten builds, one at a time, then report. A
-   self-compile is minutes of every core and gigabytes of memory, and an open-ended loop locks up the
-   workstation it runs on.
-   **An implementer or diagnosis agent hands over at 150k tokens of context or 60 model calls, whichever
-   comes first**, and when the coordinator says it has passed one: it writes a **handover file** of at
-   most 40 lines — what is done, the tree state, the hypotheses refuted with their evidence paths, the
-   next step — at `<scratchpad>/reports/handover-<n>.md`, and stops. The coordinator dispatches a fresh
-   agent with that file's path. The count is the watchdog's (below), never the agent's own estimate.
-6. **The gate table above**, in one line: which runs are yours, which are not.
-7. **"No manual tests"** — no sabotage, no hand-run probe or scratch program to confirm anything. A
-   check worth running goes into the set as a case; anything else is not run (the box below).
-8. **"Write every build and run to a file in your scratchpad directory, and report each one's path and
-   exit code"** —
-   including your LAST build, and whether you edited a compiled-in source after it. That report is what
-   lets the coordinator read your work instead of repeating it. **The report is a file**, at the path
-   the brief names, `<scratchpad>/reports/<stage>-<n>.md` (the coordinator's scratchpad; `<n>` counts
-   that stage's dispatches). It opens with a `## Summary` of at most 25 lines: the verdict, the files
-   changed, the cases and their state, each run's log path and exit code, the last build and whether
-   anything was edited after it, the unrelated defects, and the claims made without reading. **The
-   agent's final message is that summary and the path**, nothing more.
-9. **"Wait only on blocking tools."** A background shell or a Monitor wakes the main session, not a
-   subagent whose turn has ended. An agent uses the blocking `maxon` MCP tools (`build`, `run_spec_test`,
-   `test`, `run_scale_test`), which return when finished; it never backgrounds a run, never Monitors,
-   never ends a turn to wait. Multi-hour sweeps stay with the coordinator.
+- **Briefs follow `brief.md`**: the nine things plus the stage's lines.
+- **Every running agent is watched by `watchdog.mjs`** (`situations.md`, "Running the watchdog"): no
+  model calls, it exits only on a trip, which wakes you. Run it with `run_in_background` at the first
+  dispatch; whenever the set of running agents changes, stop it and run it again over those still running.
+- **Reports are files** (`brief.md` item 8): read each summary; read further by offset only when a
+  summary line needs it; hand the next agent the **path**, never the text.
+- **When an agent reports done, kill any shell it left running** before the next step: a leftover loop
+  can kill another build or swap the compiler in the slot.
 
-**Every running agent is watched by `watchdog.mjs`, beside this file — a script, not the model.** It
-makes no model calls, polls without waking you, and exits only on a trip, which wakes you. Run it with
-`run_in_background` when the first agent is dispatched, and whenever the set of running agents changes,
-stop it and run it again over the agents still running:
+- **Each stage runs on the cheapest model that can do it**: `brief.md`'s model table.
 
-```
-node .claude/skills/land/watchdog.mjs --agent <name>=<agent id or transcript path> \
-  [--artifacts <name>=<path>,<path>…] [--pid <name>=<pid>] [--unbounded <name>]
-```
+> ⛔ **NO MANUAL TESTS (user directive).** A check worth running is a case — in `specs/`, or a driver
+> command's `tests/` corpus — where CI runs it on every lane; one not worth a case is not run. **Nobody
+> sabotages code, a test, a fixture or a file to watch a check fail, or verifies by a hand-run probe,
+> scratch program or one-off script**: §1's red IS every case's sabotage. **Diagnosis is not
+> verification**: a reproduction showing a wrong answer becomes a case, never evidence in a report. A
+> diagnosis reading counts only on `situations.md`'s terms.
 
-One `--agent` per running agent: an agent id is found under `~/.claude/projects/*/*/subagents/`.
-`--artifacts` names what its work moves — its build directories, its logs, its exclusive files — and
-`--pid` a process it owns; both are optional and repeatable. `--unbounded` names each agent that is not
-an implementer or diagnosis agent, which the handover bound does not bind. A growing transcript alone can be a loop,
-so the trips read work as well as talk. On a trip it prints the agent and the trip, one line each:
-
-- **`stalled`** — the transcript has not grown for 20 minutes;
-- **`no-progress`** — the artifacts have not changed for 60 minutes while the transcript grew;
-- **`cpu-flat`** — a process's CPU time has not moved for 20 minutes;
-- **`limit`** — the agent passed the handover bound (brief item 5), read from the transcript's
-  `message.usage`: context is the latest call's input, cache-read and cache-creation tokens; calls are
-  its distinct assistant messages.
-
-An agent whose transcript records it finished is no longer watched, and with none left the watchdog exits
-saying so. On a `limit` trip, SendMessage the agent to write its handover file and stop. On any other,
-SendMessage it asking what it is doing and what it expects next; a stuck or dead one is reported to the
-user. `--help` lists the thresholds' overrides.
-
-**Reports are files, and you read their summaries.** Each agent's final message is its report's
-`## Summary` and the report's path (brief item 8). Read further sections by offset only when a summary
-line needs it, and hand the next agent the **path**, never the text.
-
-**Each stage is its own fresh agent, on the cheapest model that can do it:**
-
-| Stage | Model |
-|---|---|
-| §1 scout · §4(a) scan | `haiku` |
-| §1 spec author | `sonnet` |
-| §2 implementer, every round | per piece: `haiku` for a mechanical one (a rename, a doc line), `sonnet` — the agent's default — for a contained one whose approach is settled, `opus` for one that is cross-pass, soundness-sensitive, about performance or concurrency, or leaves design choices open |
-| §4(c) optimizer · a diagnosis agent | `opus` |
-| §5 first review | `opus` |
-| §5 re-review of a fix delta | `sonnet` when the delta touches at most two files and no soundness checker; `opus` otherwise |
-| §6 documenter | `sonnet` |
-
-**When an agent reports done, kill any shell it left running before the next step:** a leftover loop can
-kill another build or swap the compiler in the slot.
-
-⛔ **Brief for DIAGNOSIS, never for COVERAGE.** "Enumerate every construct that could false-reject and
-prove each parses", "confirm no other spec regressed", "check every case still runs" — the filtered runs,
-§1's count check and CI already do all three, better, one step later. ⚠ **A specific instruction in
-your brief OUTRANKS the agent's own stop rule**: you cannot brief thoroughness in without briefing the
-stop out.
-
-> ### ⛔ NO MANUAL TESTS. A CHECK WORTH RUNNING IS A CASE; ONE THAT IS NOT IS NOT RUN (user directive)
-> Verification lives in cases and nowhere else — a case in `specs/`, or for a driver command its
-> `tests/` corpus. **No agent sabotages code, a test, a fixture or a file to watch a check fail, and
-> nobody verifies by a hand-run probe, a scratch program or a one-off script.** A check worth running
-> is worth keeping: write it as a case, in the set, where CI runs it on every lane every
-> time and a reader can see it. A check not worth a case is not worth running at all.
-> - **§1's red IS the sabotage every case needs**: it watched the case fail before the fix existed.
-> - **Diagnosis is not verification.** Running a reproduction to find a cause is part of §2; the
->   moment it shows a wrong answer, it becomes a case in the set — never evidence in a report.
-> - **A diagnosis reading counts only when every row ran, compiled the program you think, and differs from
->   its control for the reason you think.** A control that fails the same way as the experiment is a broken
->   harness and proves nothing in either direction; a control that never ran proves less. `rc=127` or a
->   suspiciously uniform column means the row is fabricated. Two binaries agreeing perfectly is suspect until
->   both are shown current.
-
-### Verify the claims, do not re-derive the work
-
-**Do not trust a report — read its evidence.** Read the crux run's log file yourself, check the binary
-was current when it ran (the staleness check above), read the crux lines of the diff, **check exit
-codes, and never grep for a success string** — the compiler's failures do not share one prefix
-(`[CMP] ERROR:` does not match `^error`). Exit **101** is a leak. What you must NOT do is re-derive the agent's diagnosis or re-run what it already ran; auditing
-its diff for quality is **§5's** job, not yours.
-
----
+**Verify claims; do not re-derive work.** Read the crux run's log, check the binary was current then,
+read the crux diff lines, **check exit codes, never grep for a success string** (failures share no
+prefix: `[CMP] ERROR:` misses `^error`). Exit **101** is a leak. Do not redo an agent's diagnosis or
+runs; auditing its diff is §5's.
 
 ## 0. Start — yours
 
-*(Two tool calls and a sentence. Delegating this would cost more than doing it.)*
+*(Two tool calls and a sentence: delegating costs more.)* **Say in one or two sentences what the change
+is and what will prove it**, before touching anything, so the user can redirect you cheaply; ask now
+about any ambiguity that changes the code.
 
-**Say in one or two sentences what the change is and what will prove it**, before touching anything, so
-the user can redirect you cheaply. If the ask is ambiguous *in a way that changes the code*, this is the
-cheapest moment to ask.
+- ⚠ **`git status` must be CLEAN**, so the commit holds this change only.
+- **BUILD IF, AND ONLY IF, STALE** — the binary is gitignored and nothing rebuilds it, so a stale one lies
+  both ways: `./maxon-bin/.maxon/maxon run build` at the repo root. An EMPTY slot is refused: fetch the
+  seed (`scripts/fetch-seed.sh`) and build as `maxon-bin/AGENTS.md` says. A current binary is what §1's
+  reds are read off: rebuilding it learns nothing.
+- **No baseline suite run**: §8's gate is `failed: 0`, not a delta, so a §8 red is not assumed yours.
 
-- ⚠ **`git status` must be CLEAN**, so the one commit holds this change and nothing left over from
-  another.
-- **BUILD — IF, AND ONLY IF, THE BINARY IS STALE** (the check in the box under the gate table). The
-  compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both* directions.
-  `./maxon-bin/.maxon/maxon run build` at the repo root compiles `maxon-bin/` with the compiler already in the slot and renames the result into place. An
-  EMPTY slot is refused, not seeded: fetch the seed with `scripts/fetch-seed.sh` and build with it as
-  `maxon-bin/AGENTS.md` says. A current binary is already what every red in §1 is read off: rebuilding
-  it is minutes spent to learn nothing.
-- **No baseline suite run.** The §8 gate is `failed: 0` on the filtered set, not a delta from a remembered
-  total, so there is nothing to measure yet. (When §8 comes back red you therefore may not assume the red
-  is yours — §8 says how to attribute it.)
+## 1. The MINIMAL spec set — RED before any code
 
-## 1. The MINIMAL spec set — and it goes RED before you write any code
+**The smallest set that FAILS today for the reason you are fixing, and would fail again if the fix were
+reverted**: one case per distinct wrong answer, plus the error path when a diagnostic is added or moved.
+A case that cannot fail for your reason is padding; a wrong answer with no case is what this skill
+prevents. ⚠ **"Minimal" describes the SET, never the change**: it proves the **whole** task; a case
+inconvenient because the change is large is the size of the work (§2).
 
-**Minimal means the smallest set that FAILS today for the reason you are about to fix, and would fail
-again if the fix were reverted.** Not "few": one case per distinct wrong answer, plus the error path if
-the change adds or moves a diagnostic. A case that cannot fail for your reason is padding; a wrong
-answer with no case is the thing this skill exists to prevent.
+**A LOCATED fix** (an issue with `Repro` and `Where`, at most two cases that go red at once:
+`situations.md`) skips the scout and the spec author, and nothing else. **Otherwise the scout surveys** (read-only, no probes; the facts it returns are in `brief.md`), **YOU pick
+the set** from its facts — a decision that never moves — and **a spec author writes** your exact list.
+⚠ **Cases or a failure count the ask names, run, are part of the acceptance**; a narrower hand-built red
+supplements them, never replaces them. **Cases come from**, in order: an existing `specs/` case (grep
+first); a new case in the `specs/*.md` file that owns the behaviour, in its neighbours' shape
+(`docs/SPECS.md`).
 
-⚠ **"Minimal" describes the SPEC SET, never the change.** The set is the smallest thing that proves the
-**whole** task — not a smaller task. If a case you would need is inconvenient because the change is
-large, that is the set telling you the size of the work, and the answer is §2, not a narrower set.
+- **A user-visible change's doc gate, a deletion and a pure optimization** have no red-first case:
+  `situations.md`.
 
-### A located fix skips the scout and the spec author — nothing else
+**Then SEE IT RED** — a spec is data, no rebuild: `run_spec_test filter=["<spec-a>/", …]`.
 
-**A fix is LOCATED when all three hold before any dispatch:**
+- **Read the failure of EVERY case** and record the exact symptom (exit code, stderr, diff): the
+  acceptance and the diagnosis's best input (`failures`; `cases: true` gives every verdict).
+- **A case already GREEN is not in the set**: learn whether it misses the change or the change is done,
+  before writing a line.
+- ⚠ **A feature-named filter cannot see specs not named for the feature.** A change that refuses
+  programs or changes a construct has every committed program as its blast radius (scaffolding that used
+  it incidentally too), so it greps `specs/` and `ir-specs/` for the construct itself; any derived
+  list driving an edit has its scope as a premise.
+- ⚠ **One run for the whole set**, one pattern per spec file (`situations.md`, "Filter patterns"). A
+  case that can race is a rate `n of m` (`situations.md`).
 
-1. its issue carries a `Repro` program and a `Where` (`file:line`);
-2. one grep names the spec file that owns the behaviour, and the repro needs at most two cases;
-3. those cases, written by you into that file (invoke `maxon-coder` first), go red on their first run
-   for the issue's stated symptom.
-
-If any fails, the scout runs, and the cases you wrote are its author's to keep or replace. A located fix
-dispatches no scout and no spec author; **if the implementer's measurement contradicts `Where`, the scout
-is dispatched then.** Nothing else is skipped: red first, the count check, the independent review, the
-documenter as its own fresh agent, a re-review of any fix delta as its own fresh agent, and every gate.
-When no §4(c) trigger fired, the §4(a) scan is folded into the reviewer's brief instead of a scan agent.
-
-### The scout finds the material; YOU pick the set; an author writes it
-
-**Send a read-only survey agent first** (`Explore`, `model: "haiku"`). It reads; it does not run probes — what the
-compiler does today is what §1's red run of the chosen cases shows.
-Ask it for **FACTS, not a recommendation**: which `specs` files own this behaviour, every existing
-case that touches it with file + line and the **verbatim text** of any that already pins it, and what
-the neighbouring cases in that file look like.
-
-**Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
-
-⚠ **When the ask (an issue, a known issue) names failing cases or a failure count, those named cases,
-run, are part of the acceptance.** A hand-built red that reproduces the mechanism may be narrower than the
-class; it supplements the named cases and never replaces them.
-
-**Then hand the writing out**: give a spec-author agent (`general-purpose`, `model: "sonnet"`) the exact
-list — file, case name, program, expected `exitcode`/`stdout`/`maxoncstderr` — and let it
-write them into `specs/`, and **tell it to invoke the `maxon-coder` skill before writing a case**. The
-one set you write yourself is a located fix's (above).
-
-**Where the cases come from, in this order:**
-
-1. **An existing `specs/` case.** Grep first — the behaviour may already be pinned, and then your
-   set is "these three, which are red".
-2. **A new case in the `specs/*.md` file that already owns the behaviour.** Format:
-   `docs/SPECS.md`. Follow the neighbouring cases' shape.
-
-**A user-visible change also names its documentation gate — but not as a red-first case.** When it adds a
-command, option, MCP tool or `public` stdlib API, the doc-coverage gate that owns the surface
-(`maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` (it covers the MCP `instructions` too), `tests/docs`) reads the
-built compiler or the tree's `stdlib/`, so it is green today and turns red only once the new surface exists.
-It is not in this set; it is acceptance, read in §8 after §6 has written the documentation.
-Every other user-visible change still owes its `docs/` source an edit (§6), which the gates cannot see.
-
-**A deletion has no red.** Removing a mechanism nothing uses leaves no case that can fail, and a manufactured
-one is worse than saying so. Its acceptance is that nothing was live: code bytes unchanged at every
-`run_scale_test` rung, and `spec-test ir-specs` moves no pin. A drop in allocations is expected, since the
-mechanism's own cost goes with it. Before deleting, grep for what still reads the thing, and ask which
-guarantee goes with it: a lookup that threw on a missing entry can become a silent zero and a panic three
-files away.
-
-**A pure optimization changes no runtime answer, so no behaviour case can go red.** Its evidence is an
-`ir-specs/` pin: mint it showing the unoptimized code, read that as the recorded symptom, and let the diff of
-the re-mint carry the change. ⚠ **An optimization can delete a gate's subject:** a case whose program folds
-away stops gating what it gated. Move the values across a loop-header phi, which the fold reads as unknown, so
-the program survives.
-
-**Then SEE IT RED.** A spec is data — no rebuild needed to run one.
-
-```
-run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
-```
-
-- **Read the failure of EVERY case in the set** and record the exact symptom — exit code, stderr, diff.
-  That is your acceptance criterion *and* the most valuable input to the diagnosis.
-  (`run_spec_test` answers each failure's message in `failures`; `cases: true` adds every case's
-  verdict.)
-- **A case that is already GREEN is not in the set.** Either it does not test your change, or the change
-  is already done. Find out which before writing a line.
-- ⚠ **A filter chosen by feature name cannot see a spec not named for the feature.** A change that refuses
-  programs, or changes what a construct does, has every committed program as its blast radius, including
-  scaffolding that used the construct incidentally. Derive the set by grepping `specs/` and `ir-specs/` for
-  the construct itself. The same goes for any derived list driving an edit: its scope is a premise.
-- ⚠ **Select the whole set in ONE run.** Each pattern is a case-sensitive substring of the
-  `<spec>/<case>` label, and repeated `--filter=` flags (MCP: a `filter` array) are a union — one pattern
-  per spec file, never one run per file, which pays the startup per file and runs each on one worker. A
-  comma is part of a pattern, not a separator. A pattern that selects nothing refuses the whole run and
-  is named, so a typo'd member cannot pass unseen.
-- ⚠ **A case that can race is reported as a failure rate `n of m`, never "passes" or "fails".** A 4% race
-  comes back clean 88% of the time at m=3, so use m ≥ 20 per cell before comparing cells. A case that fails
-  1 in 3 is not a red-set gate. A racy red is finished only when it is deterministic: force the losing
-  interleaving structurally (put the readied work where the other contender cannot take it), never by
-  widening a timeout.
-
-> ### ⛔ COUNT WHAT RAN. A spec can pass by running NOTHING — two ways, both of which read as green.
+> ### ⛔ COUNT WHAT RAN — a spec can pass by running nothing
 > ```bash
 > grep -c '<!-- test:' specs/<file>.md   # summed over the set's files, must EQUAL the runner's `total`
-> grep -o '<!-- test: [^ ]*' specs/<file>.md | sed 's/.*test: //' | sort | uniq -d
+> grep -o '<!-- test: [^ ]*' specs/<file>.md | sed 's/.*test: //' | sort | uniq -d   # must print nothing
 > ```
-> 1. **A shortfall against the runner's total is a defect in the spec, never a pass** — once you have
->    subtracted the cases an `<!-- unsupported-targets: -->` marker excludes on the lane you ran, and
->    added any other spec file one of your patterns also selects. The harness refuses a marker outside
->    the `## Tests` region and a program or directive no marker opened, so a shortfall is a harness
->    defect to fix, not a spec to adjust.
-> 2. **The `uniq -d` must print nothing** — two cases under one name report as one.
->
-> ⛔ **A case you cannot make pass is a HALT.** It is never removed, narrowed or excluded to get green.
+> A shortfall — after subtracting cases an `<!-- unsupported-targets: -->` marker excludes on your lane,
+> and adding other files a pattern selects — is a defect, never a pass. The harness refuses a marker
+> outside `## Tests` and a program or directive no marker opened, so it is a harness defect to fix, not a
+> spec to adjust. A duplicate name reports two cases as one.
+> ⛔ **A case you cannot make pass is a HALT**: never removed, narrowed or excluded.
 
-## 2. Write the code — an `implementer` agent
+## 2. Write the code — `implementer` agents
 
-**Hand the implementation to an `implementer` agent** (`subagent_type: "implementer"`; its definition sets the effort and the default model, which a piece
-overrides with `model` per the model table). **Every implementer is one** — the first, any further one, and every later implementer round (a review fix, a defect found while gating). The brief is §1's red set, the nine things
-every brief carries, and above all **the diagnosis you already did while reading the red** — that is
-the most valuable thing in it.
+Every implementer — first, further, every later round (a review fix, a gating defect) — is
+`subagent_type: "implementer"` (its definition sets effort and default model; `model` per piece by the
+table), briefed with the red set, `brief.md`, and above all **the diagnosis you made reading the red**.
 
-**ALL of the code lands in the main checkout before anything is committed.** *(More than one agent is
-fine on **disjoint** files, sequentially when they overlap: never two agents in one checkout on
-overlapping files. That is a scheduling rule about LABOUR — you integrate as their work arrives, and the
-deliverable stays one chunk and one commit.)*
-
-**Split a large change into several small implementer dispatches**, one mechanism each with its own short
-brief, a few builds at most, each leaving a tree that builds: the implementer degrades as its context fills.
-Defer an enforcement that breaks the compiler's own sources to the piece that migrates them, and hand each
-piece the previous report's path rather than the history. One `/land` and one commit still; this splits
-labour.
-
-**What the agents must be told, beyond the standard nine:**
-
-- **When a case fails for want of a distinction, grep for a comment saying that distinction does not
-  matter.** Read it as a hypothesis about the shapes its author enumerated, and ask which shape it did not
-  consider. A comment that justifies a discard or a gate is load-bearing, and the code does what it says.
-- ⛔ **An agent writing git in a throwaway clone is one failed `cd` from the shared checkout.** Its script runs
-  `set -euo pipefail` and `cd <clone> || exit 1`, and asserts before every writing git command that
-  `git rev-parse --show-toplevel` is not the main checkout. `;` after a `cd` runs the rest in the wrong tree.
-  The main checkout takes read-only git only. A repair the permission system denied goes to the user.
-- **Invoke the `maxon-coder` skill before writing any Maxon**, and hand back only code its compile
-  loop has passed.
-- ⛔ **WRITE NO COMMENTS** — not a `//`, not a `///`, not the doc block above a registry case. The code
-  is still moving, so a comment written now is written and rewritten and mostly thrown away. **§6
-  authors every comment the change gets**, once, after the review. A reason worth keeping goes in the
-  agent's REPORT, which is what §6's brief is built from.
-- **They work in the MAIN checkout, so the `maxon` MCP tools need no `repoRoot`** — and they do not
-  commit, do not `git add`, do not push, and leave every `TargetIr` pin a run re-minted exactly as it
-  lies. You commit everything, once, at §9.
-- ⛔ **`specs/` is READ-ONLY to an implementer — not one byte.** It is the canonical definition of the
-  language; an edit to an existing case does not adjust a test, it redefines Maxon. §1's author is the
-  one writer of cases, and a fix that would falsify another spec's committed expectation is a
-  STOP-and-report, never an edit to that spec.
-- **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (AGENTS.md).
-- **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane (CI runs it) is
-  not scalar-only — a float or `String` case failing there is a bug on that lane.
-- **A new diagnostic goes through the registry, which is HAND-AUTHORED and has NO generator**: add a
-  `<caseName> = "EXXXX"` entry to `maxon-bin/Compiler/ErrorCodeRegistry.maxon`, then write the code that
-  emits it. ⛔ **Not its doc comment — that block IS a documentation surface**
-  (`Mcp/McpErrorCodes.maxon` re-parses the registry SOURCE at runtime to serve `lookup_error_code`, and
-  the generated Error Codes page is built from it), **so §6 writes it.** ⚠ `sync-docs.mjs` fails closed
-  on a case with no doc comment, so it is RED between here and §6 for a change that adds a diagnostic —
-  that is expected, and it is how §6 finds them. Take the next free number in the band by reading the enum
-  (1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx emitter, 6xxx PE writer, 9xxx internal): a
-  duplicate NAME does not compile, and a duplicate NUMBER is structural in neither direction and is
-  caught only by `website/scripts/sync-docs.mjs`, which §8's documentation row runs. Never write a bare
-  `"E3010"` in source — a diagnostic names `ErrorCode.<case>`.
-- **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
-  target. Size is never a reason to stop; see the two boxes at the top of this file.
-- **Documentation is §6's, not theirs** — the `docs/` source, the site regeneration and the doc-coverage
-  gates all move there, in the same pass that writes the comments. What the implementer owes is the
-  report: **what the change made visible to a user**, in the terms `AGENTS.md`'s Documentation
-  section uses, since that is the judgement it has the context to make.
-
-⚠ **Whoever writes the code, §5's reviewer must not be them.**
+**ALL the code lands in the main checkout before anything is committed**: several agents only on
+**disjoint** files, sequentially when they overlap, integrated as work arrives. **Split a large change**
+into small dispatches, one mechanism and a few builds each, each leaving a tree that builds (an
+implementer degrades as its context fills); defer an enforcement that breaks the compiler's sources to
+the piece that migrates them; hand each piece the previous report's path. ⚠ **§5's reviewer is never
+whoever wrote the code.**
 
 ## 3. Green the set — the agent's loop, your confirmation
 
-**The agent iterates: edit → build → filtered run**, until its cases are green. It rebuilds after every
-edit to a compiled-in source and at no other time — a stale binary reads green or red for the wrong
-reason, and a current one rebuilt reads exactly what it read before. **Then YOU read its last filtered
-run** — the log file it reported, with the binary current when it ran — and that is the only thing
-standing between an agent's report and §8. Re-run the filter yourself only when that evidence is
-missing or something changed after it.
+The agent iterates **edit → build → filtered run**, rebuilding after every compiled-in edit and at no
+other time. **Then YOU read its last filtered run's log** (binary current when it ran): the only thing
+between its report and §8. Re-run the filter yourself only when that evidence is missing or stale.
 
-- **Nobody runs the full suite — not in this loop, not in §8, not you, not the agent.** It is CI's; a
-  run per iteration repeats work CI does anyway, and every agent's brief must say so.
-- ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
-  marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
-- **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
-  not the suite is green over it. **When it is RELATED to this change it is fixed NOW, and the
-  reproduction that found it becomes a case in the set; when it is not, it is filed as a known
-  issue and drained after the push (§10)** — fixed all the same, without slowing this one. A
-  hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the CI lanes a
-  spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
-- **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
-  agent reporting "all green" and a filtered run you read are not the same evidence.
+- **Nobody runs the full suite** — not this loop, not §8, not you, not an agent; every brief says so.
+- ⛔ **Never turn a case green by narrowing what it tests**: spec text, filter or marker.
+- **A defect ANYONE finds is FIXED**, a wrong answer as much as a leak, green suite or not: RELATED (§10),
+  now, its reproduction a case in the set; unrelated, filed and drained after the push. A hand-run check
+  is never evidence, and none is run to verify anything.
+- **When the set is green, re-run §1's count check yourself** (an agent's "all green" is not a run you
+  read), then stop editing for correctness.
 
-## 4. The optimization pass — the AGENT on a trigger, the LADDER always yours
+## 4. Optimization — the agent on a trigger, the ladder always yours
 
-**Three parts, and only the first is unconditional.**
+- **(a) Scan the diff for unscalable structure — always** (`brief.md`'s list): the optimizer does it
+  when (c) fires; else a scan agent, or for a located fix the reviewer. The compiler stays LINEAR in
+  program size.
+- **(b) The ladder, `run_scale_test` (~17 s)**, when the change touched a pass, the IR, or a collection
+  the compiler indexes by: an INSTRUMENT with no verdict, read as `compiler-workflow` says (×2 linear, ×4
+  quadratic, off the ALLOCATION columns). A Δ0 from a corpus that cannot express your feature is a blind
+  spot.
+- **(c) The `optimize` skill, in an agent that wrote none of the code, on a trigger:** the change adds a
+  pass, an IR op or an indexed collection, or (b)'s allocation ladder bends ≳2.4 per doubling
+  unexplained. **No trigger: the report says so** (a hunt over no new algorithm finds nothing).
 
-- **(a) A scan of the diff for unscalable structure — always.** When (c) fires, the optimizer does this
-  and more; when it does not, hand the diff to a **read-only scan agent** (`Explore`, `model: "haiku"`)
-  with this list — or, for a located fix (§1), put the list in §5's reviewer's brief instead. An
-  O(n) lookup inside an O(n) walk; a `findFirst` over a compiler-sized array in a loop; a fixpoint,
-  liveness or dominator tree recomputed per element; a walk over a dense index space where the set bits
-  were the point; an allocation in a hot path. The compiler must stay LINEAR in program size.
-- **(b) The ladder — `run_scale_test` (~17 s)** when the change touched a pass, the IR, or a
-  collection the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one, and
-  you never touch it to make a number look better.** Read the doubling ladder straight: **×2 is linear,
-  ×4 is quadratic.** Read it off the **ALLOCATION** columns, which are exact and bit-for-bit
-  reproducible; the CPU column carries a few-percent noise band and a platform-defined unit. A Δ0 from a
-  ladder whose corpus cannot express your feature is a blind spot, not a result.
-- **(c) The `optimize` SKILL, in a dispatched agent — on a trigger:** the change adds a pass, an IR op,
-  or an indexed collection; or (b)'s allocation ladder bends ≳2.4 per doubling and you cannot explain it.
-  Send a `general-purpose` agent with `model: "opus"` and tell it to invoke `optimize`; **it must not be an agent that wrote
-  the code.** Say in the brief that this is a `/land` change — the diff is uncommitted in the main
-  checkout and the landing gates are YOURS, minutes later — so it neither runs the suite nor commits. **If no
-  trigger fired, say so in the report** — a superlinear hunt over a change that added no algorithm has
-  nothing to find.
+**If you ran the ladder, settle the row's note now**: attribution exists only now. §8 mints the row on
+the rebased, documented tree; one taken earlier carries a stale digest, which `scale-test --check-row`
+reports. ⚠ **Write no row you did not measure.**
 
-**If you ran the ladder, the read is yours now and the row is §8's.** Settle the row's note now —
-attribution is only available now; the instrument sees exactly WHAT moved and can never see WHY, and ten
-changes later neither can you. The row itself is minted in §8, on the rebased, documented tree: the
-documenter's comments and the rebase change the tree digest the row carries, so a row taken before §8 is
-the defect `scale-test --check-row` reports.
-⚠ **Write no row you did not measure.**
+## 5. Review
 
-## 5. The review
+**A `code-review` agent on the uncommitted diff, after §4, before the commit** (model by the table),
+**never one that wrote the code**. The skill carries the criteria, `brief.md` the situation.
 
-**Send a `general-purpose` agent and tell it to invoke the `code-review` skill** — `model: "opus"` for the
-first review; a re-review of a fix delta takes the model table's rule — on the working diff —
-uncommitted, main checkout — after §4 and before the commit. **It must not be an agent that wrote the
-code**; that independence is the whole point. The skill carries the criteria; your brief carries the
-situation:
+- **Its leftovers for triage are yours**, by §10's test; never a `todo.md` bullet (nothing drains it).
+- **The bounds questions are yours**, off `git status --short` and `git diff --stat`: anything outside
+  this change? The diff as small as the fix warranted? **A spec expectation weakened?**
+- **Findings are FIXED BEFORE the commit**, then filtered runs whose inputs the fix changed are re-taken.
+  ⚠ A report is a lead, not a verdict (measurement has refuted many): confirm before acting; say so if
+  you disagree.
 
-- **Say this is a `/land` change** — the diff is uncommitted in the main checkout, there is no worktree
-  and no branch, and the landing gates are YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
-  standalone-only and it must skip them.
-- **Tell it that a finding NOT RELATED to this change (§10's test) is REPORTED, not fixed** — the
-  skill's "fix what you find even if it is pre-existing" is satisfied by the known-issue drain,
-  not by this diff.
-- **Anything it leaves for triage arrives in its REPORT, and you decide it here**, by §10's test: a
-  related defect is fixed now; an unrelated one is filed as a known issue and drained after the
-  push. Never a `todo.md` bullet: an entry there is a deferred defect that nothing drains
-  (AGENTS.md, "No skipped work").
-- ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
-  minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
-  your brief outranks the skill's rules.
-- ⛔ **Do NOT ask it to run the full suite, prove coverage, or establish correctness.** Your gates run
-  minutes later on the identical tree and CI runs the suite, a far better false-reject detector than
-  anything it can probe by hand — and it runs no sabotage and no hand probes at all: a finding that needs a run
-  to show it is a case it adds to the set, or a reading-only finding in its report. Its `--filter`ed
-  runs are its own. ⚠ A specific instruction in your brief
-  OUTRANKS its standing stop rule — you cannot brief thoroughness in without briefing the stop out.
-- **The bounds questions are YOURS**, and take seconds off `git status --short` and `git diff --stat`:
-  did anything land outside this change? Is the diff as small as the fix warranted? **Did any spec
-  expectation get weakened to pass?**
-- **Findings are FIXED BEFORE the commit**, then each filtered run whose inputs the fix changed is
-  re-taken (the inputs rule, in the box under the gate table). ⚠ Its report is a lead, not a
-  verdict — this project's history is full of agent findings that measurement refuted. Confirm before
-  acting, and say so if you disagree.
-- **Its scope is EVERY file in the diff** — test harnesses, fixtures, the extension, stdlib helpers and
-  CI files, not only the compiler. Name the directories in the brief; a reviewer left to choose reads
-  the compiler and skips the rest.
+**A soundness checker implementing an approved design gets a second reviewer** (`brief.md`, §5).
 
-**A change to a soundness checker gets a second, separate reviewer** when it implements an approved design
-(a plan with an executable model): a `general-purpose` agent briefed with ONLY the plan's rulings and the
-diff — not the implementer's reports, not your summary — whose one job is to find a program the changed
-checker accepts that a ruling refuses. Each finding becomes a case in the set; an accepted program the
-ruling refuses is fixed, never argued away.
+⛔ **§6 runs only on REVIEWED code.** Code written after the review (its fixes, a later round, a gating
+defect) is reviewed again on that delta by its own fresh agent before §6, looping until a round has
+nothing to fix. **The documenter is not a reviewer**: it reports defects it notices and fixes none; code
+defects in its report mean §5 missed them — fix, review that delta, re-run §6 on the files they touched.
 
-⛔ **§6 runs only on REVIEWED code.** Any code written after the review — its fixes, a follow-up
-implementer round, a defect found while gating — is reviewed again, on that delta, by its own fresh
-agent on the model table's model, before §6. Loop
-until a review round comes back with nothing to fix. **The documenter is not a reviewer:** it reports
-defects it happens to notice and fixes none. If its report carries code defects, §5 missed them — fix
-them, review that delta, then run §6 again on the files the fixes touched.
+## 6. Document — the `documenter` skill
 
-## 6. Document the change — the `documenter` skill, in a dispatched agent
+**A `documenter` agent writes every comment the change gets**, updates the `docs/` source its surface
+owns, and regenerates the site pages. ⭐ **It is the LAST step that edits the tree**, after review, so
+comments are written once, on code that stopped moving.
 
-**Send a `general-purpose` agent with `model: "sonnet"` and tell it to invoke the `documenter` skill.** It writes **every
-comment the change gets** — nobody before it wrote one — and updates the `docs/` source its surface
-owns, then regenerates the site pages.
-
-⭐ **This is the LAST step that edits the tree.** It runs after the review for one reason: **comments are
-written once, against code that has stopped moving.** A documenter before §5 would comment code the
-review then rewrites, which is the write-it-twice waste the no-comments rule exists to remove.
-
-**What the brief carries, beyond the standard nine:**
-
-- **The diagnosis** and the paths of the implementer's and optimizer's reports — context for judging where an
-  edit would go silently wrong, not material to transcribe into comments.
-- **What the change made user-visible**, in `AGENTS.md`'s terms — or that nothing is, which is
-  an answer it must state rather than skip.
-- ⛔ **It builds nothing and runs NO tests.** Its verification is a mechanical code-identity proof;
-  §8 builds and gates minutes later on the same tree. It regenerates the site pages but does not run
-  `sync-docs.mjs --check`; that is §8's.
-- **It does not commit, `git add`, push, rebase or stash**, and it changes not one byte of code.
-
-⚠ **Its report must carry no code defects.** One that does means §5 failed: see the rule closing §5.
-
-⚠ **Read its report, do not re-derive it.** The line that matters is the count: comment lines added,
-rewritten, deleted, net. The expected count is zero or close to it; more than a few lines, or any
-comment over two lines, has failed the skill.
-
-**§8 builds.** §6 edits compiled-in sources and does not build, so §8's build-if-stale row always
-fires after it.
+⚠ **Read its report, do not re-derive it.** It carries no code defects (§5); its comment-line count
+(added, rewritten, deleted, net) is zero or close — more than a few, or a comment over two lines, failed
+the skill. **§8 builds**: §6 edits compiled-in sources without building.
 
 ## 7. Rebase on `origin/main` — yours
-
-**No agent rebases, stashes, commits or pushes.** Git state is the coordinator's, start to finish.
 
 ```bash
 scripts/land.sh in-flight --wait                    # a chain land in flight holds main: wait for it first
@@ -617,320 +264,130 @@ git fetch && git log --oneline HEAD..origin/main    # empty: nothing to rebase o
 git stash push -u -m land && git pull --rebase && git stash pop
 ```
 
-**A chain land in flight holds `main`** (`docs/RELEASING.md`): a push while `land.yml` publishes a seed costs
-that land its run. `in-flight --wait` prints `none` at once when no chain land is running; otherwise it names
-the branch and run and returns when they finish. A failure to read GitHub is a failure, not a `none`.
-
-**Check before you stash.** The pop rewrites every changed file, so a stash round-trip with nothing to
-rebase onto still moves their mtimes past the compiler binary's: `spec-test` then refuses it as STALE
-and §8 pays a full `maxon run build` — two stages when the diff holds emitted runtime — for identical
-content. Stash and rebase only when the log above prints commits.
-
-**Rebase FIRST, so §8 runs on the tree you will actually push.** Other agents land on `main` between and
-during changes; gates run before the rebase measured a tree that no longer exists.
-
-- **No ladder row exists yet**: §8 mints it on this rebased tree, `scripts/check-scale-rows.sh` checks
-  it, and its `corpus` cell is what withholds a delta across a corpus change.
-
-- **A conflict is resolved BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file to
-  clear one: a whole-file resolution in a doc has silently reverted somebody else's landed section, and
-  it looks clean in `git diff`.
-  Resolve a conflict as the UNION of both sides, then run the OTHER side's cases as well as your own: "take
-  my side" on a struct literal can silently revert the other change's fix while your own acceptance stays
-  green. When both sides correct one rotting fact (a count, a caller list), derive it from the merged file.
-- **A clean rebase is not a coherent one.** When both sides changed a file, read the merged result for
-  contradictions: git can join a new upstream rule to a new case that breaks it with no conflict marker.
-- **A stash must never outlive this step.** If the pop conflicts, resolve it now — work sitting in
-  `git stash list` looks exactly like work that vanished.
+(`in-flight`: `compiler-workflow`.) **Stash only when the log prints commits**: a stash round-trip moves
+every changed file's mtime past the binary, so `spec-test` refuses it and §8 pays a full build (two for emitted runtime). Rebase
+FIRST, so §8 gates and mints the ladder row (`check-scale-rows.sh`'s `corpus` cell withholds a delta
+across a corpus change) on the tree you push. **A conflict is resolved BY HAND, hunk by hunk**; **a clean
+rebase is not a coherent one** (`situations.md`). **A stash never outlives this step.**
 
 ## 8. THE LANDING GATES — once, on the rebased tree — yours
 
-**There is no full local battery.** You commit and push on a build, filtered specs covering what changed
-and the codecs check, and CI runs the rest. **Do not wait for CI.**
-
-⭐ **The default is the MINIMUM targeted run.** A row below whose condition the diff does not meet is not
-run, and a filter is never widened "to be safe": a breadth question is CI's. The cost of a CI red is one
-fix commit; the cost of a local battery is paid on every change.
-
-⛔ **No agent runs any part of this.** Every brief says so; this is where that promise is kept.
+⭐ **The MINIMUM targeted run.** A row whose condition the diff does not meet is not run; a filter is never
+widened "to be safe": breadth is CI's, and a CI red costs one fix commit where a local battery costs
+every change. ⛔ **No agent runs any part of this.** `$M` is `./maxon-bin/.maxon/maxon`.
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | **Only if stale** — after §6's comment edits it is stale whenever §6 touched a compiled-in source. A current binary is not rebuilt. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the spec rows — it builds twice |
-| **Filtered `run_spec_test`** — §1's minimal set plus every spec file the change touched, in ONE run | **`failed: 0`**, and no exit **101**. The gate is zero failures in every case the filter selects, never a total |
-| **Filtered tree corpora and IR specs** — `./maxon-bin/.maxon/maxon test <tests/dir> --filter=…` and `spec-test ir-specs --filter=<spec>/` for each corpus case or `ir-specs/` spec the change touched | each `0 fail` / `failed: 0`. A pin the change moved is re-minted with `--update-required --filter=<spec>/` and staged with the change (`git add -A ir-specs/ specs/`); a change to one target's emitted code also filters `ir-specs` on that target's lane (`--target=<lane>`), which compiles each pin without running it, on any host. See the box below |
-| **LINT** — `./maxon-bin/.maxon/maxon lint maxon-bin` · `./maxon-bin/.maxon/maxon lint --tests tests/<corpus>` · `bash scripts/lint-tree.sh <group>` | **`lint maxon-bin` when the diff touches `maxon-bin/`; `lint --tests` for each corpus under `tests/` the diff touches; `lint-tree.sh` for each other group (`script-programs`, `multicore-stress`, `manifests`) whose sources the diff touches.** Exit 0: one `Linted …` line per `lint`, and `lint-tree.sh`'s report naming no subject that did not lint clean. Run after the build, with the compiler it wrote, so the change's own rules meet the tree. The build, the self-compile and `maxon test` compile past the lint rules — E3064 and E3065 (a dropped result), E3092 (an `export` no other directory uses: adding or removing an `export` or deleting its last cross-directory caller, which de-duplicating usually is, orphans one) and E3219 (an unused unexported declaration) — so without this row CI's "Every first-party program lints clean" step is the first to see them. Add `--target=<lane>` to `lint maxon-bin` when the change touches a lane's `#if` branch |
-| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds a file declaring types, or adds or tightens a diagnostic that is not a lint rule.** The slot compiler that `run build` wrote was compiled by its predecessor, so this row is the first time the change's own rules meet the compiler's own source. Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
-| **The seed chain** — on a throwaway clone at a short path with the diff applied and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`; exit 0, or a refusal | **Where the tree's sources start using a declaration, intrinsic, language form, rule or runtime behaviour the change itself made legal or required, or the change alters a rule the seed applies to the compiler's own source.** CI builds from the pinned seed. Any failure is a refusal, except E6002, which is a locked slot. ⛔ **A refused commit lands through `land.yml`, never `git push`** (§9): the commit becomes the last of a bootstrap chain, whose first commit the pinned seed builds; CI freezes, proves and publishes the seed and pushes the commit with its pin. `docs/RELEASING.md` owns the procedure |
-| **The codecs** — `python3 scripts/library-cache/generate-codecs.py --check` | exit 0: the library-cache codecs inside the compiler's sources match what the generator emits. On exit 1, run it without `--check` and stage what it rewrites |
-| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` — which also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
-| **The ladder row** — `./maxon-bin/.maxon/maxon scale-test --note=…` (MCP `run_scale_test` with `note:`) on the rebased, documented, built tree, then `scripts/check-scale-rows.sh --working-tree` | **When §4 read the ladder.** Both exit 0, and the check reports one row added to each table, last, carrying this tree's digest. A delta the run withholds (the corpus changed, or the last row was minted elsewhere) is stated in the note, and the attributable figure there is an A/B against a control compiler built from the parent, run from the same location |
-| **No leftovers** — `python3 scripts/check-ignored-files.py` | exit 0, on every change: no untracked path and no gitignored path that is not on `scripts/allowed-ignored-paths.txt`. On exit 1, delete what your change's runs left (`git add` the change's own new files first: an untracked path fails too). A path a tool legitimately leaves is not deleted: add its pattern to the allow-list in the same commit. `maxon-bin/.maxon/` is a `closed-directory:` of the allow-list: only the names listed under it pass (the slot's `maxon[.exe]`, `maxon.previous[.exe]`, sidecars, compiler-minted `maxon.retired.<block>` images, `.staging-<hex>/`), so a hand-renamed compiler image there fails the gate: delete it and keep a compiler you need in `temp/<task>/`. CI runs the same script as its "No file left behind" step, after the test steps of the corpora, tools, suite and cross-suite jobs on every lane |
-| **§1's count check** on the final tree | markers == ran, no name spelled twice |
+| **Build** | **Only if stale** (after §6 touched a compiled-in source, it is). Exit 0. Emitted runtime built with `MAXON_SECOND_STAGE=1` since the change: `maxon run build` again without it, before the spec rows |
+| **Filtered `run_spec_test`**: §1's set plus every spec file the change touched, ONE run | **`failed: 0`**, no exit **101**; never a total |
+| **Filtered tree corpora and IR specs**: `$M test <tests/dir> --filter=…`, `spec-test ir-specs --filter=<spec>/`, per touched corpus case or `ir-specs/` spec | `0 fail` / `failed: 0`. A moved pin is re-minted (`--update-required --filter=<spec>/`) and staged (`git add -A ir-specs/ specs/`): `situations.md`. One target's emitted code changed: also `--target=<lane>` (compiled, not run: any host) |
+| **LINT**: `$M lint maxon-bin` · `$M lint --tests tests/<corpus>` · `bash scripts/lint-tree.sh <group>` | `lint maxon-bin` when the diff touches `maxon-bin/` (`--target=<lane>` for a lane's `#if` branch); `lint --tests` per touched corpus; `lint-tree.sh` per other touched group (`script-programs`, `multicore-stress`, `manifests`). After the build, with its compiler. Exit 0, one `Linted …` line per `lint`, no unclean subject |
+| **SELF-COMPILE**: `$M build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds a file declaring types, or adds or tightens a non-lint diagnostic**: its rules' first meeting with the compiler's source. Exit 0, last stdout line `Compiled -> <path>` (`--rebuild` forces the compile, ~1 min); output discarded |
+| **Seed chain**: `build-from-seed.sh` on a throwaway clone (`compiler-workflow`) | **Where the tree's sources start using a declaration, intrinsic, form, rule or runtime behaviour the change made legal or required, or the change alters a rule the seed applies to the compiler's source.** Exit 0, or a refusal (any failure but E6002, a locked slot), which lands via `land.yml` (§9) |
+| **Codecs**: `python3 scripts/library-cache/generate-codecs.py --check` | exit 0; on 1, run without `--check` and stage the rewrite |
+| **Documentation**: `node website/scripts/sync-docs.mjs --check` | exit 0. A user-visible change: each doc-coverage gate its surface owns, `0 fail` — `maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` (also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`), `tests/docs`; else state nothing is user-visible. ⚠ Red after a new diagnostic: §6 missed its registry doc comment |
+| **Ladder row**: `maxon scale-test --note=…` (MCP `note:`) on the rebased, documented, built tree, then `scripts/check-scale-rows.sh --working-tree` | **When §4 read the ladder.** Both exit 0; one row added to each table, last, with this tree's digest. A delta the run withholds is stated in the note, with the A/B figure `compiler-workflow` describes |
+| **No leftovers**: `python3 scripts/check-ignored-files.py` | exit 0, every change: no untracked path, no ignored path off `scripts/allowed-ignored-paths.txt`. Exit 1: `situations.md` |
+| **§1's count check**, final tree | markers == ran, no name twice |
 
-**The filter stays narrow:** the spec files whose programs reach the changed code, the files holding the
-change's own cases, and the pins it edited; `ir-specs` only for pins that moved; wasm only when wasm lowering
-changed. It also covers every spec family that pins a size or a trace of the objects the change resizes
-(`mm-trace/`, `builtins-mm-counters/`), and every family named after a KIND of value whose classification
-changed (grep `specs/` for the kind's name, as `union-scalar-backing/`). "Every family that mentions X" is
-CI's job. Briefs cap the work the same way: reuse an existing control binary, batch edits into one build, one
-combined filtered run at the end.
+**The filter stays narrow** (`situations.md`, "Choosing the §8 filter"). **CI alone runs** the full suite, wasm32-wasi,
+full tree corpora, multicore stress compile-all, `check-stdlib`, every `lint-tree.sh` group, the full IR
+suite on every lane, the WSL lane. ⭐ **`lint maxon-bin` is the one local E3092/E3219 gate**
+(`situations.md`, "A lint finding").
 
-**CI runs everything else, and it is not run here:** the full `run_spec_test`, the wasm32-wasi lane, the
-full tree corpora, the multicore stress compile-all, `check-stdlib`, every `lint-tree.sh` group, the full IR suite on every lane and
-the WSL lane runs.
-
-> ### ⭐ `lint maxon-bin` IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
-> `checkUnusedExports` (**E3092**) and `checkUnusedUnexported` (**E3219**) judge a whole *program*, and the
-> only program that names every `export` in `maxon-bin/Compiler/` is the compiler itself. **A fully green
-> suite says nothing about it**, and `maxon build` runs neither audit, so the self-compile cannot see one:
-> `maxon lint maxon-bin` is the local E3092 gate, and CI's lint step failing is a red `main`.
-> Run it where §8's row says. An E3092 here is a declaration more visible than its uses: narrow it, or land it *with* its
-> first consumer.
-
-> ### ⭐ THE IR SUITE'S PINS ARE A GATE
-> `ir-specs/` holds the corpus's emitted-code cases, and each pins the Target IR its program compiles to on
-> every native lane (` ```TargetIr:<lane> `). A pin the compiler no longer renders FAILS its case, and
-> the failure shows the first differing line. A change that moves emitted code re-mints the pins it
-> moves with `--update-required --filter=<spec>/` — a pin is COMPILED, not run, so any lane re-mints
-> on any host, `--target=arm64-macos` and `--target=arm64-linux` included — and READS the diff, which is
-> the review of the emitted code. `specs/` pins no emitted code.
-> A change to spill priority renumbers slots across many pins. Normalise only the slot number and compare the
-> removed and added line multisets: identical multisets are that churn, and anything left over is a real move.
-
-**A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
-before yours (AGENTS.md). To attribute it: do the failures touch what you changed? Re-run **the failing
-cases alone, by filter** — one run, one pattern per case. If that still does not settle it, **measure
-the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane or gate that
-did not RUN is not a red gate** (the lanes above are CI's): that is a SKIP you report, never
-folded into the green — §9's report names it. **A CI red after the push is fixed next, like any red**
-(AGENTS.md), in its own commit.
-
-Compare failing SETS between runs, never counts. A timeout under load lands on whatever is in flight, so it
-clusters plausibly around the change under test, and the same commit can read 11 then 0. Empty stdout does
-not prove a startup hang: a killed process loses block-buffered output.
-
-⚠ A `git stash pop` takes the top of the list whether or not your push stored anything: a push that failed
-or found nothing to save leaves an older stash on top, and its untracked files land in the tree even when
-the pop aborts. Read `git stash list` before popping. To test an old version of one file, copy it aside.
+**A red gate STOPS the change**, and a red you did not cause is fixed in its own commit before yours:
+attribute it by the failing cases alone, then a control (`situations.md`). ⚠ **A lane or gate that did not
+RUN is a SKIP you report**, never folded into the green. **A CI red after the push is fixed next**, in its
+own commit.
 
 ## 9. Commit and push
 
-**ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
-the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
-`TargetIr` pin the change re-minted** — and any `optimization-log.md` row.
-⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the gates you just ran were run on the whole tree, so the whole tree is what they
-licensed you to push.
+**ONE commit, on `main`**, holding the whole change: compiler source, spec cases, the documentation and
+regenerated site pages, every re-minted `TargetIr` pin, any `optimization-log.md` row. ⛔ Never a commit
+per piece or a partial landing "to follow": the gates licensed the whole tree. **The message carries what
+the diff cannot**: the wrong answer that motivated it, the mechanism, the cases red → green, the gate
+figures measured. ⚠ **Never a figure you did not measure**: it looks exactly like one taken.
 
-**The message carries what the diff cannot:** the wrong answer that motivated the change, the mechanism,
-the cases that went red → green, and the gate figures you measured. ⚠ **Never a figure you did not
-measure** — a number nobody took looks exactly like one that was.
+- **Stage and commit as `situations.md`'s "Staging and committing" says**: explicit paths, stderr in
+  view, the cached stat read.
+- **Glance at the last COMPLETED CI run as its own step** (`gh run list --branch main --workflow ci
+  --limit 3`), then push in a separate command. A completed red goes through §10's CI-red check (claimed
+  by someone else: theirs; else recorded, its culprit asked); push anyway, and that red (it hides later failures) is first in your
+  drain if it falls to you. A run in progress never blocks a push.
+- **Then, as its own step, `scripts/land.sh in-flight`**: anything but `none` is a chain land started
+  since §7 — wait (`--wait`), rebase, re-take each gate whose inputs changed. Then `git push origin main`.
 
-The index is one file shared by every session in this checkout. Commit with explicit paths
-(`git commit -F <msg> -- <paths>`), which commits exactly those paths whatever else is staged. A re-mint reads
-the specs on disk, so a peer's uncommitted spec edit lands in the pin.
+⛔ **A commit the seed chain refused lands only through `land.yml`**, on a bootstrap chain, as does an
+ordinary commit from **a session that can push only its own branch** (`compiler-workflow`). ⭐ **Land it
+WITHOUT ASKING (user ruling)**: publishing the `seed-*` pre-release and its pin is authorized like the
+`git push` it replaces; never hand the user a seed to publish. ⛔ **A REJECTED PUSH IS NOT A RETRY**: rebase and re-take each gate whose inputs
+changed, re-minting a ladder row the commit carries (`situations.md`). Once the push is accepted, delete
+`temp/land/` and every other `temp/` directory this change created.
 
-**Glance at the last COMPLETED CI run before pushing, as its own step:**
-`gh run list --branch main --workflow ci --limit 3`, read it, and only then make the push in a separate
-command. Chained in one command, the push goes out before anyone reads the answer. A completed red goes
-through §10's CI-red check: claimed by someone else, it is theirs; otherwise record it and ask the
-culprit. Then push — the red is the first thing your drain takes if it falls to you, because a red lane
-hides later failures behind it. A run still in progress never blocks a push.
+> ⛔ **DO NOT WAIT FOR CI (user ruling).** The push ends the change: do not watch, poll or schedule a
+> check. CI hosts the four native targets on their own architecture, the full suite, the tree corpora,
+> the two-stage seed build and wasm32-wasi (on its x64-linux lane), so a lane can go red after you report. A red lane reported
+> to you goes through §10's CI-red check; one that falls to you is yours whether or not you caused it,
+> in its own commit, reproduced on that platform's own host, never on the cross lane that missed it.
 
-**Stage and commit with git's stderr in view — never suppress it.** `git add` with any pathspec that
-matches nothing stages NOTHING, so stage only paths `git status --porcelain` lists, and read
-`git diff --cached --stat` before committing: a commit whose message describes a code change must show
-that code file.
+**Report in a few lines**: the change, the cases red → green, each gate's number, and every gate or lane
+not run, with its reason (CI-only lanes included). **Then drain the known issues (§10)**: the task is not
+over while one is claimable.
 
-Then, as its own step, `scripts/land.sh in-flight`: anything but `none` means a chain land started since §7
-— wait for it (`--wait`), rebase, and re-take each §8 gate whose inputs the rebase changed (the inputs
-rule, in the box under the gate table) before pushing.
+## 10. Known issues
 
-```bash
-git push origin main
-```
-
-⛔ **A commit §8's seed chain refused lands only through `land.yml`** (`docs/RELEASING.md`, "A commit the
-pinned seed refuses lands with its own seed"). Put the intermediate tree the pinned seed accepts — the
-compiler change before any source uses it — in a commit of its own before your commit; more than one when
-the change needs several. That chain is scaffolding: `main` receives your commit alone, squashed onto
-`origin/main` with a `Bootstrap-Chain:` trailer, plus the pin. Land it with
-`scripts/land.sh submit` from the main checkout, or by pushing the chain to your branch with the trailer
-`Land: main` on its head. CI builds the chain, freezes, proves on every lane and publishes the seed, and
-pushes your commit with its pin. A failed or moved-`main` run retracts what it published: rebase, re-take
-each §8 gate whose inputs changed, and land again. `Land: rehearsal` (`submit --rehearsal`) runs every step and retracts.
-⭐ **Land it WITHOUT ASKING (user ruling).** Publishing the `seed-*` pre-release and pushing its pin is
-part of landing, already authorized like the `git push` it replaces: never stop for approval, never hand
-the user a seed to freeze or publish by hand.
-
-⛔ **A session that can push only its own branch** lands an ordinary commit as one commit carrying the
-trailer `Land: main`, pushed to that branch; `land.yml` fast-forwards `main` to it. The outcome is that
-commit's check runs.
-
-Once the push is accepted, delete `temp/land/` and every other `temp/` directory this change created.
-
-⛔ **A REJECTED PUSH IS NOT A RETRY.** Someone landed while you were running, so the tree you tested is
-not the tree you would push: **rebase, list the changed paths and re-take each §8 gate whose inputs
-changed** (the inputs rule, in the box under the gate table) before pushing again. A ladder row the commit
-already carries measured the tree before that rebase: delete it from all three tables, mint it again on
-the rebased tree, amend the commit, and check the commit itself with
-`scripts/check-scale-rows.sh --range origin/main..HEAD --compiler ./maxon-bin/.maxon/maxon`
-(`--working-tree` compares against `HEAD`, which by then holds the row, so it reports that nothing was added).
-
-> ### ⛔ DO NOT WAIT FOR CI (user ruling)
-> **The push ends the change.** Do not watch, poll or schedule a check on the CI run; report and stop.
-> CI hosts the four native targets on their own architecture, runs the full suite, the tree corpora,
-> and the two-stage seed build, none of which your landing gates do, so a lane
-> can still go red after you have reported — that is why the report names every lane and gate your
-> landing gates did not run. CI also runs the wasm32-wasi suite, on its x64-linux lane. A red lane
-> reported to you goes through §10's CI-red check; one that falls to you is yours to fix whether or not
-> you caused it (AGENTS.md), in its own commit, reproduced on that platform's own host — never on the
-> cross lane that missed it.
-
-Then report in a few lines: the change, the cases that went red → green, each gate's number, and
-anything skipped with the reason — including the lanes only CI runs. **Then drain the known issues
-(§10)** — that report is not the end of the task while one is claimable.
-
-## 10. Known issues — record unrelated defects as GitHub issues, drain them after the push
-
-> ⭐ **In the maintainer's fleet the orchestrator files, claims and assigns every known issue**
-> (`AGENTS.md`, "Orchestration"): recording is a `FOUND` to it, asking the culprit is its job, and
-> draining is a `DONE` after which it assigns the next one. Everything below about *which* defects are
-> related, and how one is landed, still binds you; the filing, the claiming and the culprit hunt are
-> what move to it.
-
-**Every defect found during the change gets fixed. Only the ones the change does not need wait — as
-issues on `maxon-lang/maxon`, where whichever agent finishes first takes them.**
+**Every defect found gets fixed; those the change does not need wait** as issues on `maxon-lang/maxon`,
+for whoever finishes first.
 
 > ### ⭐ RELATED — fixed now, in this change
-> - the acceptance set, or a gate in §8, **cannot go green** without it — including a red you did not
->   cause, which still gets its own commit before yours (§8);
-> - it is in code **this change wrote or changed** — a defect the diff introduced or carries, a
->   duplication the new code takes part in, a superlinearity in the new code;
-> - or it is another instance of the very class this change exists to close, even in a file the diff
->   does not touch. State the change's scope as a class and test each sibling against it: a reason for
->   leaving B that applies equally to the A you fixed is not a reason.
+> - the acceptance set or a §8 gate **cannot go green** without it (a red you did not cause included, in
+>   its own commit first);
+> - it is in code **this change wrote or changed**: a defect, duplication or superlinearity the new code
+>   takes part in;
+> - or it is another instance of **the class this change closes**, even in an untouched file. State the
+>   scope as a class and test each sibling: a reason for leaving B that applies equally to the A you fixed
+>   is not a reason.
 >
-> **Everything else is UNRELATED** — a pre-existing defect in a file you touched but not in what you
-> changed, a reviewer's finding elsewhere, pre-existing duplication the new code does not take part in,
-> a missed diagnostic you happened to see. ⚠ "It is in a file I am editing anyway" does not make it
-> related; "it blocks a case" does.
+> **Everything else is UNRELATED**: a pre-existing defect in a touched file but not in what you changed, a
+> reviewer's finding elsewhere, pre-existing duplication the new code does not join, a diagnostic missed in
+> passing. "It is in a file I am editing anyway" does not make it related; "it blocks a case" does.
 
-### Recording — an issue on `maxon-lang/maxon`, shared by every agent and every contributor
+### Recording
 
-**An UNRELATED defect is an issue labelled `bug` and `accepted`**, plus its area label (`compiler`,
-`codegen`, `runtime`, `stdlib`, `tooling`, `performance`), so two agents — or an agent and a
-contributor — that find the same defect record it once and fix it once. Its title is the one-line
-symptom; its body carries **Where** (`file:line`), **Seen** (how it was found, by which change), and
-**Repro** — **a program that reproduces it**, the seed of the red set of the land that fixes it.
+**An unrelated defect is an issue labelled `bug` and `accepted`** plus its area (`compiler`, `codegen`,
+`runtime`, `stdlib`, `tooling`, `performance`), so it is recorded and fixed once. Title: the one-line
+symptom. Body: **Where** (`file:line`), **Seen** (how, by which change), **Repro** (a program that
+reproduces it: the fixing land's red set).
 
-- **Search before filing:** `gh issue list -R maxon-lang/maxon --state open --search "<file or symptom>"`.
-  An open issue that already records it gets at most a comment with the new sighting, never a twin.
-- **You, the coordinator, file it** — the moment a finding arrives. Implementers and reviewers report
-  to you; they do not file.
-- **File it with `gh issue create -R maxon-lang/maxon --label bug --label accepted --label <area> --title
-  <symptom> --body-file <file>`**, the body written in your scratchpad, then put it on the Roadmap as
-  free to take: `node .claude/roadmap/status.mjs <n> Ready`. Nothing touches the tree.
-- Then go on with the change. Recording is the whole of what an unrelated defect costs it.
+**In the maintainer's fleet the orchestrator files, claims and assigns every known issue** (`AGENTS.md`,
+"Orchestration"): recording is a `FOUND` to it, asking a CI red's culprit is its job, and draining is a
+`DONE` after which it assigns the next. **Outside the fleet** the filing, the CI-red check and the
+draining are yours: `known-issues.md`. Either way, relatedness and how an issue lands bind you.
 
-### CI reds — the `ci-red` label, and the culprit takes its own
-
-**A red lane on main is an issue labelled `ci-red`, `bug`, `accepted` and `priority: high`**, drained
-before every other. Its **Repro** is the run URL, the lane and the failing case; its **Suspects** are
-the commits between the last green run and the first red one (`gh run list`, then
-`git log <green>..<red>`).
-
-**Whenever you meet a red — §9's glance, or one reported to you — look for its issue first**
-(`gh issue list -R maxon-lang/maxon --label ci-red --state open`):
-
-- **Assigned to someone else:** it is theirs. Do not fix it; push.
-- **Not filed:** file it, then ask the culprit (below) before claiming it.
-- **Filed and unassigned:** ask the culprit (below) before claiming it.
-
-**Ask the culprit.** `ListAgents`, then one `SendMessage` to every session that can answer (cloud
-sessions cannot — skip them): the lane, the failing case, the run URL and the suspect shas, and *"Did your
-current task push one of these? If so, take this issue."* An agent whose commit it is claims the issue,
-answers that it has, and fixes the red before its next push (AGENTS.md). Read answers with
-`ReadNotifications` while you go on with your own work — at §9's glance, that work is your push. **When
-every answer is "not mine", or none has come after 10 minutes, claim it yourself** — unless someone has
-by then — and land it before anything else in the drain.
-
-### Draining — after the push, ONE issue at a time
-
-**Once your push has landed, drain the queue** — the open issues labelled `accepted` and `bug` with no
-assignee:
-
-1. **Pick ONE:** the oldest unassigned `ci-red`
-   (`gh issue list -R maxon-lang/maxon --state open --label ci-red --search "no:assignee sort:created-asc"`),
-   else the oldest unassigned `accepted` `bug`. An issue assigned more than 24 hours ago with no
-   comment or commit since is abandoned: unassign it, set it back to `Ready`, and it is as good as open.
-2. **Claim it:** `gh issue edit <n> --add-assignee @me`, `node .claude/roadmap/status.mjs <n> "In progress"`
-   — the project board is where everyone sees what is being implemented — then a comment
-   `Claimed by <session>`. Every
-   session on one machine shares one GitHub login, so the assignee alone cannot tell two of them
-   apart: re-read the comments, and if an earlier `Claimed by` than yours stands since the last
-   unassignment, someone else moved first — delete your comment and go back to 1. A `ci-red` issue is
-   claimed only after asking the culprit.
-3. **Land it as its own `/land`**, its repro the red set, its commit message carrying `Fixes #<n>` so the
-   push closes it. A defect found while landing it takes the same RELATED test as any other: related to
-   this issue, fixed in this land; unrelated, filed.
-4. **Repeat until nothing is claimable.** Then the task is done; one report names every sha.
-
-**Hold one claim at a time**: an issue that turns out to be slow then blocks only itself, and every
-other one stays open for an agent that finishes sooner.
-
-- An issue whose repro will not go red was fixed on the way — close it with a comment naming the sha
-  that fixed it.
-- ⛔ **The queue is not `todo.md` and not a memory note** — it is a work queue, and draining it is part
-  of the task.
-- **An issue that needs a design ruling is a question** to the user, asked when its turn comes — never
-  a skipped issue.
-
-> ### ⛔ AN ISSUE THAT REPEATS A LANDED FIX IS A DESIGN QUESTION, NOT ANOTHER ISSUE
-> Before filing an issue, and again before landing one, ask: **has a fix of this same kind already
-> landed, or does another issue name the same question at a different site?** Examples: "the async
-> path does not consult X", after "the spawn path did not consult X"; or a second consumer that
-> disagrees with a third about one fact. If so, the fixes are treating symptoms: several consumers
-> answer one question each for themselves (`code-review` §3, "the same DECISION made in two places").
-> **HALT and take it to the user**, naming every consumer with `file:line` and the landed fixes by sha.
-> The remedy is one source every consumer asks, through `/plan-and-land`. ⛔ Never land the next
-> per-site fix while that question is open.
+⛔ **Before filing an issue and before landing one, ask whether it repeats a landed fix**: if so it is a
+design question, a HALT (`situations.md`).
 
 ## ⛔ HALT AND ASK
 
-Everything above runs unattended. Stop and report, without landing, when:
+Everything above runs unattended. Stop and report, without landing, only when:
 
 - **A gate is red and the fix is not yours to make.**
-- **A DESIGN RULING is needed** — the specs and the compiler disagree about what is *correct*, or `specs/`
-  contradicts itself. **Do not guess, and never edit a spec to match the compiler**: that is how a
-  compiler bug becomes a specification.
-- **A case would have to be removed or excluded**, or **an existing `specs` expectation rewritten**. The first
-  is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
-  change and belongs to whoever owns that behaviour.
-- **A finding or known issue repeats a fix already landed, at another consumer of the same fact** (§10).
-- **A change would make the compiler accept a program an approved design refuses** — a checker rule
-  relaxed, a pin dropped, a refusal narrowed, against a ruling or sample of the plan the change implements.
-  That is an amendment of a model-checked design, never an implementation choice. The agent stops and
-  reports; the coordinator puts the amended rule to the user, and the amended rule passes the design's
-  executable model (campaigns and a fresh red team, 0 counterexamples) before it lands. Every brief for
-  such a change quotes the rulings it implements and says this.
+- **A DESIGN RULING is needed**: specs and compiler disagree about what is correct, or `specs/`
+  contradicts itself. Do not guess; **never edit a spec to match the compiler**: that makes a compiler bug the specification.
+- **A case would have to be removed or excluded, or an existing `specs` expectation rewritten**: the
+  first is what this process prevents; the second belongs to whoever owns that behaviour.
+- **A finding or known issue repeats a landed fix** at another consumer of the same fact (§10).
+- **A change would make the compiler accept a program an approved design refuses** (`situations.md`).
 
-**In the maintainer's fleet, each is a `QUESTION` to the orchestrator, not to the user** (`AGENTS.md`,
-"Orchestration"). **Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
-not open a worktree, or hand the work to another process. When the answer comes you carry
-on from where you stopped, in this file.
-
-⚠ **NOT on that list, ever:** "this is big"; "I could not find the gap" (that is
-diagnosis you have not finished); "a contract would be cleaner"; **"I will land this part now and the
-rest after"** — there is no partial landing, and no slice. **The only honest stop is a question the user
-has to answer.**
+**In the fleet each is a `QUESTION` to the orchestrator** (`AGENTS.md`). **Each is answered in place,
+never a reroute**: stop, report, wait — no worktree, no hand-off — then carry on here. ⚠ **Never a
+stop:** "this is big"; "I could not find the gap" (unfinished diagnosis); "a contract would be cleaner";
+"I will land this part now and the rest after". The only honest stop is a question the user must answer.
 
 ## The thing this process exists to catch
 
-**A change that is green because nothing tested it.** The gates here run once, at the end,
-on filters, and every spec run before them is a proxy for the suite — so the whole loop rests on §1's red being real. **Watch
-every case fail before you write the fix, count what actually ran, and never make a case go away.**
-
-**And the reason the coordination exists at all:** that red set, the integration and the gates are
-judgement work, and they are the first thing to go when a coordinator spends its context on greps and
-IR dumps. **Send the agent. Keep the judgement.**
+**A change that is green because nothing tested it.** The gates run once, at the end, on filters, and
+every spec run before them is a proxy, so the loop rests on §1's red being real: **watch every case fail
+before the fix, count what ran, never make a case go away.** That red set, the integration and the gates
+are judgement, the first thing lost when a coordinator spends its context on greps and IR dumps. **Send
+the agent. Keep the judgement.**
