@@ -3390,6 +3390,8 @@ end 'cacheReadInstanceShapeFrozenArgs'
 // the resulting symbol (`__layout_FixedArray_N3_Int`) byte for byte.
 let FixedSizeNameTag = "N"
 
+typealias RowSetEpoch = int(0 to u64.max)
+
 // ⭐ **THE GENERIC-INSTANCE INTERNER** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
 // recursively aggregate — E4014). Two instances with the same base and structurally equal args share
@@ -3453,6 +3455,7 @@ type GenericInstanceRegistry
 	var mergeCopyDemandedRows as GenericInstanceIdArray
 	var parseNamedOrder as GenericInstanceIdArray
 	var parseCopyDemandedOrder as GenericInstanceIdArray
+	var epoch = 0 as RowSetEpoch
 
 	static function create() returns GenericInstanceRegistry
 		return Self{baseIds: TypeNameIdArray.create(0), argLists: MaxonTypeArrayArray.create(0), fixedSizes: FixedElementCountColumn.create(), frozenArgs: FrozenArgMaskArray.create(0), runtimeSized: BoolArray.create(0), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(0), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create(0), copyDemanded: GenericInstanceIdSet.create(), parseCopyDemandedRows: GenericInstanceIdSet.create(), mergeCopyDemandedRows: GenericInstanceIdArray.create(0), parseNamedOrder: GenericInstanceIdArray.create(0), parseCopyDemandedOrder: GenericInstanceIdArray.create(0)}
@@ -3463,7 +3466,14 @@ type GenericInstanceRegistry
 	export function settleBaseline()
 		self.baselineCount = self.baseIds.count() as GenericInstanceId
 		self.mergeCopyDemandedRows = GenericInstanceIdArray.create(0)
+		self.advanceEpoch()
 	end 'settleBaseline'
+
+	// Every writer of an input a kept row-set answer reads calls this, and nothing rewinds it: a
+	// writer that skips it, or an epoch seen twice, lets `RowSetRound` serve a stale answer.
+	function advanceEpoch()
+		self.epoch = self.epoch + 1
+	end 'advanceEpoch'
 
 	export function rescopeEscapesBaseline(id GenericInstanceId, scoped GenericInstanceId) returns bool
 		return self.parseBandOpen and id < self.baselineCount and scoped >= self.baselineCount
@@ -3479,6 +3489,7 @@ type GenericInstanceRegistry
 		self.parseCopyDemandedRows = GenericInstanceIdSet.create()
 		self.parseNamedOrder = GenericInstanceIdArray.create(0)
 		self.parseCopyDemandedOrder = GenericInstanceIdArray.create(0)
+		self.advanceEpoch()
 	end 'openParseBand'
 
 	// The rows the open parse minted, in mint order, and the baseline rows it named — handed back before the registry is cut
@@ -3508,6 +3519,7 @@ type GenericInstanceRegistry
 		self.parseCopyDemandedRows = GenericInstanceIdSet.create()
 		self.parseNamedOrder = GenericInstanceIdArray.create(0)
 		self.parseCopyDemandedOrder = GenericInstanceIdArray.create(0)
+		self.advanceEpoch()
 		return ParseBandInstances.create(rows, namedRows: named, copyDemandedRows: demanded)
 	end 'closeParseBand'
 
@@ -3533,6 +3545,7 @@ type GenericInstanceRegistry
 		end 'eachCopyDemandedSince'
 
 		self.parseCopyDemandedOrder.truncate(mark.copyDemanded)
+		self.advanceEpoch()
 	end 'rewindParseBand'
 
 	// Cut every row added since the baseline and put back every speculative mark a merge cleared.
@@ -3552,10 +3565,15 @@ type GenericInstanceRegistry
 		end 'eachCopyDemandedByAMerge'
 
 		self.mergeCopyDemandedRows = GenericInstanceIdArray.create(0)
+		self.advanceEpoch()
 	end 'restoreBaseline'
 
 	function cutRowsBackTo(keep GenericInstanceId)
 		var position = self.baseIds.count()
+
+		if position as GenericInstanceId > keep 'rowsAreCut'
+			self.advanceEpoch()
+		end 'rowsAreCut'
 
 		while position as GenericInstanceId > keep 'eachAddedRowFromTheEnd'
 			position = position - 1
@@ -3618,6 +3636,7 @@ type GenericInstanceRegistry
 
 		self.parseNamedRows.insert(id)
 		self.parseNamedOrder.push(id)
+		self.advanceEpoch()
 	end 'noteBaselineRowNamed'
 
 	export function namedByThisParse(id GenericInstanceId) returns bool
@@ -3637,6 +3656,8 @@ type GenericInstanceRegistry
 		if position < self.baselineCount 'aBaselineRow'
 			self.mergeNamedRows.push(id)
 		end 'aBaselineRow'
+
+		self.advanceEpoch()
 	end 'markNamed'
 
 	export function noteCopyDemanded(id GenericInstanceId)
@@ -3644,6 +3665,7 @@ type GenericInstanceRegistry
 			if not self.parseCopyDemandedRows.contains(id) 'firstAsk'
 				self.parseCopyDemandedRows.insert(id)
 				self.parseCopyDemandedOrder.push(id)
+				self.advanceEpoch()
 			end 'firstAsk'
 
 			return
@@ -3659,6 +3681,7 @@ type GenericInstanceRegistry
 
 		self.copyDemanded.insert(id)
 		self.mergeCopyDemandedRows.push(id)
+		self.advanceEpoch()
 	end 'markCopyDemanded'
 
 	export function copyDemandedIds() returns GenericInstanceIdArray
@@ -3767,6 +3790,7 @@ type GenericInstanceRegistry
 		self.speculative.push(asSpeculative)
 		self.index.upsert(key, value: id)
 		self.recordBase(baseId, id: id)
+		self.advanceEpoch()
 		return id
 	end 'intern'
 
@@ -3916,11 +3940,11 @@ type GenericInstanceRegistry
 		let f_parseNamedOrder = try cacheReadGenericInstanceIdArray(reader)
 		let f_parseCopyDemandedOrder = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{baseIds: f_baseIds, argLists: f_argLists, fixedSizes: f_fixedSizes, frozenArgs: f_frozenArgs, runtimeSized: f_runtimeSized, index: f_index, byBase: f_byBase, speculative: f_speculative, baselineCount: f_baselineCount, parseBandOpen: f_parseBandOpen, parseNamedRows: f_parseNamedRows, mergeNamedRows: f_mergeNamedRows, copyDemanded: f_copyDemanded, parseCopyDemandedRows: f_parseCopyDemandedRows, mergeCopyDemandedRows: f_mergeCopyDemandedRows, parseNamedOrder: f_parseNamedOrder, parseCopyDemandedOrder: f_parseCopyDemandedOrder}
+		return Self{baseIds: f_baseIds, argLists: f_argLists, fixedSizes: f_fixedSizes, frozenArgs: f_frozenArgs, runtimeSized: f_runtimeSized, index: f_index, byBase: f_byBase, speculative: f_speculative, baselineCount: f_baselineCount, parseBandOpen: f_parseBandOpen, parseNamedRows: f_parseNamedRows, mergeNamedRows: f_mergeNamedRows, copyDemanded: f_copyDemanded, parseCopyDemandedRows: f_parseCopyDemandedRows, mergeCopyDemandedRows: f_mergeCopyDemandedRows, parseNamedOrder: f_parseNamedOrder, parseCopyDemandedOrder: f_parseCopyDemandedOrder, epoch: 0}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize136
-		return sizeof(GenericInstanceRegistry) as CacheSize136
+	static function cacheLayoutBytes() returns CacheSize144
+		return sizeof(GenericInstanceRegistry) as CacheSize144
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

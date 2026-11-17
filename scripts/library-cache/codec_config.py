@@ -29,6 +29,8 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "journal"): "IndexJournal.create()",
     ("ProgramSignatures", "rowSetLog"): "RowSetLog.closed()",
     ("ProgramSignatures", "growthMemo"): "GrowthMemo.create()",
+    ("ProgramSignatures", "rowSetRound"): "RowSetRound.throwaway(0)",
+    ("GenericInstanceRegistry", "epoch"): "0",
     ("ProgramSignatures", "descriptorReads"): "DescriptorReads.create()",
     ("ProgramSignatures", "mintedTupleLayouts"): "SettledStructLayoutArray.create(0)",
     ("ProgramSignatures", "published"): "SettledCellArray.create(0)",

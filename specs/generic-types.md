@@ -707,6 +707,685 @@ end 'main'
 0
 ```
 
+<!-- test: reassign-managed-opaque-fields-around-an-odd-ring-of-flipped-declaration-views -->
+Three generics name each other in a ring at `(B, A)`, and the ring closes after an odd number of flips, so
+`main`'s one `with (String, Tally)` makes every parameter of every member a `String` through the declaration
+views. Each shared `replace` drops the old `String` of both fields. Leak-free under `__mm_free` poisoning.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function label(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'label'
+
+type OddRingA uses A, B
+	typealias Next = OddRingB with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'OddRingA'
+
+type OddRingB uses A, B
+	typealias Next = OddRingC with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'OddRingB'
+
+type OddRingC uses A, B
+	typealias Next = OddRingA with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'OddRingC'
+
+typealias OddStart = OddRingA with (String, Tally)
+
+function main() returns ExitCode
+	let a = OddStart.create(label("a", n: 1), second: 1)
+	a.replace(label("a", n: 2), b: 2)
+	let b = a.turn()
+	b.replace(3, b: label("b", n: 3))
+	let c = b.turn()
+	c.replace(label("c", n: 4), b: 4)
+	let d = c.turn()
+	d.replace(5, b: label("d", n: 5))
+	let e = d.turn()
+	e.replace(label("e", n: 6), b: 6)
+	let f = e.turn()
+	f.replace(7, b: label("f", n: 7))
+	print("{a.first} {a.second} {b.first} {b.second} {c.first} {c.second}\n")
+	print("{d.first} {d.second} {e.first} {e.second} {f.first} {f.second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a-2 2 3 b-3 c-4 4
+5 d-5 e-6 6 7 f-7
+```
+
+<!-- test: reassign-scalar-opaque-fields-around-an-odd-ring-of-flipped-declaration-views -->
+The same odd ring entered only at `(Tally, Tally)`: no parameter of any member receives a managed type, so each
+shared `replace` stores the new integers and drops nothing.
+```maxon
+typealias Tally = int(0 to 1000)
+
+type ScalarRingA uses A, B
+	typealias Next = ScalarRingB with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'ScalarRingA'
+
+type ScalarRingB uses A, B
+	typealias Next = ScalarRingC with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'ScalarRingB'
+
+type ScalarRingC uses A, B
+	typealias Next = ScalarRingA with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'ScalarRingC'
+
+typealias ScalarStart = ScalarRingA with (Tally, Tally)
+
+function main() returns ExitCode
+	let a = ScalarStart.create(1, second: 2)
+	a.replace(10, b: 20)
+	let b = a.turn()
+	b.replace(30, b: 40)
+	let c = b.turn()
+	c.replace(50, b: 60)
+	let d = c.turn()
+	d.replace(70, b: 80)
+	print("{a.first} {a.second} {b.first} {b.second} {c.first} {c.second} {d.first} {d.second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 20 30 40 50 60 70 80
+```
+
+<!-- test: reassign-opaque-fields-around-an-even-ring-of-flipped-declaration-views -->
+Two generics name each other at `(B, A)`, so the ring closes after an even number of flips and its parameters
+split into two cycles: `EvenRingA`'s `A` with `EvenRingB`'s `B`, which `main`'s `with (String, Tally)` makes a
+`String`, and `EvenRingA`'s `B` with `EvenRingB`'s `A`, which only ever hold a `Tally`. Each shared `replace`
+drops the old `String` field and stores the integer one without a drop. Leak-free under `__mm_free` poisoning.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function evenLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'evenLabel'
+
+type EvenRingA uses A, B
+	typealias Next = EvenRingB with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'EvenRingA'
+
+type EvenRingB uses A, B
+	typealias Next = EvenRingA with (B, A)
+	var first as A
+	var second as B
+
+	static function create(first A, second B) returns Self
+		return Self{ first: first, second: second }
+	end 'create'
+
+	function replace(a A, b B)
+		self.first = a
+		self.second = b
+	end 'replace'
+
+	function turn() returns Next
+		return Next.create(self.second, second: self.first)
+	end 'turn'
+end 'EvenRingB'
+
+typealias EvenStart = EvenRingA with (String, Tally)
+
+function main() returns ExitCode
+	let a = EvenStart.create(evenLabel("a", n: 1), second: 1)
+	a.replace(evenLabel("a", n: 2), b: 2)
+	let b = a.turn()
+	b.replace(3, b: evenLabel("b", n: 3))
+	let c = b.turn()
+	c.replace(evenLabel("c", n: 4), b: 4)
+	print("{a.first} {a.second} {b.first} {b.second} {c.first} {c.second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a-2 2 3 b-3 c-4 4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-outer-first-alias-last -->
+`Outer`'s `P` has two rows, `Outer with Q` written inside `Inner` and `Outer with String` named by the program,
+and `Inner`'s `Q` has one, `Inner with P` written inside `Outer`. So `Q` reaches `String` only back through `P`,
+and `Inner`'s shared `replace` still drops the old `String` it holds. Leak-free under `__mm_free` poisoning.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+type CutOuterA uses P
+	typealias Down = CutInnerA with P
+	var last as P
+	var below as Down
+
+	static function create(item P, spare P) returns Self
+		return Self{ last: spare, below: Down.create(item) }
+	end 'create'
+
+	function push(next P, spare P)
+		self.last = spare
+		self.below.replace(next)
+	end 'push'
+end 'CutOuterA'
+
+type CutInnerA uses Q
+	typealias Up = CutOuterA with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function lift(spare Q) returns Up
+		return Up.create(self.held, spare: spare)
+	end 'lift'
+end 'CutInnerA'
+
+typealias CutStrA = CutOuterA with String
+
+function main() returns ExitCode
+	let o = CutStrA.create(cutLabel("a", n: 1), spare: cutLabel("s", n: 1))
+	o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2))
+	let up = o.below.lift(cutLabel("s", n: 3))
+	up.push(cutLabel("a", n: 3), spare: cutLabel("s", n: 4))
+	up.below.replace(cutLabel("a", n: 4))
+	print("{o.last} {o.below.held} {up.last} {up.below.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s-2 a-2 s-4 a-4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-inner-first-alias-last -->
+The same program with `Inner` declared before `Outer`.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+type CutInnerB uses Q
+	typealias Up = CutOuterB with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function lift(spare Q) returns Up
+		return Up.create(self.held, spare: spare)
+	end 'lift'
+end 'CutInnerB'
+
+type CutOuterB uses P
+	typealias Down = CutInnerB with P
+	var last as P
+	var below as Down
+
+	static function create(item P, spare P) returns Self
+		return Self{ last: spare, below: Down.create(item) }
+	end 'create'
+
+	function push(next P, spare P)
+		self.last = spare
+		self.below.replace(next)
+	end 'push'
+end 'CutOuterB'
+
+typealias CutStrB = CutOuterB with String
+
+function main() returns ExitCode
+	let o = CutStrB.create(cutLabel("a", n: 1), spare: cutLabel("s", n: 1))
+	o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2))
+	let up = o.below.lift(cutLabel("s", n: 3))
+	up.push(cutLabel("a", n: 3), spare: cutLabel("s", n: 4))
+	up.below.replace(cutLabel("a", n: 4))
+	print("{o.last} {o.below.held} {up.last} {up.below.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s-2 a-2 s-4 a-4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-alias-first-outer-first -->
+The same program with `Outer with String` named before either generic, so `P`'s concrete row comes before its
+row through `Inner`.
+```maxon
+typealias Tally = int(0 to 1000)
+typealias CutStrC = CutOuterC with String
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+type CutOuterC uses P
+	typealias Down = CutInnerC with P
+	var last as P
+	var below as Down
+
+	static function create(item P, spare P) returns Self
+		return Self{ last: spare, below: Down.create(item) }
+	end 'create'
+
+	function push(next P, spare P)
+		self.last = spare
+		self.below.replace(next)
+	end 'push'
+end 'CutOuterC'
+
+type CutInnerC uses Q
+	typealias Up = CutOuterC with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function lift(spare Q) returns Up
+		return Up.create(self.held, spare: spare)
+	end 'lift'
+end 'CutInnerC'
+
+function main() returns ExitCode
+	let o = CutStrC.create(cutLabel("a", n: 1), spare: cutLabel("s", n: 1))
+	o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2))
+	let up = o.below.lift(cutLabel("s", n: 3))
+	up.push(cutLabel("a", n: 3), spare: cutLabel("s", n: 4))
+	up.below.replace(cutLabel("a", n: 4))
+	print("{o.last} {o.below.held} {up.last} {up.below.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s-2 a-2 s-4 a-4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-alias-first-inner-first -->
+The same program with `Outer with String` named first and `Inner` declared before `Outer`.
+```maxon
+typealias Tally = int(0 to 1000)
+typealias CutStrD = CutOuterD with String
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+type CutInnerD uses Q
+	typealias Up = CutOuterD with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function lift(spare Q) returns Up
+		return Up.create(self.held, spare: spare)
+	end 'lift'
+end 'CutInnerD'
+
+type CutOuterD uses P
+	typealias Down = CutInnerD with P
+	var last as P
+	var below as Down
+
+	static function create(item P, spare P) returns Self
+		return Self{ last: spare, below: Down.create(item) }
+	end 'create'
+
+	function push(next P, spare P)
+		self.last = spare
+		self.below.replace(next)
+	end 'push'
+end 'CutOuterD'
+
+function main() returns ExitCode
+	let o = CutStrD.create(cutLabel("a", n: 1), spare: cutLabel("s", n: 1))
+	o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2))
+	let up = o.below.lift(cutLabel("s", n: 3))
+	up.push(cutLabel("a", n: 3), spare: cutLabel("s", n: 4))
+	up.below.replace(cutLabel("a", n: 4))
+	print("{o.last} {o.below.held} {up.last} {up.below.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s-2 a-2 s-4 a-4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-instantiated-by-another-file-generics-first -->
+The cut shape with `Outer with String` and `main` in a second file: the generics' file names no instance at
+`String`, so the drops in its shared bodies come from the whole program's instantiations.
+```maxon
+// --- file: a_generics.maxon
+type CutOuterE uses P
+	typealias Down = CutInnerE with P
+	var last as P
+	var below as Down
+
+	static function create(item P, spare P) returns Self
+		return Self{ last: spare, below: Down.create(item) }
+	end 'create'
+
+	function push(next P, spare P)
+		self.last = spare
+		self.below.replace(next)
+	end 'push'
+end 'CutOuterE'
+
+type CutInnerE uses Q
+	typealias Up = CutOuterE with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function lift(spare Q) returns Up
+		return Up.create(self.held, spare: spare)
+	end 'lift'
+end 'CutInnerE'
+// --- file: b_use.maxon
+typealias Tally = int(0 to 1000)
+typealias CutStrE = CutOuterE with String
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+function main() returns ExitCode
+	let o = CutStrE.create(cutLabel("a", n: 1), spare: cutLabel("s", n: 1))
+	o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2))
+	let up = o.below.lift(cutLabel("s", n: 3))
+	up.push(cutLabel("a", n: 3), spare: cutLabel("s", n: 4))
+	up.below.replace(cutLabel("a", n: 4))
+	print("{o.last} {o.below.held} {up.last} {up.below.held}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s-2 a-2 s-4 a-4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-instantiated-by-another-file-use-first -->
+The same program with the file naming `Outer with String` first: the drops in the generics' shared bodies are
+the same whichever file is read first.
+```maxon
+// --- file: a_use.maxon
+typealias Tally = int(0 to 1000)
+typealias CutStrF = CutOuterF with String
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+function main() returns ExitCode
+	let o = CutStrF.create(cutLabel("a", n: 1), spare: cutLabel("s", n: 1))
+	o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2))
+	let up = o.below.lift(cutLabel("s", n: 3))
+	up.push(cutLabel("a", n: 3), spare: cutLabel("s", n: 4))
+	up.below.replace(cutLabel("a", n: 4))
+	print("{o.last} {o.below.held} {up.last} {up.below.held}\n")
+	return 0
+end 'main'
+// --- file: b_generics.maxon
+type CutOuterF uses P
+	typealias Down = CutInnerF with P
+	var last as P
+	var below as Down
+
+	static function create(item P, spare P) returns Self
+		return Self{ last: spare, below: Down.create(item) }
+	end 'create'
+
+	function push(next P, spare P)
+		self.last = spare
+		self.below.replace(next)
+	end 'push'
+end 'CutOuterF'
+
+type CutInnerF uses Q
+	typealias Up = CutOuterF with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function lift(spare Q) returns Up
+		return Up.create(self.held, spare: spare)
+	end 'lift'
+end 'CutInnerF'
+```
+```exitcode
+0
+```
+```stdout
+s-2 a-2 s-4 a-4
+```
+
+<!-- test: reassign-opaque-field-whose-parameter-closes-on-a-cut-reached-only-from-a-shared-body -->
+`CutOuterW` holds no `CutInnerW`: it names `CutInnerW with P` only inside its shared `push`, and `CutInnerW` names
+`CutOuterW with Q` back. So `Q` receives a `String` only through `P`, whose own arguments include `Q` again.
+`CutOuterW with String` still makes `Q` a `String`, so the shared `replace` drops the `String` it displaces.
+Leak-free under `__mm_free` poisoning.
+```maxon
+typealias Tally = int(0 to 1000)
+
+function cutLabel(tag String, n Tally) returns String
+	return "{tag}-{n}"
+end 'cutLabel'
+
+type CutOuterW uses P
+	typealias Down = CutInnerW with P
+	var last as P
+
+	static function create(spare P) returns Self
+		return Self{ last: spare }
+	end 'create'
+
+	function push(next P, spare P, extra P) returns P
+		self.last = spare
+		let d = Down.create(next)
+		d.replace(extra)
+		return d.take()
+	end 'push'
+end 'CutOuterW'
+
+type CutInnerW uses Q
+	typealias Up = CutOuterW with Q
+	var held as Q
+
+	static function create(item Q) returns Self
+		return Self{ held: item }
+	end 'create'
+
+	function replace(next Q)
+		self.held = next
+	end 'replace'
+
+	function take() returns Q
+		return self.held
+	end 'take'
+
+	function lift() returns Up
+		return Up.create(self.held)
+	end 'lift'
+end 'CutInnerW'
+
+typealias CutStrW = CutOuterW with String
+
+function main() returns ExitCode
+	let o = CutStrW.create(cutLabel("s", n: 1))
+	let got = o.push(cutLabel("a", n: 2), spare: cutLabel("s", n: 2), extra: cutLabel("x", n: 2))
+	print("{o.last} {got}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s-2 x-2
+```
+
 <!-- test: error.instance-arg-wrong-instance -->
 ```maxon
 type Leaf
@@ -6165,6 +6844,138 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.a-factory-reached-through-a-ring-of-flipped-declaration-views-of-a-promise-stores-its-argument-twice -->
+A promise reaches a shared body only around a ring: `RingLeft` and `RingRight` name each other at `(V, U)`, and
+`Holder with U` inside `RingLeft` is a promise only because `main` names `RingRight` with the promise second.
+Its factory storing the `T` argument twice is refused with the sentence the same factory gets when `Holder` is
+written at the promise.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T) returns Self
+		let first = Self{slot: item, origin: 1}
+		return Self{slot: item, origin: first.origin + 1}
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+type RingLeft uses U, V
+	typealias Inner = Holder with U
+	typealias Across = RingRight with (V, U)
+	public var count as Whole
+
+	static function build(item U, other V, deep bool) returns Self
+		if deep 'turn'
+			let turned = Across.build(other, other: item, deep: false)
+			return Self{count: turned.count}
+		end 'turn'
+
+		let made = Inner.create(item)
+		return Self{count: made.source()}
+	end 'build'
+end 'RingLeft'
+
+type RingRight uses U, V
+	typealias Across = RingLeft with (V, U)
+	public var count as Whole
+
+	static function build(item U, other V, deep bool) returns Self
+		let turned = Across.build(other, other: item, deep: deep)
+		return Self{count: turned.count}
+	end 'build'
+end 'RingRight'
+
+typealias PromiseRight = RingRight with (Whole, IntPromise)
+
+function main() returns ExitCode
+	let built = PromiseRight.build(1, other: async work(1), deep: false)
+	print("{built.count}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:21: use of moved value 'item': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-factory-reached-through-a-ring-of-flipped-declaration-views-of-a-promise-in-another-file-stores-its-argument-twice -->
+The same ring with the promise named only in a second file: the generics' file names no promise, and the
+refusal still lands on the factory's second store.
+```maxon
+// --- file: a_generics.maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Holder uses T
+	public var slot as T
+	var origin as Whole
+
+	static function create(item T) returns Self
+		let first = Self{slot: item, origin: 1}
+		return Self{slot: item, origin: first.origin + 1}
+	end 'create'
+
+	function source() returns Whole
+		return self.origin
+	end 'source'
+end 'Holder'
+
+type RingLeft uses U, V
+	typealias Inner = Holder with U
+	typealias Across = RingRight with (V, U)
+	public var count as Whole
+
+	static function build(item U, other V, deep bool) returns Self
+		if deep 'turn'
+			let turned = Across.build(other, other: item, deep: false)
+			return Self{count: turned.count}
+		end 'turn'
+
+		let made = Inner.create(item)
+		return Self{count: made.source()}
+	end 'build'
+end 'RingLeft'
+
+type RingRight uses U, V
+	typealias Across = RingLeft with (V, U)
+	public var count as Whole
+
+	static function build(item U, other V, deep bool) returns Self
+		let turned = Across.build(other, other: item, deep: deep)
+		return Self{count: turned.count}
+	end 'build'
+end 'RingRight'
+// --- file: b_use.maxon
+typealias IntPromise = Promise with Whole
+
+function work(n Whole) returns Whole
+	Scheduler.yield()
+	return n
+end 'work'
+
+typealias PromiseRight = RingRight with (Whole, IntPromise)
+
+function main() returns ExitCode
+	let built = PromiseRight.build(1, other: async work(1), deep: false)
+	print("{built.count}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:11:21: use of moved value 'item': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: error.a-field-reaching-its-owner-through-a-held-container-nests-without-end -->

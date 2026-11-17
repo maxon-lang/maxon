@@ -1364,6 +1364,7 @@ extension ProgramSignatures
 
 	function addRegisteredLayout(layout StructLayout)
 		let settled = freeze layout.clone()
+		self.genericInstances.advanceEpoch()
 
 		if self.baseline.settled 'mintedPastTheBaseline'
 			self.structSlots.upsert(layout.name, value: self.settledDeclarations().structLayouts.count() + self.mintedLayoutCount())
@@ -1959,6 +1960,8 @@ extension ProgramSignatures
 	// The one writer of `tupleAliases` and of the claimant index derived from it, journaling the values a
 	// write past the baseline replaces.
 	function writeTupleAlias(name ByteArray, alias DeclaredTupleAlias)
+		self.genericInstances.advanceEpoch()
+
 		if self.baseline.settled 'pastTheBaseline'
 			self.journal.noteTupleAliasWrite(name, prior: priorTupleAliasAt(self.tupleAliases, name: name), priorClaimants: priorTupleAliasClaimantsAt(self.multiplyDeclaredTupleAliases, name: name, declPath: alias.claim.declFilePath.toString()))
 		end 'pastTheBaseline' else 'beforeTheBaseline'
@@ -8872,6 +8875,7 @@ extension ProgramSignatures
 		end 'alreadyOriginated'
 
 		self.substitutedInstanceOrigins.upsert(instance, value: through)
+		self.genericInstances.advanceEpoch()
 
 		if self.baseline.settled 'pastTheBaseline'
 			self.journal.noteOrigin(instance)
@@ -9979,70 +9983,88 @@ extension ProgramSignatures
 		end 'answer'
 	end 'instanceWithTypeArgKind'
 
-	// The walk behind `instanceWithTypeArgKind`, over the rows this index holds right now.
-	function typeArgKindMatchOverTheRows(param TypeParamId, kind TypeArgInstantiationKind, proofs CloneProofs) returns TypeArgKindMatch
-		let asked = TypeParamIdSet.create()
-		return self.typeArgKindMatchThrough(param, kind: kind, asked: asked, proofs: proofs)
-	end 'typeArgKindMatchOverTheRows'
-
 	// ⭐⭐ **A ROW WRITTEN OVER ANOTHER DECLARATION'S PARAMETER STANDS FOR THAT PARAMETER'S EVERY INSTANTIATION.**
 	// `type Outer uses T` holding `var inner as Box` interns `Box with Outer.T`, and `Outer with String` builds a
 	// `Box with String` whether or not any parse ever interns that row — so, for a kind that follows a view
 	// (`kindFollowsADeclarationView`), the row answers with whatever `Outer.T`'s own rows answer. Read as a bare
 	// parameter instead, a shared `Box` body reassigning its field neither drops the old `String` nor reserves the
-	// descriptor to drop it through. `asked` ends the walk a view over its own declaration's parameters closes.
-	function typeArgKindMatchThrough(param TypeParamId, kind TypeArgInstantiationKind, asked TypeParamIdSet, proofs CloneProofs) returns TypeArgKindMatch
-		if asked.contains(param) 'alreadyWalked'
-			return TypeArgKindMatch.noInstance
-		end 'alreadyWalked'
+	// descriptor to drop it through.
+	function typeArgKindMatchThrough(param TypeParamId, walk KindWalk) returns KindWalkOutcome
+		let position = walk.enter(param)
+		var lowest = position
+		let owner = try self.typeParamOwnerOf(param) otherwise return walk.close(position, lowest: lowest)
+		let siblings = try self.rowsInstantiating(owner) otherwise return walk.close(position, lowest: lowest)
 
-		asked.insert(param)
-		let owner = try self.typeParamOwnerOf(param) otherwise return TypeArgKindMatch.noInstance
-		let position = owner.position
+		for id in siblings 'eachInstance'
+			let arg = try self.rowArgumentAt(id, owner: owner, kind: walk.kind) otherwise continue
 
-		if let baseId = try self.typeNames.idOf(owner.declaringTypeName) 'namedType'
-			if let siblings = try self.rowsOfBase(baseId) 'instantiated'
-				for id in siblings 'eachInstance'
-					if kindIsARefusal(kind) and self.rowIsSpeculative(id) 'nothingNamedIt'
-						continue
-					end 'nothingNamedIt'
+			if kindFollowsADeclarationView(walk.kind) and maxonTypeTag(arg) == ValueTypeTag.typeParameter 'aDeclarationView'
+				match self.kindWalkOutcomeInto(typeParamIdOf(arg), walk: walk) 'viewed'
+					found then return KindWalkOutcome.found
+					proven then continue
+					rests then lowest = walk.reached if walk.reached < lowest else lowest
+				end 'viewed'
 
-					let args = self.rowArgs(id)
+				continue
+			end 'aDeclarationView'
 
-					if position >= args.count() 'noArgumentAtThePosition'
-						continue
-					end 'noArgumentAtThePosition'
+			if self.rowArgumentHasKind(id, arg: arg, owner: owner, kind: walk.kind, proofs: walk.proofs) 'theRowMatches'
+				return walk.found(TypeArgKindMatch.instance(self.rowMatchSite(id, kind: walk.kind)))
+			end 'theRowMatches'
+		end 'eachInstance'
 
-					let arg = self.instanceArgType(id, position: position)
-
-					if kindFollowsADeclarationView(kind) and maxonTypeTag(arg) == ValueTypeTag.typeParameter 'aDeclarationView'
-						let viewed = self.typeArgKindMatchThrough(typeParamIdOf(arg), kind: kind, asked: asked, proofs: proofs)
-
-						match viewed 'viewed'
-							noInstance then continue
-							instance then return viewed
-						end 'viewed'
-					end 'aDeclarationView'
-
-					if not self.typeArgHasKind(arg, kind: kind, proofs: proofs) 'notThisKind'
-						continue
-					end 'notThisKind'
-
-					if kindIsARefusal(kind) and self.instantiationChainViolatesItsWhereClause(id) 'aRowE3017AlreadyOwns'
-						continue
-					end 'aRowE3017AlreadyOwns'
-
-					if self.isArrayBaseName(owner.declaringTypeName) and self.kindExemptsAnUncopiedInstance(kind, id: id) 'nothingCopiesIt'
-						continue
-					end 'nothingCopiesIt'
-
-					return TypeArgKindMatch.instance(self.instantiationSiteOf(id) if kindIsARefusal(kind) else InstantiationSiteLookup.unwritten)
-				end 'eachInstance'
-			end 'instantiated'
-		end 'namedType'
-
-		return TypeArgKindMatch.noInstance
+		return walk.close(position, lowest: lowest)
 	end 'typeArgKindMatchThrough'
+
+	function kindWalkOutcomeInto(viewed TypeParamId, walk KindWalk) returns KindWalkOutcome
+		if let entered = try walk.enteredOutcome(viewed) 'alreadyEntered'
+			return entered
+		end 'alreadyEntered'
+
+		if walk.round.epoch == self.genericInstances.epoch 'theRoundStillHolds'
+			if let proven = try walk.round.provenAnswerFor(viewed, kind: walk.kind) 'alreadyProven'
+				match proven 'proven'
+					noInstance then return KindWalkOutcome.proven
+					instance then return walk.found(proven)
+				end 'proven'
+			end 'alreadyProven'
+		end 'theRoundStillHolds'
+
+		return self.typeArgKindMatchThrough(viewed, walk: walk)
+	end 'kindWalkOutcomeInto'
+
+	function rowsInstantiating(owner TypeParamOwner) returns GenericInstanceIdArray throws AbsentError
+		let baseId = try self.typeNames.idOf(owner.declaringTypeName) otherwise throw AbsentError.absent
+		return try self.rowsOfBase(baseId) otherwise throw AbsentError.absent
+	end 'rowsInstantiating'
+
+	function rowArgumentAt(id GenericInstanceId, owner TypeParamOwner, kind TypeArgInstantiationKind) returns MaxonType throws AbsentError
+		if kindIsARefusal(kind) and self.rowIsSpeculative(id) 'nothingNamedIt'
+			throw AbsentError.absent
+		end 'nothingNamedIt'
+
+		if owner.position >= self.rowArgs(id).count() 'noArgumentAtThePosition'
+			throw AbsentError.absent
+		end 'noArgumentAtThePosition'
+
+		return self.instanceArgType(id, position: owner.position)
+	end 'rowArgumentAt'
+
+	function rowArgumentHasKind(id GenericInstanceId, arg MaxonType, owner TypeParamOwner, kind TypeArgInstantiationKind, proofs CloneProofs) returns bool
+		if not self.typeArgHasKind(arg, kind: kind, proofs: proofs) 'notThisKind'
+			return false
+		end 'notThisKind'
+
+		if kindIsARefusal(kind) and self.instantiationChainViolatesItsWhereClause(id) 'aRowE3017AlreadyOwns'
+			return false
+		end 'aRowE3017AlreadyOwns'
+
+		return not (self.isArrayBaseName(owner.declaringTypeName) and self.kindExemptsAnUncopiedInstance(kind, id: id))
+	end 'rowArgumentHasKind'
+
+	function rowMatchSite(id GenericInstanceId, kind TypeArgInstantiationKind) returns InstantiationSiteLookup
+		return self.instantiationSiteOf(id) if kindIsARefusal(kind) else InstantiationSiteLookup.unwritten
+	end 'rowMatchSite'
 
 	// The bool the walk above deliberately is not, for the two EMISSION gates that need only membership.
 	function anyInstanceTypeArgHasKind(param TypeParamId, kind TypeArgInstantiationKind) returns bool

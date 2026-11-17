@@ -3523,23 +3523,22 @@ end 'noteMoved'
 // Check every artifact's row-set answers against the merged index, filing each file's moved answers as its
 // overrides. Answers whether any moved.
 function rowSetAnswersMoved(project Project, artifacts FileParseArtifactArray, signatures ProgramSignatures) returns bool
-	let complete = RowSetRound.create()
 	var moved = false
 
 	for artifact in artifacts 'eachArtifact'
 		match artifact.parseMints 'mints'
 			none then continue
-			minted(mints) then moved = fileRowSetAnswersMoved(project, path: artifact.filePath, mints: mints, signatures: signatures, complete: complete) or moved
+			minted(mints) then moved = fileRowSetAnswersMoved(project, path: artifact.filePath, mints: mints, signatures: signatures) or moved
 		end 'mints'
 	end 'eachArtifact'
 
 	return moved
 end 'rowSetAnswersMoved'
 
-function fileRowSetAnswersMoved(project Project, path FilePath, mints LocalInstanceMints, signatures ProgramSignatures, complete RowSetRound) returns bool
+function fileRowSetAnswersMoved(project Project, path FilePath, mints LocalInstanceMints, signatures ProgramSignatures) returns bool
 	let overrides = project.db.rowSetOverrides.of(path)
 
-	if not signatures.rowSetAnswersThatMoved(path, mints: mints, overrides: overrides, complete: complete) 'stands'
+	if not signatures.rowSetAnswersThatMoved(path, mints: mints, overrides: overrides) 'stands'
 		return false
 	end 'stands'
 

@@ -7040,6 +7040,7 @@ extension ProgramSignatures
 
 	export function beginMerge()
 		self.holdsAMerge = true
+		self.genericInstances.advanceEpoch()
 	end 'beginMerge'
 
 	// ⭐ **THE GUARD.** A write the journal does not list survives a restore; this names the field it moved.
@@ -7137,9 +7138,7 @@ extension ProgramSignatures
 			_ = self.uniqueTypeAnswers.remove(try self.journal.uniqueTypeNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: uniqueTypeNames.get OOB at {position}"))
 		end 'eachUniqueTypeAnswer'
 
-		self.growthMemo.clear()
-		self.descriptorReads = DescriptorReads.create()
-		self.restoreScalarsTo(mark)
+		self.restoreBandStateTo(mark)
 	end 'rewindJournaledWrites'
 
 	function resetOverlayTables()
@@ -7158,12 +7157,12 @@ extension ProgramSignatures
 		self.uniqueTypeAnswers = DeepCloneAnswerMap.create()
 		self.deepCloneAnswers = DeepCloneAnswerMap.create()
 		self.shareWalkAnswers = DeepCloneAnswerMap.create()
-		self.growthMemo.clear()
-		self.descriptorReads = DescriptorReads.create()
-		self.restoreScalarsTo(self.baselineBandMark())
+		self.restoreBandStateTo(self.baselineBandMark())
 	end 'resetOverlayTables'
 
-	function restoreScalarsTo(mark ParseBandMark)
+	function restoreBandStateTo(mark ParseBandMark)
+		self.growthMemo.clear()
+		self.descriptorReads = DescriptorReads.create()
 		self.crossFileConstantReads.truncate(mark.crossFileConstantReads)
 		self.canonicalNamesIndexedThrough = mark.canonicalNamesIndexedThrough
 		self.arrayByteInstance = mark.arrayByteInstance
@@ -7173,7 +7172,8 @@ extension ProgramSignatures
 		self.recordsHoldingAnInterfaceValueCounted = mark.recordsHoldingAnInterfaceValueCounted
 		self.typeNames.rewindTo(mark.typeNames)
 		self.journal.truncateTo(mark.journal)
-	end 'restoreScalarsTo'
+		self.genericInstances.advanceEpoch()
+	end 'restoreBandStateTo'
 
 	// In reverse, so a name written twice ends at the value it held before the first write.
 	function restoreCanonicalIndex(first ElementIndex)
@@ -7282,39 +7282,114 @@ extension ProgramSignatures
 	// re-asks it over the whole program (`rowSetAnswersThatMoved`), and a file told something the whole program
 	// disagrees with is parsed again with the whole program's answer standing in (`RowSetOverrideTable`).
 	function rowSetAnswer(query RowSetQuery) returns RowSetAnswer
+		let key = rowSetQueryKey(query)
+
 		if not self.rowSetLog.parsing 'noParseIsAsking'
-			return self.answerOverTheRows(query)
+			return self.answerOverTheRows(query, key: key, round: self.rowSetRoundForAnAsk())
 		end 'noParseIsAsking'
 
-		let key = rowSetQueryKey(query)
-		let answer = try self.rowSetLog.overrides.answerFor(key) otherwise self.answerOverTheRows(query)
+		let answer = try self.rowSetLog.overrides.answerFor(key) otherwise self.answerOverTheRows(query, key: key, round: self.rowSetRoundForAnAsk())
 		self.rowSetLog.note(key, query: query, answer: answer)
 		return answer
 	end 'rowSetAnswer'
 
-	function answerOverTheRows(query RowSetQuery, proofs CloneProofs = CloneProofs.create()) returns RowSetAnswer
-		match query 'query'
-			typeArgKind(param, kind) then return rowSetAnswerOfMatch(self.typeArgKindMatchOverTheRows(param, kind: kind, proofs: proofs))
-			dropDiverges(typeName, index, sharedCallee) then return RowSetAnswer.holds(self.dropDivergesOverTheRows(typeName, index: index, sharedCallee: sharedCallee))
+	function rowSetRoundForAnAsk() returns RowSetRound
+		let epoch = self.genericInstances.epoch
+
+		if self.rowSetLog.parsing or not self.baseline.settled 'nothingIsKept'
+			if self.rowSetRound.keepsAnything() 'aRoundStands'
+				self.rowSetRound = RowSetRound.throwaway(epoch)
+			end 'aRoundStands'
+
+			return self.rowSetRound
+		end 'nothingIsKept'
+
+		if not self.rowSetRound.keepsAnything() or self.rowSetRound.epoch != epoch 'theEpochMoved'
+			self.rowSetRound = RowSetRound.create(epoch)
+		end 'theEpochMoved'
+
+		return self.rowSetRound
+	end 'rowSetRoundForAnAsk'
+
+	function answerOverTheRows(query RowSetQuery, key ByteArray, round RowSetRound) returns RowSetAnswer
+		if let asked = try round.heldAnswerFor(query, key: key) 'alreadyAsked'
+			return asked
+		end 'alreadyAsked'
+
+		let nested = round.walking
+		let enclosed = nested or self.cascadeWalkRoots.depth() > 0
+		let proofs = CloneProofs.create() if enclosed or not round.keepsAnything() else round.proofs
+		round.walking = true
+		let frame = self.openRowWalk(round)
+
+		let reply = match query 'query'
+			typeArgKind(param, kind) gives self.typeArgKindAnswer(param, kind: kind, proofs: proofs, round: round, publishesItsWalk: not enclosed)
+			dropDiverges(typeName, index, sharedCallee) gives RowSetReply.answered(RowSetAnswer.holds(self.dropDivergesOverTheRows(typeName, index: index, sharedCallee: sharedCallee)))
 		end 'query'
+
+		let keeps = self.closeRowWalk(frame, round: round)
+		round.walking = nested
+		let answer = reply.answer()
+
+		if keeps 'theRowsHeldStill'
+			round.keepRoot(key, answer: answer)
+
+			match reply 'reply'
+				answered then break
+				walked(walk) then round.keepWalk(walk)
+			end 'reply'
+		end 'theRowsHeldStill'
+
+		return answer
 	end 'answerOverTheRows'
+
+	function typeArgKindAnswer(param TypeParamId, kind TypeArgInstantiationKind, proofs CloneProofs, round RowSetRound, publishesItsWalk bool) returns RowSetReply
+		let walk = KindWalk.create(kind, proofs: proofs, round: round)
+		let found = walk.rootAnswer(self.typeArgKindMatchThrough(param, walk: walk))
+
+		if publishesItsWalk and kindFollowsADeclarationView(kind) 'everyParameterIsProven'
+			return RowSetReply.walked(walk)
+		end 'everyParameterIsProven'
+
+		return RowSetReply.answered(rowSetAnswerOfMatch(found))
+	end 'typeArgKindAnswer'
+
+	function openRowWalk(round RowSetRound) returns RowWalkFrame
+		if not round.keepsAnything() 'nothingIsKept'
+			return RowWalkFrame.unwatched
+		end 'nothingIsKept'
+
+		return RowWalkFrame.watched(self.openCascadeWalk())
+	end 'openRowWalk'
+
+	function closeRowWalk(frame RowWalkFrame, round RowSetRound) returns bool
+		match frame 'watch'
+			unwatched then return false
+			watched(walkFrame) then return self.closeWatchedRowWalk(walkFrame, round: round)
+		end 'watch'
+	end 'closeRowWalk'
+
+	function closeWatchedRowWalk(walkFrame CascadeWalkFrame, round RowSetRound) returns bool
+		let keeps = self.cascadeBreakReached.restsWithin(walkFrame.depth) and round.epoch == self.genericInstances.epoch
+		_ = self.closeCascadeWalk(walkFrame)
+		return keeps
+	end 'closeWatchedRowWalk'
 
 	// Re-ask every question one parse recorded over the rows this index holds now — every file's, after the
 	// merge — and file the whole program's answer into `overrides` wherever it is stronger than what the parse
-	// was told. Answers whether anything was filed. `complete` carries answers already asked this fold
-	// and the clone walks they proved, so a question many files asked is walked once.
+	// was told. Answers whether anything was filed.
 	//
 	// ⭐ **EVERY ANSWER IS MONOTONE IN THE ROWS, AND THE ROWS ONLY GROW.** Each question is existential over the
 	// rows ("some instance…"), a merge holds every row the parse saw, and an override only ever raises an answer —
 	// so the whole program is never weaker than what a parse was told, and that is checked here rather than
 	// assumed. An answer of equal strength stands whatever site it names: a site is blame for a refusal, which
 	// ends the compile before any comparison.
-	export function rowSetAnswersThatMoved(filePath FilePath, mints LocalInstanceMints, overrides RowSetOverrideTable, complete RowSetRound) returns bool
+	export function rowSetAnswersThatMoved(filePath FilePath, mints LocalInstanceMints, overrides RowSetOverrideTable) returns bool
 		var moved = false
 
 		for key in mints.rowSetAnswers.order 'eachQuestion'
 			let told = try mints.rowSetAnswers.records.get(key) otherwise panic("ProgramSignatures.rowSetAnswersThatMoved: the log orders a question it holds no record of")
-			let whole = self.completeRowSetAnswer(key, query: told.query, complete: complete)
+			let whole = self.answerOverTheRows(told.query, key: key, round: self.rowSetRoundForAnAsk())
 			let toldHolds = rowSetAnswerIsAffirmative(told.answer)
 
 			if toldHolds == rowSetAnswerIsAffirmative(whole) 'theWholeProgramAgrees'
@@ -7343,16 +7418,6 @@ extension ProgramSignatures
 		let owner = try self.typeParamOwnerOf(param) otherwise panic("ProgramSignatures.typeParamDisplay: a row-set question was asked about type-parameter token {param}, which no declaration minted")
 		return "'{String.from(owner.declaringTypeName)}.{String.from(owner.paramName)}'"
 	end 'typeParamDisplay'
-
-	function completeRowSetAnswer(key ByteArray, query RowSetQuery, complete RowSetRound) returns RowSetAnswer
-		if let asked = try complete.answers.get(key) 'alreadyAsked'
-			return asked
-		end 'alreadyAsked'
-
-		let answer = self.answerOverTheRows(query, proofs: complete.proofs)
-		complete.answers.upsert(key, value: answer)
-		return answer
-	end 'completeRowSetAnswer'
 
 	// Every container's size and every scalar's value — what a write the journal missed moves.
 	function fingerprint(detail FingerprintDetail) returns IndexFingerprint

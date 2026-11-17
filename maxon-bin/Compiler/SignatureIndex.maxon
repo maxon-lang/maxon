@@ -4187,7 +4187,7 @@ end 'cacheReadTypeParamOwnerMap'
 
 // @generated library-cache end
 
-typealias TypeParamIdSet = Set with TypeParamId
+typealias TypeParamIdArray = Array with TypeParamId
 
 // ⭐ **THE DECLARATION WHOSE `uses` LIST A RECORD'S OPAQUE SLOTS INDEX INTO — or that it rests none.**
 // The answer `ProgramSignatures.recordOpaqueSlotDeclaration` gives. It is a declaration NAME rather than a
@@ -6476,7 +6476,7 @@ enum SourceCloneVerdict
 end 'SourceCloneVerdict'
 
 // A walk answering true proved every name it visited; one answering false proves nothing, so
-// `refuted` drops its set. Sound for one round of answers only, so it is never stored on the index.
+// `refuted` drops its set. Sound until the epoch moves, so only a `RowSetRound` keeps one.
 type CloneProofs
 	var deepClone = ClonerSet.create()
 	var sourceClone = ClonerSet.create()
@@ -8344,6 +8344,7 @@ export type ProgramSignatures
 	let sharedSettled as immutable SettledDeclarations
 	var structSlots = StructSlotMap.create()
 	var growthMemo = GrowthMemo.create()
+	var rowSetRound = RowSetRound.throwaway(0)
 	var descriptorReads = DescriptorReads.create()
 	var mintedTupleLayouts = SettledStructLayoutArray.create(0)
 	var published = SettledCellArray.create(0)
@@ -8826,11 +8827,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = try reader.digest()
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, growthMemo: GrowthMemo.create(), descriptorReads: DescriptorReads.create(), mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, replyFreeTypes: BareNameSet.create(), someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, nameEventsFolded: f_nameEventsFolded, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: startDigest(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, growthMemo: GrowthMemo.create(), rowSetRound: RowSetRound.throwaway(0), descriptorReads: DescriptorReads.create(), mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, replyFreeTypes: BareNameSet.create(), someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, nameEventsFolded: f_nameEventsFolded, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: startDigest(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize640
-		return sizeof(ProgramSignatures) as CacheSize640
+	static function cacheLayoutBytes() returns CacheSize648
+		return sizeof(ProgramSignatures) as CacheSize648
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -10084,14 +10085,270 @@ end 'cacheReadRowSetAnswerHolds'
 
 typealias RowSetAnswerMap = Map with (ByteArray, RowSetAnswer)
 
-export type RowSetRound
-	let answers = RowSetAnswerMap.create()
-	let proofs = CloneProofs.create()
+typealias KindAnswerMap = Map with (TypeParamId, TypeArgKindMatch)
 
-	export static function create() returns RowSetRound
+type RowSetMemoTables
+	let roots = RowSetAnswerMap.create()
+	let consumeMoved = KindAnswerMap.create()
+	let retainedFeed = KindAnswerMap.create()
+	let greenThreadFeed = KindAnswerMap.create()
+
+	static function create() returns RowSetMemoTables
 		return Self{}
 	end 'create'
+
+	function provenAt(kind TypeArgInstantiationKind) returns KindAnswerMap
+		match kind 'kind'
+			consumeMoved then return self.consumeMoved
+			retainedFeed then return self.retainedFeed
+			greenThreadFeed then return self.greenThreadFeed
+			uncopyableElement or
+			managedElement or
+			noZeroElement or
+			greenThreadElement then panic("RowSetMemoTables.provenAt: a {kind.name} walk follows no declaration view, so it proves no parameter but its root")
+		end 'kind'
+	end 'provenAt'
+end 'RowSetMemoTables'
+
+union RowSetMemo
+	discarded
+	empty
+	kept(tables RowSetMemoTables)
+end 'RowSetMemo'
+
+type RowSetRound
+	let epoch as RowSetEpoch
+	var memo as RowSetMemo
+	let proofs = CloneProofs.create()
+	var walking = false
+
+	static function create(epoch RowSetEpoch) returns RowSetRound
+		return Self{epoch: epoch, memo: RowSetMemo.empty}
+	end 'create'
+
+	static function throwaway(epoch RowSetEpoch) returns RowSetRound
+		return Self{epoch: epoch, memo: RowSetMemo.discarded}
+	end 'throwaway'
+
+	function keepsAnything() returns bool
+		match self.memo 'memo'
+			discarded then return false
+			empty or
+			kept then return true
+		end 'memo'
+	end 'keepsAnything'
+
+	function heldAnswerFor(query RowSetQuery, key ByteArray) returns RowSetAnswer throws AbsentError
+		let tables = try self.tablesHeld()
+
+		if let root = try tables.roots.get(key) 'askedAsARoot'
+			return root
+		end 'askedAsARoot'
+
+		match query 'query'
+			typeArgKind(param, kind) then return rowSetAnswerOfMatch(try self.provenAnswerFor(param, kind: kind))
+			dropDiverges then throw AbsentError.absent
+		end 'query'
+	end 'heldAnswerFor'
+
+	function provenAnswerFor(param TypeParamId, kind TypeArgInstantiationKind) returns TypeArgKindMatch throws AbsentError
+		if not kindFollowsADeclarationView(kind) 'provesNoInterior'
+			throw AbsentError.absent
+		end 'provesNoInterior'
+
+		let tables = try self.tablesHeld()
+		return try tables.provenAt(kind).get(param) otherwise throw AbsentError.absent
+	end 'provenAnswerFor'
+
+	function tablesHeld() returns RowSetMemoTables throws AbsentError
+		match self.memo 'memo'
+			discarded or
+			empty then throw AbsentError.absent
+			kept(tables) then return tables
+		end 'memo'
+	end 'tablesHeld'
+
+	function keepRoot(key ByteArray, answer RowSetAnswer)
+		self.tablesToKeepIn().roots.upsert(key, value: answer)
+	end 'keepRoot'
+
+	function keepWalk(walk KindWalk)
+		walk.proveInto(self.tablesToKeepIn().provenAt(walk.kind))
+	end 'keepWalk'
+
+	function tablesToKeepIn() returns RowSetMemoTables
+		match self.memo 'memo'
+			discarded then panic("RowSetRound.tablesToKeepIn: a throwaway round was asked to keep an answer, and only a walk the round watched may keep one — a throwaway round watches none")
+			kept(tables) then return tables
+			empty then break
+		end 'memo'
+
+		let tables = RowSetMemoTables.create()
+		self.memo = RowSetMemo.kept(tables)
+		return tables
+	end 'tablesToKeepIn'
 end 'RowSetRound'
+
+union RowSetReply
+	answered(value RowSetAnswer)
+	walked(walk KindWalk)
+
+	function answer() returns RowSetAnswer
+		match self 'reply'
+			answered(value) then return value
+			walked(walk) then return rowSetAnswerOfMatch(walk.answer)
+		end 'reply'
+	end 'answer'
+end 'RowSetReply'
+
+union RowWalkFrame
+	unwatched
+	watched(frame CascadeWalkFrame)
+end 'RowWalkFrame'
+
+enum KindWalkOutcome
+	found
+	proven
+	rests
+end 'KindWalkOutcome'
+
+typealias KindWalkPositionMap = Map with (TypeParamId, ElementIndex)
+
+union KindWalkMarks
+	unentered
+	root(param TypeParamId)
+	components(held KindWalkComponents)
+end 'KindWalkMarks'
+
+type KindWalk
+	let kind as TypeArgInstantiationKind
+	let proofs as CloneProofs
+	let round as RowSetRound
+	var marks = KindWalkMarks.unentered
+	var answer as TypeArgKindMatch
+	var reached = 0 as ElementIndex
+
+	static function create(kind TypeArgInstantiationKind, proofs CloneProofs, round RowSetRound) returns KindWalk
+		return Self{kind: kind, proofs: proofs, round: round, answer: TypeArgKindMatch.noInstance}
+	end 'create'
+
+	function rootAnswer(outcome KindWalkOutcome) returns TypeArgKindMatch
+		if outcome == KindWalkOutcome.rests 'restsBelowTheRoot'
+			panic("KindWalk.rootAnswer: the root rests on position {self.reached}, below the parameter the walk entered first")
+		end 'restsBelowTheRoot'
+
+		return self.answer
+	end 'rootAnswer'
+
+	function found(matched TypeArgKindMatch) returns KindWalkOutcome
+		self.answer = matched
+		return KindWalkOutcome.found
+	end 'found'
+
+	function enter(param TypeParamId) returns ElementIndex
+		match self.marks 'marks'
+			unentered then return self.enterTheRoot(param)
+			root(first) then return self.enterPastTheRoot(first, param: param)
+			components(held) then return held.enter(param)
+		end 'marks'
+	end 'enter'
+
+	function enterTheRoot(param TypeParamId) returns ElementIndex
+		self.marks = KindWalkMarks.root(param)
+		return 0
+	end 'enterTheRoot'
+
+	function enterPastTheRoot(first TypeParamId, param TypeParamId) returns ElementIndex
+		let held = KindWalkComponents.create()
+		_ = held.enter(first)
+		self.marks = KindWalkMarks.components(held)
+		return held.enter(param)
+	end 'enterPastTheRoot'
+
+	function close(position ElementIndex, lowest ElementIndex) returns KindWalkOutcome
+		match self.marks 'marks'
+			unentered then panic("KindWalk.close: position {position} closes in a walk that entered no parameter")
+			root then return KindWalkOutcome.proven
+			components(held) then return self.closeComponent(held, position: position, lowest: lowest)
+		end 'marks'
+	end 'close'
+
+	function closeComponent(held KindWalkComponents, position ElementIndex, lowest ElementIndex) returns KindWalkOutcome
+		if lowest < position 'restsOnAnOpenParameter'
+			self.reached = lowest
+			return KindWalkOutcome.rests
+		end 'restsOnAnOpenParameter'
+
+		held.pending.truncate(position)
+		return KindWalkOutcome.proven
+	end 'closeComponent'
+
+	function enteredOutcome(param TypeParamId) returns KindWalkOutcome throws AbsentError
+		match self.marks 'marks'
+			unentered then throw AbsentError.absent
+			root(first) then return try self.enteredRootOutcome(first, param: param)
+			components(held) then return try self.enteredComponentOutcome(held, param: param)
+		end 'marks'
+	end 'enteredOutcome'
+
+	function enteredRootOutcome(first TypeParamId, param TypeParamId) returns KindWalkOutcome throws AbsentError
+		if param != first 'notTheRoot'
+			throw AbsentError.absent
+		end 'notTheRoot'
+
+		self.reached = 0
+		return KindWalkOutcome.rests
+	end 'enteredRootOutcome'
+
+	function enteredComponentOutcome(held KindWalkComponents, param TypeParamId) returns KindWalkOutcome throws AbsentError
+		let position = try held.positions.get(param) otherwise throw AbsentError.absent
+
+		if not held.isPending(param, position: position) 'alreadyProven'
+			return KindWalkOutcome.proven
+		end 'alreadyProven'
+
+		self.reached = position
+		return KindWalkOutcome.rests
+	end 'enteredComponentOutcome'
+
+	function proveInto(proven KindAnswerMap)
+		match self.marks 'marks'
+			unentered then panic("KindWalk.proveInto: a walk that entered no parameter proves nothing")
+			root(first) then proven.upsert(first, value: self.answer)
+			components(held) then held.proveInto(proven, rootAnswer: self.answer)
+		end 'marks'
+	end 'proveInto'
+end 'KindWalk'
+
+type KindWalkComponents
+	let positions = KindWalkPositionMap.create()
+	let pending = TypeParamIdArray.create(0)
+
+	static function create() returns KindWalkComponents
+		return Self{}
+	end 'create'
+
+	function enter(param TypeParamId) returns ElementIndex
+		let position = self.pending.count()
+		self.positions.upsert(param, value: position)
+		self.pending.push(param)
+		return position
+	end 'enter'
+
+	function isPending(param TypeParamId, position ElementIndex) returns bool
+		if position >= self.pending.count() 'poppedSinceItsEntry'
+			return false
+		end 'poppedSinceItsEntry'
+
+		return (try self.pending.get(position) otherwise panic("KindWalkComponents.isPending: position {position} is inside the pending stack of {self.pending.count()}")) == param
+	end 'isPending'
+
+	function proveInto(proven KindAnswerMap, rootAnswer TypeArgKindMatch)
+		for (param, position) in self.positions 'eachEntered'
+			proven.upsert(param, value: rootAnswer if self.isPending(param, position: position) else TypeArgKindMatch.noInstance)
+		end 'eachEntered'
+	end 'proveInto'
+end 'KindWalkComponents'
 
 function rowSetAnswerOfMatch(found TypeArgKindMatch) returns RowSetAnswer
 	match found 'found'
