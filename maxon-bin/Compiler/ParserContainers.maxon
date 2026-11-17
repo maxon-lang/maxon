@@ -7729,20 +7729,27 @@ extension Parser
 		// it of the whole function instead of of one moment (see `VarInfo.referenced`). Written before the move
 		// guard for the reason the block above is.
 		self.markBindingReferenced(binding)
-		self.noteReadOfKeptArgument(binding, nameTok: nameTok)
 
 		if self.trackedLetCasts() 'someLetIsACast'
 			self.noteLocalLetCastRead(binding, nameTok: nameTok)
 		end 'someLetIsACast'
 
-		try self.requireNotLentToACoroutine(binding, nameTok: nameTok)
-		try self.requireUnmovedAtUse(binding, nameTok: nameTok)
+		let block = self.bodyState.currentBlock.id
+		let checked = try self.requireReadableNow(binding, nameTok: nameTok, block: block, keptFloor: 0)
+		self.noteOwnedReadEffects(binding, nameTok: nameTok, checked: checked)
 		self.noteOperandRead(binding, at: self.pos)
+
+		self.bodyState.operandOrder.reads.note(binding, nameTok: nameTok, block: block)
 	end 'requireBindingLive'
 
 	// ⭐ **THE MOVE GUARD OF ONE USE OF `binding`'s CURRENT RECORD** — every read `requireBindingLive` guards, and a
 	// closure's by-value capture (`emitCaptureRead`), which reads the record the binding holds at the literal.
 	function requireUnmovedAtUse(binding VarInfo, nameTok Token) throws SourceParseError
+		let checked = try self.refuseDeadRead(binding, nameTok: nameTok)
+		self.noteOwnedReadEffects(binding, nameTok: nameTok, checked: checked)
+	end 'requireUnmovedAtUse'
+
+	function noteOwnedReadEffects(binding VarInfo, nameTok Token, checked bool)
 		if binding.isSelfField 'selfFieldAlias'
 			return
 		end 'selfFieldAlias'
@@ -7750,6 +7757,23 @@ extension Parser
 		// Every read of a local counts here: a read that skipped it would leave a second name a fresh
 		// local's recovery into an isolated position cannot see.
 		self.noteFreshLocalRead(binding)
+
+		if checked 'aCheckedBinding'
+			self.noteHeaderRead(binding.moveStateValue(), nameTok: nameTok)
+		end 'aCheckedBinding'
+	end 'noteOwnedReadEffects'
+
+	function requireReadableNow(binding VarInfo, nameTok Token, block BlockId, keptFloor ElementIndex) returns bool throws SourceParseError
+		self.noteReadOfKeptArgument(binding, nameTok: nameTok, block: block, keptFloor: keptFloor)
+		try self.requireNotLentToACoroutine(binding, nameTok: nameTok)
+
+		return try self.refuseDeadRead(binding, nameTok: nameTok)
+	end 'requireReadableNow'
+
+	function refuseDeadRead(binding VarInfo, nameTok Token) returns bool throws SourceParseError
+		if binding.isSelfField 'selfFieldAlias'
+			return false
+		end 'selfFieldAlias'
 
 		// ⭐⭐ **A SPENT GREEN THREAD IS REFUSED BEFORE ANYTHING ELSE ABOUT THE BINDING IS ASKED (E3142).**
 		// `await`/`try await`/`.cancel()` hand the thread's struct back to the scheduler, so ANY later use of a
@@ -7823,7 +7847,7 @@ extension Parser
 		// (x1.65 x1.79 x1.88 x1.94 x1.97 — linear, a per-read constant, +0.37% of the compile at the largest size);
 		// the mark spelling costs a dense-column read and the ladder returns to the control's numbers.
 		if (tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) or self.valueIsDeferred(binding.boundValue) or valueIsMarked(self.bodyState.unresolvedMergeValues, value: binding.boundValue)) and not self.valueOwnsGreenThread(binding.boundValue) 'scalarBinding'
-			return
+			return false
 		end 'scalarBinding'
 
 		// Both move states are dead at every read. `movedFrom` (a `let u = t` / `s = t` handed the value
@@ -7834,8 +7858,8 @@ extension Parser
 			throw self.movedBindingRefusal(binding, nameTok: nameTok)
 		end 'moved'
 
-		self.noteHeaderRead(binding.moveStateValue(), nameTok: nameTok)
-	end 'requireUnmovedAtUse'
+		return true
+	end 'refuseDeadRead'
 
 	function noteHeaderRead(value ValueId, nameTok Token)
 		for scan in self.bodyState.loopScans 'eachLoop'

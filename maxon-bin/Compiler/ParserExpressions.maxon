@@ -2234,7 +2234,7 @@ extension Parser
 			let tok = self.tokenAt(index)
 
 			if self.bindingReadsValue(self.bodyState.scope.getInfo(tok.value), value: value, holder: holder) 'theKeptValue'
-				self.fileKeptRead(notes, site: site, tok: tok)
+				self.fileKeptRead(notes, site: site, tok: tok, block: self.bodyState.currentBlock.id)
 			end 'theKeptValue'
 		end 'eachToken'
 	end 'fileReadsInArgument'
@@ -2243,11 +2243,11 @@ extension Parser
 		return binding.boundValue == value or binding.boundValue == holder or (binding.isPayloadBinding() and binding.payloadScrutBox() == value)
 	end 'bindingReadsValue'
 
-	function fileKeptRead(notes CapabilityNotes, site ElementIndex, tok Token)
+	function fileKeptRead(notes CapabilityNotes, site ElementIndex, tok Token, block BlockId)
 		notes.keptReadSites.push(site)
 		notes.keptReadLines.push(tok.line)
 		notes.keptReadColumns.push(tok.column)
-		notes.keptReadBlocks.push(self.bodyState.currentBlock.id as ElementIndex)
+		notes.keptReadBlocks.push(block as ElementIndex)
 	end 'fileKeptRead'
 
 	function refuseMoveOfAMatchedUnique(value ValueId)
@@ -2325,16 +2325,18 @@ extension Parser
 		return names
 	end 'namesHoldingValueExcept'
 
-	function noteReadOfKeptArgument(binding VarInfo, nameTok Token)
-		if self.bodyState.openKeptSites.isEmpty() 'nothingKept'
+	function noteReadOfKeptArgument(binding VarInfo, nameTok Token, block BlockId, keptFloor ElementIndex)
+		if self.bodyState.openKeptSites.count() <= keptFloor 'nothingKept'
 			return
 		end 'nothingKept'
 
 		let notes = self.notesForWrite(self.bodyFunction())
 
-		for open in self.bodyState.openKeptSites 'eachOpenSite'
+		for index in keptFloor upto self.bodyState.openKeptSites.count() 'eachOpenSite'
+			let open = try self.bodyState.openKeptSites.get(index) otherwise panic("noteReadOfKeptArgument: openKeptSites.get OOB at {index} below its own count")
+
 			if self.bindingReadsValue(binding, value: open.value, holder: open.holder) and open.namesTheMovedValue(binding) 'aReadOfTheKeptValue'
-				self.fileKeptRead(notes, site: open.site, tok: nameTok)
+				self.fileKeptRead(notes, site: open.site, tok: nameTok, block: block)
 			end 'aReadOfTheKeptValue'
 		end 'eachOpenSite'
 	end 'noteReadOfKeptArgument'

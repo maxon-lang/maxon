@@ -10373,6 +10373,7 @@ extension Parser
 		let markOpRefCount = block.bodyOpCount()
 		let markBlockRefCount = func.blockRefs.count()
 		let markOperandCount = self.bodyState.operandOrder.eventCount()
+		let markReadCount = self.bodyState.operandOrder.reads.count()
 
 		// ⭐ **AND THE RANGE-CHECK SITE HEIGHT AT THE SAME INSTANT (`rehomeArmRangeSites`).** A site records
 		// the block and ordinal a value is checked AT, and the relocation moves the arm's ops to a block that
@@ -10438,7 +10439,7 @@ extension Parser
 
 			// The TRUE arm's blame, taken while its own tokens are still the ones the cursor last moved over
 			// — the condition and the false arm both clobber that answer, and both parse below.
-			let ternary = try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markRangeSiteCount: markRangeSiteCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark, armSlot: armSlot, tupleArmSlot: tupleArmSlot)
+			let ternary = try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markRangeSiteCount: markRangeSiteCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, markReadCount: markReadCount, preMoveMark: preMoveMark, armSlot: armSlot, tupleArmSlot: tupleArmSlot)
 			return ternary
 		end 'ternary'
 
@@ -10490,7 +10491,7 @@ extension Parser
 	//   forms, so a ternary cannot drift from a match on any of them.
 	// `armSlot` is the receiving slot's answer for the whole conditional, read by `parseValueExpression` before
 	// the true arm could spend it and re-issued below at the false arm's own first token — see there.
-	function parseTernaryExpression(func IrFunction, trueValue ValueId, trueBlame immutable ByteArray, startBlock IrBlock, markOpRefCount ElementIndex, markBlockRefCount ElementIndex, markRangeSiteCount ElementIndex, markTempCount ElementIndex, markOwnedCount ElementIndex, preMoveMark MoveMark, armSlot DeclaredArrayInstance, tupleArmSlot DeclaredTupleTarget) returns ValueId throws SourceParseError
+	function parseTernaryExpression(func IrFunction, trueValue ValueId, trueBlame immutable ByteArray, startBlock IrBlock, markOpRefCount ElementIndex, markBlockRefCount ElementIndex, markRangeSiteCount ElementIndex, markTempCount ElementIndex, markOwnedCount ElementIndex, markReadCount ElementIndex, preMoveMark MoveMark, armSlot DeclaredArrayInstance, tupleArmSlot DeclaredTupleTarget) returns ValueId throws SourceParseError
 		let ifTok = try self.consume(TokenKind.if)
 
 		// Where the true arm's VALUE lives: `startBlock` when the arm emitted only straight-line ops, or the
@@ -10564,6 +10565,8 @@ extension Parser
 		// at the end of whichever block it left (`condExit`), exactly as `parseIfStatement` re-reads its entry
 		// after the condition.
 		self.bodyState.currentBlock = startBlock
+		let condKeptFloor = self.bodyState.openKeptSites.count()
+		let armReadEnd = self.bodyState.operandOrder.reads.count()
 
 		// The condition is an ordinary expression that must be a bool — NOT `parseBoolCondition`, whose
 		// E3005 "'if' requires a bool condition" is shared with the `if`/`while` STATEMENTS. A ternary's
@@ -10605,6 +10608,7 @@ extension Parser
 		// detach because the destination block is what the arm's sites have to name, and it could not be
 		// minted any earlier — it has to sort after the condition's own blocks.
 		self.rehomeArmRangeSites(startBlock.id, toBlock: trueBranch.id, opShift: markOpRefCount, firstSite: markRangeSiteCount, endSite: armRangeSiteEnd)
+		try self.replayTrueArmReads(markReadCount, until: armReadEnd, startBlockId: startBlock.id, trueBlockId: trueBranch.id, keptFloor: condKeptFloor)
 
 		for br in armInnerBlockRefs 'reattach'
 			func.blockRefs.push(br)
@@ -10671,6 +10675,33 @@ extension Parser
 			none then panic("parseTernaryExpression: the merge produced no value — both arms give a value, so the result phi is always present")
 		end 'r'
 	end 'parseTernaryExpression'
+
+	function replayTrueArmReads(first ElementIndex, until ElementIndex, startBlockId BlockId, trueBlockId BlockId, keptFloor ElementIndex) throws SourceParseError
+		let log = self.bodyState.operandOrder.reads
+
+		for index in first upto until 'eachArmRead'
+			let binding = try log.bindings.get(index) otherwise panic("replayTrueArmReads: bindings.get OOB at {index} below the log's height")
+			let nameTok = try log.names.get(index) otherwise panic("replayTrueArmReads: names.get OOB at {index} below the log's height")
+
+			if not binding.isSelfField and not self.bindingIsInScope(binding, name: nameTok.value) 'anArmLocalBinding'
+				continue
+			end 'anArmLocalBinding'
+
+			var block = try log.blocks.get(index) otherwise panic("replayTrueArmReads: blocks.get OOB at {index} below the log's height")
+
+			// The arm's ops now live in the true branch: filed against the start block, a read would not
+			// register as after the kept call (`firstReadAfterTheCall` decides by block reachability).
+			if block == startBlockId 'readInTheDetachedOps'
+				block = trueBlockId
+			end 'readInTheDetachedOps'
+
+			_ = try self.requireReadableNow(binding, nameTok: nameTok, block: block, keptFloor: keptFloor)
+		end 'eachArmRead'
+	end 'replayTrueArmReads'
+
+	function bindingIsInScope(binding VarInfo, name ByteArray) returns bool
+		return self.bodyState.scope.contains(name) and self.bodyState.scope.getInfo(name) is binding
+	end 'bindingIsInScope'
 
 	// An `if` / `while` condition: an ordinary expression that must have type `bool`.
 	//

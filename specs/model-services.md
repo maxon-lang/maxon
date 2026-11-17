@@ -9398,6 +9398,64 @@ end 'main'
 error E3102: <fragment>:42:24: 'u' is passed at two arguments of this call, and a unique value has one name; pass it once
 ```
 
+<!-- test: model-hand-ar-m11-cond-read-then-arm -->
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m11-cond-read-then-arm` of redteamAR.hand_ar1, in capmodel `reggio/REPORTRTAR.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Sy
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(x UT)
+		let _ = x
+		let _ = 1 as Num
+	end 'take'
+end 'Sy'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let s = spawn Sy.create(0)
+	try s.take((u if lg(peekUT(idUT(u))) != 0 else UT.none)) otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:48:14: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
 <!-- test: model-hand-ar-l1-cond-loop-once -->
 The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `l1-cond-loop-once` of redteamAR.hand_ar3, in capmodel `reggio/REPORTRTAR.txt`.
 

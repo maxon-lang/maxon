@@ -716,6 +716,11 @@ release's version as its heading when the release is cut.
   gave wrong bytes, a compiler panic or an `__mm_retain` crash with 0.5.0; it compiles and runs correctly.
   Fix: read the new name, bind from the original value again, or call `.clone()` where both names must stay live.
 
+- A conditional expression's condition runs before its branches, so a local the condition moves (a closure in
+  it captures the local, or the condition passes it to `async` or `spawn`) is moved when the true branch reads
+  it: E3102. 0.5.0 compiled such a read.
+  Fix: hoist the condition into a `let` before the conditional, or read the value before the condition moves it.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

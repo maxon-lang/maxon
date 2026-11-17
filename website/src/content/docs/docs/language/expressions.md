@@ -189,6 +189,10 @@ let tier = "gold" if score > 90 else "silver" if score > 70 else "bronze"
 print("Status: {"on" if enabled else "off"}\n")
 ```
 
+The condition runs before either branch whichever way the source orders the text, so a local the condition
+moves (an argument to a parameter that keeps it, a variable a closure captures) is moved when the true branch
+reads it: **E3102**, as when the condition is hoisted into a `let` before the conditional.
+
 ## Ranges
 
 `a to b` (inclusive) and `a upto b` (exclusive) produce a range. In a `for` header or a `match` pattern a

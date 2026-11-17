@@ -1412,3 +1412,477 @@ end 'binary'
 ```maxoncstderr
 error E2028: specs/ternary-expression/ternary-expression.error.function-arm-signature-mismatch-forward-ref.maxon:6:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
 ```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-reads -->
+### A keep made in the CONDITION is seen by the TRUE arm
+The condition runs first but parses second, so the true arm's read of `u` is parsed before the condition's
+call hands `u` to `idUT`, which keeps it. The refusal is the one the same condition hoisted into a `let` earns
+in `error.condition-keeps-then-arm-reads-hoisted`: the read of a value a call kept is a use after the move
+whichever way the source spells the order.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let c = (u if lg(peekUT(idUT(u))) != 0 else UT.none)
+	let _ = peekUT(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:34:11: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-reads-hoisted -->
+### The hoisted control: the keep is made before the conditional
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let t = lg(peekUT(idUT(u)))
+	let c = (u if t != 0 else UT.none)
+	let _ = peekUT(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:35:11: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-moves-then-arm-reads -->
+### A move made in the CONDITION is seen by the TRUE arm
+The condition hands `t` to a closure, which owns what it captures, and the true arm reads `t` after it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+typealias Thunk = function() returns Num
+
+function run(f Thunk) returns Num
+	return f()
+end 'run'
+
+function main() returns ExitCode
+	var t = "key{1} padded out long enough to be a real heap allocation"
+	let r = t if run(function() gives t.byteLength()) > 0 else "fallback"
+	t = "again"
+	print(r)
+	print(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:12:10: use of moved value 't': its ownership moved to the closure that captures it
+```
+
+<!-- test: ternary-expression.error.condition-moves-then-arm-reads-hoisted -->
+### The hoisted control: the move is made before the conditional
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+typealias Thunk = function() returns Num
+
+function run(f Thunk) returns Num
+	return f()
+end 'run'
+
+function main() returns ExitCode
+	var t = "key{1} padded out long enough to be a real heap allocation"
+	let n = run(function() gives t.byteLength())
+	let r = t if n > 0 else "fallback"
+	t = "again"
+	print(r)
+	print(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:10: use of moved value 't': its ownership moved to the closure that captures it
+```
+
+<!-- test: ternary-expression.arm-keeps-then-condition-reads -->
+### A keep made in the TRUE arm is not seen by the CONDITION
+The condition runs before the arm at run time, so its read of `u` precedes the keep the arm makes, whatever
+order the two are parsed in.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let c = (idUT(u) if lg(peekUT(u)) != 0 else UT.none)
+	let _ = peekUT(c)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: ternary-expression.error.outer-condition-keeps-inner-arm-reads -->
+### A keep in an OUTER condition is seen by a read in a nested conditional's arm
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let c = ((u if lg(1) != 0 else UT.none) if lg(peekUT(idUT(u))) != 0 else UT.none)
+	let _ = peekUT(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:34:12: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.inner-condition-keeps-inner-arm-reads -->
+### A keep in a nested conditional's own condition is seen by that conditional's true arm
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let c = ((u if lg(peekUT(idUT(u))) != 0 else UT.none) if lg(1) != 0 else UT.none)
+	let _ = peekUT(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:34:12: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-closure-captures -->
+### A keep made in the CONDITION is seen by a closure the TRUE arm builds over the kept value
+The closure literal captures `u` by value, which is a read of `u`; the condition's call keeps `u` first.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let f = (function() gives peekUT(u)) if lg(peekUT(idUT(u))) != 0 else (function() gives lg(0))
+	return f()
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:34:35: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-field-read -->
+### A keep made in the CONDITION is seen by a field read in the TRUE arm
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekTk(x Tk) returns Num
+	return x.n
+end 'peekTk'
+
+function idTk(x Tk) returns Tk
+	return x
+end 'idTk'
+
+function main() returns ExitCode
+	let u = Tk.create(1)
+	let r = u.n if lg(peekTk(idTk(u))) != 0 else 0
+	return r
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:26:10: use of moved value 'u': its ownership moved to the parameter 'x' of 'idTk', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-method-call -->
+### A keep made in the CONDITION is seen by a method call in the TRUE arm
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Num
+		return self.n
+	end 'peek'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekTk(x Tk) returns Num
+	return x.n
+end 'peekTk'
+
+function idTk(x Tk) returns Tk
+	return x
+end 'idTk'
+
+function main() returns ExitCode
+	let u = Tk.create(1)
+	let r = u.peek() if lg(peekTk(idTk(u))) != 0 else 0
+	return r
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:30:10: use of moved value 'u': its ownership moved to the parameter 'x' of 'idTk', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-lends-then-arm-reads-scalar -->
+<!-- unsupported-targets: wasm32-wasi -->
+### A lend made in the CONDITION is seen by a scalar read in the TRUE arm
+The condition starts a coroutine that writes `n`, so `n` is lent until the promise is drained, and the true arm
+reads it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+function bump(n mutable Tally, k Tally) returns Tally
+	sleep(1)
+	n = n + 1
+
+	return k
+end 'bump'
+
+typealias Pending = Promise with Tally
+
+function started(p Pending) returns Tally
+	return await p
+end 'started'
+
+function main() returns ExitCode
+	var n = 5 as Tally
+	let r = n if started(async bump(n, k: 1)) > 0 else 0
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:10: use of moved value 'n': it is lent to the coroutine of the `async` call at 19:29 until that promise is awaited or cancelled
+```
+
+<!-- test: ternary-expression.arm-local-binding-moved-inside-the-true-arm -->
+### A binding the TRUE arm declares and moves is not the ternary's to re-check
+The arm's `match` binds `t`, reads `t.n`, then hands `t` to a closure that captures it. `t` ends with the arm, so
+the condition that runs first has nothing to say about it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+typealias Thunk = function() returns Num
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function run(f Thunk) returns Num
+	return f()
+end 'run'
+
+function add(a Num, b Num) returns Num
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(7))
+	let n = (match u 'm'
+		none gives 0
+		have(t) gives add(t.n, b: run(function() gives t.n))
+	end 'm') if lg(1) != 0 else 0
+	return n
+end 'main'
+```
+```exitcode
+14
+```
