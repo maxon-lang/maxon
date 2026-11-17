@@ -13,12 +13,12 @@ These cases are programs of the capmodel executable model, translated to Maxon b
 `scripts/model-specs/generate.py` (`docs/SPECS.md`, "Model-derived specs") and pinned to the model's verdict on
 `modify` windows and one-statement opens. A program the model accepts runs and exits 0; one it refuses fails to compile, with the diagnostic
 the compiler gives. A case is written only where the compiler and the model agree, so the suite fails
-the day the compiler stops agreeing with a verdict the model pinned. The rule set is `core-m3w-fa24`.
+the day the compiler stops agreeing with a verdict the model pinned. The rule set is `core-m3w-fa25`.
 
 ## Tests
 
 <!-- test: model-finding-q-q2-ring3-the-noro-mark-is-not-part-of-sig-snap-so-a-ring-of-three-neve -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `Q2-ring3: the noro mark is not part of Sig.snap, so a ring of three never learns it` of redteamQ/holes.txt, in capmodel `reggio/REPORTRTQ.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `Q2-ring3: the noro mark is not part of Sig.snap, so a ring of three never learns it` of redteamQ/holes.txt, in capmodel `reggio/REPORTRTQ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -71,7 +71,7 @@ error E3207: <fragment>:42:14: 'f0' builds a record that holds 'bV', so it takes
 ```
 
 <!-- test: model-finding-q-q2-ring3-ctl-ring2-control-the-ring-of-two-refused -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `Q2-ring3-ctl-ring2: control, the ring of two (refused)` of redteamQ/holes.txt, in capmodel `reggio/REPORTRTQ.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `Q2-ring3-ctl-ring2: control, the ring of two (refused)` of redteamQ/holes.txt, in capmodel `reggio/REPORTRTQ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -120,7 +120,7 @@ error E3207: <fragment>:38:14: 'f0' builds a record that holds 'bV', so it takes
 ```
 
 <!-- test: model-finding-q-q2-line-ctl-control-a-line-of-three-with-no-back-edge-refused -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `Q2-line-ctl: control, a line of three with no back edge (refused)` of redteamQ/holes.txt, in capmodel `reggio/REPORTRTQ.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `Q2-line-ctl: control, a line of three with no back edge (refused)` of redteamQ/holes.txt, in capmodel `reggio/REPORTRTQ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -170,7 +170,7 @@ error E3207: <fragment>:39:14: 'f0' builds a record that holds 'bV', so it takes
 ```
 
 <!-- test: model-finding-r-r6-unique-lent-builder-named-an-outer-unique-token-lent-in-a-window-to -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `R6-unique-lent-builder-named: an outer unique token lent in a window to a named builder over its Bytes` of redteamR/holes6.txt, in capmodel `reggio/REPORTRTR.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `R6-unique-lent-builder-named: an outer unique token lent in a window to a named builder over its Bytes` of redteamR/holes6.txt, in capmodel `reggio/REPORTRTR.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -220,7 +220,7 @@ error E3207: <fragment>:39:15: 'mkr' builds a record that holds 't', so it takes
 ```
 
 <!-- test: model-finding-r-r6-unique-lent-builder-method-the-same-through-a-method-of-the-token -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `R6-unique-lent-builder-method: the same through a method of the token` of redteamR/holes6.txt, in capmodel `reggio/REPORTRTR.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `R6-unique-lent-builder-method: the same through a method of the token` of redteamR/holes6.txt, in capmodel `reggio/REPORTRTR.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -270,7 +270,7 @@ error E3207: <fragment>:39:11: 'mk' builds a record that holds its receiver, so 
 ```
 
 <!-- test: model-finding-s-u4-unique-window-made-into-holder-a-window-made-token-moved-into-a-hol -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `U4-unique-window-made-into-holder: a window-made token moved into a holder inside the window` of redteamS/h_uniq.txt, in capmodel `reggio/REPORTRTS.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `U4-unique-window-made-into-holder: a window-made token moved into a holder inside the window` of redteamS/h_uniq.txt, in capmodel `reggio/REPORTRTS.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -312,7 +312,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-s-u5-unique-paused-into-holder-a-paused-unique-token-handed-to-a-keeping -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `U5-unique-paused-into-holder: a paused unique token handed to a keeping callee in a window` of redteamS/h_uniq.txt, in capmodel `reggio/REPORTRTS.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `U5-unique-paused-into-holder: a paused unique token handed to a keeping callee in a window` of redteamS/h_uniq.txt, in capmodel `reggio/REPORTRTS.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -354,7 +354,7 @@ error E3207: <fragment>:31:16: 'view' needs a writable parameter 'tV'; 'tV' is r
 ```
 
 <!-- test: model-finding-ad-modify-nested-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `modify-nested-window` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `modify-nested-window` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -413,7 +413,7 @@ error E3199: <fragment>:46:10: 'by' cannot be opened: the value that holds it is
 ```
 
 <!-- test: model-finding-ad-modify-in-if-both -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `modify-in-if-both` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `modify-in-if-both` of redteamAD/t10.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -477,7 +477,7 @@ error E3201: <fragment>:50:15: an isolated value from outside 'm2' cannot be mov
 ```
 
 <!-- test: model-finding-ad-recv-wrap-in-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `recv-wrap-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `recv-wrap-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -533,7 +533,7 @@ error E3201: <fragment>:45:8: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-finding-ad-recv-fin-in-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-fin-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-fin-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -573,7 +573,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ad-finalizer-param-in-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `finalizer-param-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `finalizer-param-in-window` of redteamAD/t12.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -639,7 +639,7 @@ error E3201: <fragment>:55:3: 'z' is mutable outside 'v'; a call into an isolate
 ```
 
 <!-- test: model-finding-ad-lit-in-window -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `lit-in-window` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `lit-in-window` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -691,7 +691,7 @@ error E3196: <fragment>:41:19: cannot store an isolated 'Rl' into 'Sn.notSent.r'
 ```
 
 <!-- test: model-finding-ad-iso-param-window -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `iso-param-window` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `iso-param-window` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -747,7 +747,7 @@ error E3196: <fragment>:38:20: cannot store an isolated 'Rl' into 'Sn.notSent.r'
 ```
 
 <!-- test: model-finding-ad-plain-param-window-local -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-param-window-local` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-param-window-local` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -803,7 +803,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ad-plain-param-window-fresh -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-param-window-fresh` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-param-window-fresh` of redteamAD/t13.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -858,7 +858,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ad-h1-min -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `h1-min` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `h1-min` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -914,7 +914,7 @@ error E3201: <fragment>:45:14: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-finding-ad-h1-plain-var -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `h1-plain-var` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `h1-plain-var` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -970,7 +970,7 @@ error E3207: <fragment>:45:8: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ad-h1-bind-first -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `h1-bind-first` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `h1-bind-first` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1027,7 +1027,7 @@ error E3201: <fragment>:45:17: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-finding-ad-h1-direct-fin -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `h1-direct-fin` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `h1-direct-fin` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1071,7 +1071,7 @@ error E3201: <fragment>:33:8: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-finding-ad-h1-box -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h1-box` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h1-box` of redteamAD/t4.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1107,7 +1107,7 @@ error E3199: <fragment>:25:16: 'v' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-finding-ad-v-state-modify-ok -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3207. Model program `v-state-modify-ok` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3207. Model program `v-state-modify-ok` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1180,7 +1180,7 @@ error E3207: <fragment>:40:15: 'giveS' needs a writable parameter 'r' at line 46
 ```
 
 <!-- test: model-finding-ad-v-hold-and-return-from-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3204. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `v-hold-and-return-from-window` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3204. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `v-hold-and-return-from-window` of redteamAD/t5.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1238,7 +1238,7 @@ error E3204: <fragment>:46:3: 'out' holds an isolated value from outside 'm1' an
 ```
 
 <!-- test: model-finding-ad-l-store-into-window-object -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3201, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `l-store-into-window-object` of redteamAD/t6.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3201, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `l-store-into-window-object` of redteamAD/t6.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1289,7 +1289,7 @@ error E3201: <fragment>:39:8: 'h' is mutable outside 'v'; a call into an isolate
 ```
 
 <!-- test: model-finding-ad-plain-modify-fresh-pair -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `plain-modify-fresh-pair` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `plain-modify-fresh-pair` of redteamAD/t7.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1338,7 +1338,7 @@ error E3201: <fragment>:37:14: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-finding-ad-tok-unique-into-window-lend -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `tok-unique-into-window-lend` of redteamAD/t8.txt, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `tok-unique-into-window-lend` of redteamAD/t8.txt, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1387,7 +1387,7 @@ error E3199: <fragment>:38:15: 'tV' cannot be opened: the value that holds it is
 ```
 
 <!-- test: model-finding-ae-union-payload-launder -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-launder` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-launder` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1452,7 +1452,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-union-payload-launder-iso -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `union-payload-launder-iso` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `union-payload-launder-iso` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1517,7 +1517,7 @@ error E3201: <fragment>:53:28: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-finding-ae-union-payload-fn-wrap -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-fn-wrap` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-fn-wrap` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1585,7 +1585,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-union-payload-fn-wrap-consumer -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-fn-wrap-consumer` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-fn-wrap-consumer` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1657,7 +1657,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-outer-plain-union-match-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-match-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-match-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1716,7 +1716,7 @@ error E3207: <fragment>:45:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-outer-plain-union-match-in-modify-fin -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-match-in-modify-fin` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-match-in-modify-fin` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1764,7 +1764,7 @@ error E3207: <fragment>:34:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-outer-plain-union-pass-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-pass-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-pass-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1820,7 +1820,7 @@ error E3207: <fragment>:45:8: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-outer-plain-linear-pass-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-linear-pass-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-linear-pass-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1876,7 +1876,7 @@ error E3207: <fragment>:45:8: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-outer-plain-linear-recv-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-linear-recv-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-linear-recv-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1932,7 +1932,7 @@ error E3207: <fragment>:45:10: this linear value comes from outside 'm1', where 
 ```
 
 <!-- test: model-finding-ae-outer-iso-union-match-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-iso-union-match-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-iso-union-match-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -1996,7 +1996,7 @@ error E3207: <fragment>:50:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-w-match-consume-recv-wrap -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-recv-wrap` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-recv-wrap` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2055,7 +2055,7 @@ error E3207: <fragment>:45:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-w-match-consume-param -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-param` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-param` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2117,7 +2117,7 @@ error E3207: <fragment>:45:31: 'giveS' needs a writable parameter 'r' at line 31
 ```
 
 <!-- test: model-finding-ae-w-match-consume-nested-window -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-nested-window` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-nested-window` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2181,7 +2181,7 @@ error E3207: <fragment>:50:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-w-match-consume-store-in-window-obj -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-store-in-window-obj` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-store-in-window-obj` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2244,7 +2244,7 @@ error E3207: <fragment>:49:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-ro-union-iso-arm-write-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ro-union-iso-arm-write-modify` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ro-union-iso-arm-write-modify` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2279,7 +2279,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-ro-union-iso-arm-wait-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ro-union-iso-arm-wait-modify` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ro-union-iso-arm-wait-modify` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2327,7 +2327,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-iso-nonlinear-arm-write-own-root -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-nonlinear-arm-write-own-root` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-nonlinear-arm-write-own-root` of redteamAE/p16.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2361,7 +2361,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-w-match-consume-in-modify-else -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-in-modify-else` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-in-modify-else` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2431,7 +2431,7 @@ error E3207: <fragment>:50:4: this linear value comes from outside 'm2', where i
 ```
 
 <!-- test: model-finding-ae-w-match-consume-return -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3202. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-match-consume-return` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3202. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-match-consume-return` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2484,7 +2484,7 @@ error E3202: <fragment>:34:27: 'q' is mutable and cannot leave 'm1'; a value lea
 ```
 
 <!-- test: model-finding-ae-w-match-consume-hold-in-window-obj -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-hold-in-window-obj` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-hold-in-window-obj` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2536,7 +2536,7 @@ error E3207: <fragment>:38:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-finding-ae-ro-field-iso-recv-call-writes-outer -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ro-field-iso-recv-call-writes-outer` of redteamAE/p19.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `ro-field-iso-recv-call-writes-outer` of redteamAE/p19.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2584,7 +2584,7 @@ error E3201: <fragment>:37:16: 'c' is mutable outside 'item'; a call into an iso
 ```
 
 <!-- test: model-finding-ae-iso-return-from-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-return-from-window` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `iso-return-from-window` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2629,7 +2629,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-window-fresh-plain-into-outer-plain-var -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `window-fresh-plain-into-outer-plain-var` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `window-fresh-plain-into-outer-plain-var` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2671,7 +2671,7 @@ error E3204: <fragment>:30:3: 'out' holds a linear value from outside 'm1' and c
 ```
 
 <!-- test: model-finding-ae-window-fresh-plain-into-outer-plain-var-use -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `window-fresh-plain-into-outer-plain-var-use` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `window-fresh-plain-into-outer-plain-var-use` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2729,7 +2729,7 @@ error E3204: <fragment>:46:3: 'out' holds a linear value from outside 'm1' and c
 ```
 
 <!-- test: model-finding-ae-window-local-union-into-outer -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `window-local-union-into-outer` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `window-local-union-into-outer` of redteamAE/p21.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2782,7 +2782,7 @@ error E3204: <fragment>:41:3: 'out' holds a linear value from outside 'm1' and c
 ```
 
 <!-- test: model-finding-ae-nested-modify-write-outer-root -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `nested-modify-write-outer-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `nested-modify-write-outer-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2819,7 +2819,7 @@ error E3197: <fragment>:25:4: cannot write 'n' through 'h', which is read-only w
 ```
 
 <!-- test: model-finding-ae-nested-modify-read-outer-root -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `nested-modify-read-outer-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `nested-modify-read-outer-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2856,7 +2856,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-modify-match-field-union-write-root -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `modify-match-field-union-write-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `modify-match-field-union-write-root` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2899,7 +2899,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-modify-match-field-union-write-other-field -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `modify-match-field-union-write-other-field` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `modify-match-field-union-write-other-field` of redteamAE/p24.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2942,7 +2942,7 @@ end 'main'
 ```
 
 <!-- test: model-finding-ae-iso-payload-in-modify-lend -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `iso-payload-in-modify-lend` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `iso-payload-in-modify-lend` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2990,7 +2990,7 @@ error E3207: <fragment>:34:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ab-w-modify-root-linear -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3025,7 +3025,7 @@ error E3203: <fragment>:24:10: 'r' is open in 'm1' and cannot be moved or consum
 ```
 
 <!-- test: model-hand-ab-w-modify-root-linear-write -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-root-linear-write` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-root-linear-write` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3061,7 +3061,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-w-modify-root-linear-moved-inside -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-linear-moved-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-linear-moved-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3097,7 +3097,7 @@ error E3203: <fragment>:24:11: 'r' is open in 'm1' and cannot be moved or consum
 ```
 
 <!-- test: model-hand-ab-w-modify-root-then-use -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-then-use` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-then-use` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3133,7 +3133,7 @@ error E3203: <fragment>:24:10: 'r' is open in 'm1' and cannot be moved or consum
 ```
 
 <!-- test: model-hand-ab-w-modify-return-inside -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-return-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-return-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3182,7 +3182,7 @@ error E3223: <fragment>:33:3: this drops 'r', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-w-modify-return-fresh-inside -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-return-fresh-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-return-fresh-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3230,7 +3230,7 @@ error E3223: <fragment>:33:3: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ab-w-modify-outer-var-consumed-inside -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-modify-outer-var-consumed-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-modify-outer-var-consumed-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3275,7 +3275,7 @@ error E3102: <fragment>:35:2: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-w-modify-outer-var-consumed-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-modify-outer-var-consumed-twice` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-modify-outer-var-consumed-twice` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3320,7 +3320,7 @@ error E3102: <fragment>:34:3: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ab-w-modify-outer-var-consumed-in-if -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-outer-var-consumed-in-if` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-outer-var-consumed-in-if` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3366,7 +3366,7 @@ error E3223: <fragment>:33:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ab-w-modify-assign-outer -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-assign-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-assign-outer` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3411,7 +3411,7 @@ error E3204: <fragment>:33:3: 'r' holds an isolated value from outside 'm1' and 
 ```
 
 <!-- test: model-hand-ab-w-modify-assign-outer-after-consume -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-assign-outer-after-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-assign-outer-after-consume` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3457,7 +3457,7 @@ error E3204: <fragment>:34:3: 'r' holds an isolated value from outside 'm1' and 
 ```
 
 <!-- test: model-hand-ab-w-modify-assign-outer-consume-refill -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-assign-outer-consume-refill` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-assign-outer-consume-refill` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3503,7 +3503,7 @@ error E3204: <fragment>:34:3: 'r' holds an isolated value from outside 'm1' and 
 ```
 
 <!-- test: model-hand-ab-w-modify-nested -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-nested` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-nested` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3550,7 +3550,7 @@ error E3199: <fragment>:34:10: 'b' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ab-w-modify-nested-consume-twice -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-nested-consume-twice` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-nested-consume-twice` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3598,7 +3598,7 @@ error E3199: <fragment>:34:10: 'b' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ab-w-modify-live-across-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-live-across-window` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-live-across-window` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3643,7 +3643,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ab-w-modify-moved-before-in-window -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-modify-moved-before-in-window` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `w-modify-moved-before-in-window` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3688,7 +3688,7 @@ error E3102: <fragment>:34:11: use of moved value 'r': its ownership moved to an
 ```
 
 <!-- test: model-hand-ab-w-modify-result-moved-out -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-result-moved-out` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `w-modify-result-moved-out` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3734,7 +3734,7 @@ error E3204: <fragment>:34:3: 'out' holds a linear value from outside 'm1' and c
 ```
 
 <!-- test: model-hand-ab-w-modify-target-temp -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-target-temp` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-target-temp` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3781,7 +3781,7 @@ error E3199: <fragment>:34:9: no writable reference holds 'mkB()': `modify` open
 ```
 
 <!-- test: model-hand-ab-w-modify-two-linears -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-two-linears` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-two-linears` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3826,7 +3826,7 @@ error E3223: <fragment>:35:2: this drops '_', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ac-ub-modify-target-temp-linear -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-modify-target-temp-linear` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `ub-modify-target-temp-linear` of redteamAC.hand_ac1, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3873,7 +3873,7 @@ error E3223: <fragment>:36:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ac-ld-modify-lend -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `ld-modify-lend` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `ld-modify-lend` of redteamAC.hand_ac3, in capmodel `reggio/REPORTRTAC.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3922,7 +3922,7 @@ error E3201: <fragment>:37:8: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-hand-ad-w-modify-consume-root -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-consume-root` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-consume-root` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3965,7 +3965,7 @@ error E3203: <fragment>:32:10: 'r' is open in 'm1' and cannot be moved or consum
 ```
 
 <!-- test: model-hand-ad-w-modify-consume-root-after -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-consume-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-consume-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4009,7 +4009,7 @@ error E3203: <fragment>:32:10: 'r' is open in 'm1' and cannot be moved or consum
 ```
 
 <!-- test: model-hand-ad-w-modify-bump -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-bump` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-bump` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4053,7 +4053,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-w-modify-pass-root -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-pass-root` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-pass-root` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4100,7 +4100,7 @@ error E3203: <fragment>:36:9: 'r' is open in 'm1' and cannot be moved or consume
 ```
 
 <!-- test: model-hand-ad-w-modify-pass-root-after -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-pass-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-pass-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4148,7 +4148,7 @@ error E3203: <fragment>:36:9: 'r' is open in 'm1' and cannot be moved or consume
 ```
 
 <!-- test: model-hand-ad-w-modify-inner-isolated -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `w-modify-inner-isolated` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `w-modify-inner-isolated` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4204,7 +4204,7 @@ error E3201: <fragment>:45:8: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-hand-ad-w-modify-inner-isolated-twice -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `w-modify-inner-isolated-twice` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `w-modify-inner-isolated-twice` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4261,7 +4261,7 @@ error E3201: <fragment>:45:8: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-hand-ad-w-modify-window-in-loop -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `w-modify-window-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `w-modify-window-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4321,7 +4321,7 @@ error E3201: <fragment>:47:9: an isolated value from outside 'm2' cannot be move
 ```
 
 <!-- test: model-hand-ad-o-modify-union -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `o-modify-union` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `o-modify-union` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4373,7 +4373,7 @@ error E3223: <fragment>:43:2: this drops 's', a linear value that was never cons
 ```
 
 <!-- test: model-hand-ad-hole-modify-in-if -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-modify-in-if` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-modify-in-if` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4437,7 +4437,7 @@ error E3201: <fragment>:50:15: an isolated value from outside 'm2' cannot be mov
 ```
 
 <!-- test: model-hand-ad-hole-receiver -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-receiver` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `hole-receiver` of redteamAD.hand_ad9, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4493,7 +4493,7 @@ error E3201: <fragment>:45:9: an isolated value from outside 'm1' cannot be move
 ```
 
 <!-- test: model-hand-ae-method-root-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `method-root-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `method-root-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4565,7 +4565,7 @@ error E3201: <fragment>:61:3: 'bx' is mutable outside 'v'; a call into an isolat
 ```
 
 <!-- test: model-hand-ae-method-pass-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `method-pass-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `method-pass-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4642,7 +4642,7 @@ error E3201: <fragment>:65:11: 'bx' is mutable outside 'v'; a call into an isola
 ```
 
 <!-- test: model-hand-ae-pass-result-local -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `pass-result-local` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `pass-result-local` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4695,7 +4695,7 @@ error E3201: <fragment>:41:15: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-hand-ae-pass-result-in-gives -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `pass-result-in-giveS` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `pass-result-in-giveS` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4759,7 +4759,7 @@ error E3201: <fragment>:53:18: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-hand-ae-merge-param -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-param` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-param` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4819,7 +4819,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ae-merge-param-bound -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-param-bound` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-param-bound` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4880,7 +4880,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ae-merge-into-window-root -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-into-window-root` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `merge-into-window-root` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4915,7 +4915,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ae-cond-in-window -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-in-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-in-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4979,7 +4979,7 @@ error E3223: <fragment>:53:17: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ae-cond-bound -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-bound` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-bound` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5044,7 +5044,7 @@ error E3223: <fragment>:53:14: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ae-cond-fresh-first -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-fresh-first` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `cond-fresh-first` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5109,7 +5109,7 @@ error E3223: <fragment>:53:25: this drops a linear value that was never consumed
 ```
 
 <!-- test: model-hand-ae-in-if-else-join -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3223. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `in-if-else-join` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3223. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `in-if-else-join` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5178,7 +5178,7 @@ error E3223: <fragment>:54:3: this drops a linear value that was never consumed:
 ```
 
 <!-- test: model-hand-ae-in-loop-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `in-loop-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `in-loop-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5242,7 +5242,7 @@ error E3201: <fragment>:51:15: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-hand-ae-local-then-modify-local -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-then-modify-local` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-then-modify-local` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5306,7 +5306,7 @@ error E3201: <fragment>:52:15: an isolated value from outside 'm2' cannot be mov
 ```
 
 <!-- test: model-hand-ae-local-outside-then-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-outside-then-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-outside-then-window` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5367,7 +5367,7 @@ error E3201: <fragment>:50:14: an isolated value from outside 'm1' cannot be mov
 ```
 
 <!-- test: model-hand-ae-local-outside-two -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-outside-two` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `local-outside-two` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5436,7 +5436,7 @@ error E3201: <fragment>:58:14: an isolated value from outside 'm2' cannot be mov
 ```
 
 <!-- test: model-hand-ae-swap-field-iso -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `swap-field-iso` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `swap-field-iso` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5472,7 +5472,7 @@ error E3204: <fragment>:25:3: 'v' holds an isolated value from outside 'm1' and 
 ```
 
 <!-- test: model-hand-ae-recv-param-keeps -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-param-keeps` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-param-keeps` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5550,7 +5550,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ae-recv-field-int -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-field-int` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-field-int` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5591,7 +5591,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ae-recv-two-arg-sends -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-two-arg-sends` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `recv-two-arg-sends` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5650,7 +5650,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ae-window-local-outer-recv-result-iso -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `window-local-outer-recv-result-iso` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `window-local-outer-recv-result-iso` of redteamAE.hand_ae1, in capmodel `reggio/REPORTRTAE.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5697,7 +5697,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-m-keep-plain-fn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-keep-plain-fn` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-keep-plain-fn` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5763,7 +5763,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-m-iso-fn -->
-The model (`core-m3w-fa24`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `m-iso-fn` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `m-iso-fn` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5833,7 +5833,7 @@ error E3198: <fragment>:58:21: 'o' is isolated and cannot be read outside a bloc
 ```
 
 <!-- test: model-hand-af-m-store-iso-slot -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `m-store-iso-slot` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `m-store-iso-slot` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5899,7 +5899,7 @@ error E3197: <fragment>:54:15: cannot write 'item' through 'hi', which is read-o
 ```
 
 <!-- test: model-hand-af-m-keep-into-window-obj -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-keep-into-window-obj` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-keep-into-window-obj` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5969,7 +5969,7 @@ error E3201: <fragment>:58:30: 'hi' is mutable outside 'o'; a call into an isola
 ```
 
 <!-- test: model-hand-af-u-direct-keep -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `u-direct-keep` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `u-direct-keep` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6026,7 +6026,7 @@ error E3199: <fragment>:46:9: 'rb' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-af-u-direct-keep-into -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `u-direct-keep-into` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `u-direct-keep-into` of redteamAF.hand_af12, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6083,7 +6083,7 @@ error E3199: <fragment>:46:12: 'rb' cannot be opened: the value that holds it is
 ```
 
 <!-- test: model-hand-af-n9-modify-then-match -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n9-modify-then-match` of redteamAF.hand_af17, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n9-modify-then-match` of redteamAF.hand_af17, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6117,7 +6117,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-a14-modify-iso-var-then-match-inside -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a14-modify-iso-var-then-match-inside` of redteamAF.hand_af18, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a14-modify-iso-var-then-match-inside` of redteamAF.hand_af18, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6155,7 +6155,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-w10-linear-swap-out-modify -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `w10-linear-swap-out-modify` of redteamAF.hand_af20, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3224. Model program `w10-linear-swap-out-modify` of redteamAF.hand_af20, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6202,7 +6202,7 @@ error E3224: <fragment>:23:6: the field 's' holds a linear value, and a linear v
 ```
 
 <!-- test: model-hand-af-w12-linear-swap-out-store-back-other-region -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3214, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w12-linear-swap-out-store-back-other-region` of redteamAF.hand_af20, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3214, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w12-linear-swap-out-store-back-other-region` of redteamAF.hand_af20, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6251,7 +6251,7 @@ error E3214: <fragment>:36:21: cannot bind '_' to a unique value read out of a f
 ```
 
 <!-- test: model-hand-af-s4-binder-named-like-outer-before-window -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `s4-binder-named-like-outer-before-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `s4-binder-named-like-outer-before-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6316,7 +6316,7 @@ error E3207: <fragment>:51:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-af-s10-binder-shadows-in-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s10-binder-shadows-in-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s10-binder-shadows-in-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6388,7 +6388,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s11-binder-shadows-outer-in-window-moved -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s11-binder-shadows-outer-in-window-moved` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s11-binder-shadows-outer-in-window-moved` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6458,7 +6458,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s12-binder-shadows-then-outer-used -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s12-binder-shadows-then-outer-used` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s12-binder-shadows-then-outer-used` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6525,7 +6525,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s16-plain-payload-binder-shadow-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s16-plain-payload-binder-shadow-in-modify` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s16-plain-payload-binder-shadow-in-modify` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6591,7 +6591,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-s17-plain-payload-binder-shadow-in-modify-write-after -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `s17-plain-payload-binder-shadow-in-modify-write-after` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `s17-plain-payload-binder-shadow-in-modify-write-after` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6658,7 +6658,7 @@ error E3197: <fragment>:56:3: cannot write 'n' through 'y', which is read-only w
 ```
 
 <!-- test: model-hand-af-p2-plain-mixed-in-fn-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `p2-plain-mixed-in-fn-in-modify` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `p2-plain-mixed-in-fn-in-modify` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6727,7 +6727,7 @@ error E3207: <fragment>:58:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-af-p3-plain-mixed-fresh-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-plain-mixed-fresh-in-modify` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-plain-mixed-fresh-in-modify` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6795,7 +6795,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p5-plain-mixed-share-payload-window -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `p5-plain-mixed-share-payload-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `p5-plain-mixed-share-payload-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6861,7 +6861,7 @@ error E3196: <fragment>:51:17: cannot store a read-only 'Bx' into 'Mp.m1.y' whil
 ```
 
 <!-- test: model-hand-af-p9-plain-mixed-immutable-payload-moved-to-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p9-plain-mixed-immutable-payload-moved-to-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p9-plain-mixed-immutable-payload-moved-to-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6927,7 +6927,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p12-modify-region-into-outer -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `p12-modify-region-into-outer` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `p12-modify-region-into-outer` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6985,7 +6985,7 @@ error E3197: <fragment>:46:15: cannot write 'p' through 'h', which is read-only 
 ```
 
 <!-- test: model-hand-af-p13-modify-region-into-outer-var -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `p13-modify-region-into-outer-var` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `p13-modify-region-into-outer-var` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7044,7 +7044,7 @@ error E3204: <fragment>:46:15: 'o' holds a record from outside 'm1' and cannot b
 ```
 
 <!-- test: model-hand-af-p14-modify-region-into-keeping-fn -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `p14-modify-region-into-keeping-fn` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `p14-modify-region-into-keeping-fn` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7106,7 +7106,7 @@ error E3207: <fragment>:50:23: 'keep' needs a writable parameter 'h' at line 40;
 ```
 
 <!-- test: model-hand-af-p15-modify-region-sibling-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p15-modify-region-sibling-store` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p15-modify-region-sibling-store` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7163,7 +7163,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-af-p16-modify-region-leaves-by-return -->
-The model (`core-m3w-fa24`) refuses it by `C-EXIT`; the compiler refuses it with E3202. Model program `p16-modify-region-leaves-by-return` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-EXIT`; the compiler refuses it with E3202. Model program `p16-modify-region-leaves-by-return` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7225,7 +7225,7 @@ error E3202: <fragment>:43:22: 'y' is mutable and cannot leave 'm1'; a value lea
 ```
 
 <!-- test: model-hand-af-p17-modify-region-leaves-by-return-nonowned -->
-The model (`core-m3w-fa24`) refuses it by `C-EXIT`; the compiler refuses it with E3202. Model program `p17-modify-region-leaves-by-return-nonowned` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-EXIT`; the compiler refuses it with E3202. Model program `p17-modify-region-leaves-by-return-nonowned` of redteamAF.hand_af6, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7274,7 +7274,7 @@ error E3202: <fragment>:30:22: 'y' is mutable and cannot leave 'm1'; a value lea
 ```
 
 <!-- test: model-hand-ag-t3-twin-in-modify-write -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `t3-twin-in-modify-write` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `t3-twin-in-modify-write` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7349,7 +7349,7 @@ error E3200: <fragment>:59:10: 'Mz.m1(p, b: p) as isolated Mz' is not isolated: 
 ```
 
 <!-- test: model-hand-ag-t5-plain-var-mixed-store -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `t5-plain-var-mixed-store` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `t5-plain-var-mixed-store` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7424,7 +7424,7 @@ error E3207: <fragment>:61:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-bm-modify-keep -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-keep` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-keep` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7538,7 +7538,7 @@ error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-bm-modify-keep-p -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7652,7 +7652,7 @@ error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-bm-modify-plain -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-plain` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-plain` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7766,7 +7766,7 @@ error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-bm-modify-hq -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-hq` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-hq` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7880,7 +7880,7 @@ error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-mi-modify-merge-keep -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mi-modify-merge-keep` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mi-modify-merge-keep` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7977,7 +7977,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-mi-beh-merge-keep -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mi-beh-merge-keep` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mi-beh-merge-keep` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8103,7 +8103,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-mp-modify-freeze -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mp-modify-freeze` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mp-modify-freeze` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8187,7 +8187,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-mp-modify-merge -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mp-modify-merge` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mp-modify-merge` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8271,7 +8271,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-mr-modify-freeze-part -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mr-modify-freeze-part` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `mr-modify-freeze-part` of redteamAG.hand_ag15, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8354,7 +8354,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-f1-keep -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-keep` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-keep` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8424,7 +8424,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-f1-part-into-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-part-into-window` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-part-into-window` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8499,7 +8499,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-f1-linear-wrap -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-linear-wrap` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-linear-wrap` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8567,7 +8567,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-f1-fn-param -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-fn-param` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-fn-param` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8640,7 +8640,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-f1-control-iso-payload -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `f1-control-iso-payload` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `f1-control-iso-payload` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8710,7 +8710,7 @@ error E3199: <fragment>:58:22: 'y' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ag-f1-control-plain-var -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `f1-control-plain-var` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `f1-control-plain-var` of redteamAG.hand_ag16, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8780,7 +8780,7 @@ error E3207: <fragment>:56:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-y-modify-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modify-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modify-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8865,7 +8865,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-y-modifyhw-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8950,7 +8950,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-y-modify-keepfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modify-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modify-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9039,7 +9039,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-y-modifyhw-keepfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9128,7 +9128,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-y-modify-push-arr -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3196. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `y-modify-push-arr` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3196. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `y-modify-push-arr` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9213,7 +9213,7 @@ error E3196: <fragment>:73:27: cannot store a read-only 'Bx' into 'an element of
 ```
 
 <!-- test: model-hand-ag-y-modifyhw-push-arr -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-push-arr` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-push-arr` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9298,7 +9298,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-y-modify-none -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modify-none` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modify-none` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9383,7 +9383,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-y-modifyhw-none -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-none` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `y-modifyhw-none` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9468,7 +9468,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-hq-modify-store-p -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-modify-store-p` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-modify-store-p` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9562,7 +9562,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-hq-modify-store-q -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-modify-store-q` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-modify-store-q` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9656,7 +9656,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-hq-modify-keepfn-p -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-modify-keepfn-p` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hq-modify-keepfn-p` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9754,7 +9754,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-t-modify-store-a -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t-modify-store-a` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t-modify-store-a` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9853,7 +9853,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-t-modify-store-cp -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t-modify-store-cp` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `t-modify-store-cp` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9952,7 +9952,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-k3-nested-windows-both -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `k3-nested-windows-both` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `k3-nested-windows-both` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10040,7 +10040,7 @@ error E3199: <fragment>:72:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ag-k4-nested-windows-outer-store -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `k4-nested-windows-outer-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `k4-nested-windows-outer-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10128,7 +10128,7 @@ error E3199: <fragment>:72:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ag-beh-win-mr-modify-item-store -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `beh-win-mr-modify-item-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `beh-win-mr-modify-item-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10236,7 +10236,7 @@ error E3207: <fragment>:76:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-fn-mr-keep -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fn-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fn-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10322,7 +10322,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-fn-plain-mr-keep -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10408,7 +10408,7 @@ error E3207: <fragment>:68:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-fn-mr-keepfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fn-mr-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `fn-mr-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10498,7 +10498,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-fn-plain-mr-keepfn -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-keepfn` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10588,7 +10588,7 @@ error E3207: <fragment>:72:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-fn-plain-mr-write -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-write` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-write` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10674,7 +10674,7 @@ error E3207: <fragment>:68:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-p-pass-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-pass-store` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-pass-store` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10752,7 +10752,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-p-pick-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-pick-store` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-pick-store` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10838,7 +10838,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-p-pick-store-other -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-pick-store-other` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-pick-store-other` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -10924,7 +10924,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-p-cond-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-cond-store` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-cond-store` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11002,7 +11002,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-p-usehq-new -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-useHq-new` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p-useHq-new` of redteamAG.hand_ag20, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11089,7 +11089,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-hb-fn-keepfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-keepfn` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-keepfn` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11241,7 +11241,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-hb-fn-none -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-none` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-none` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11389,7 +11389,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l1-wrap-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l1-wrap-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l1-wrap-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11473,7 +11473,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l2-gives-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l2-giveS-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l2-giveS-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11561,7 +11561,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l3-mksn-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l3-mkSn-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l3-mkSn-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11649,7 +11649,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l4-fin-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l4-fin-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l4-fin-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11726,7 +11726,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l6-wrap-fn-param-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l6-wrap-fn-param-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l6-wrap-fn-param-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11813,7 +11813,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l7-wrap-behaviour-param-in-modify -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l7-wrap-behaviour-param-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l7-wrap-behaviour-param-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11921,7 +11921,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l8-wrap-in-modify-state-slot -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l8-wrap-in-modify-state-slot` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l8-wrap-in-modify-state-slot` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12029,7 +12029,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l10-wrap-in-nested-modify -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `l10-wrap-in-nested-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `l10-wrap-in-nested-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12116,7 +12116,7 @@ error E3199: <fragment>:71:10: 'g' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ag-l14-plain-var-union-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `l14-plain-var-union-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `l14-plain-var-union-in-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12200,7 +12200,7 @@ error E3207: <fragment>:70:3: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ag-l15-wn-union-plain-linear -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l15-wn-union-plain-linear` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l15-wn-union-plain-linear` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12272,7 +12272,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l17-plain-nonlinear-new-record-pushed -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l17-plain-nonlinear-new-record-pushed` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l17-plain-nonlinear-new-record-pushed` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12354,7 +12354,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-l18-plain-nonlinear-returned-from-modify -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `l18-plain-nonlinear-returned-from-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `l18-plain-nonlinear-returned-from-modify` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12429,7 +12429,7 @@ error E3204: <fragment>:62:15: 'out' holds a record from outside 'm1' and cannot
 ```
 
 <!-- test: model-hand-ag-l19-plain-nonlinear-into-outer-var -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `l19-plain-nonlinear-into-outer-var` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `l19-plain-nonlinear-into-outer-var` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12506,7 +12506,7 @@ error E3197: <fragment>:64:20: cannot write through a read-only value while 'm1'
 ```
 
 <!-- test: model-hand-ag-l20-plain-nonlinear-into-outer-var-then-used-after -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `l20-plain-nonlinear-into-outer-var-then-used-after` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `l20-plain-nonlinear-into-outer-var-then-used-after` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12584,7 +12584,7 @@ error E3197: <fragment>:63:20: cannot write through a read-only value while 'm1'
 ```
 
 <!-- test: model-hand-ag-l21-plain-nonlinear-into-outer-record-field -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `l21-plain-nonlinear-into-outer-record-field` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `l21-plain-nonlinear-into-outer-record-field` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12668,7 +12668,7 @@ error E3197: <fragment>:71:15: cannot write 'keep' through 'o', which is read-on
 ```
 
 <!-- test: model-hand-ag-l22-plain-nonlinear-into-outer-record-field-via-fn -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `l22-plain-nonlinear-into-outer-record-field-via-fn` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `l22-plain-nonlinear-into-outer-record-field-via-fn` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12756,7 +12756,7 @@ error E3207: <fragment>:75:25: 'keepIn' needs a writable parameter 'w' at line 6
 ```
 
 <!-- test: model-hand-ag-l24-plain-payload-frozen -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l24-plain-payload-frozen` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `l24-plain-payload-frozen` of redteamAG.hand_ag8, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12829,7 +12829,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-f2-win-copy-no -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `f2-win-copy-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `f2-win-copy-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12871,7 +12871,7 @@ error E3203: <fragment>:30:22: 'h' is open in 'm1' and cannot be moved or consum
 ```
 
 <!-- test: model-hand-ah-f2-win-call-no -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-call-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-call-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12920,7 +12920,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-f2-win-assignslot-no -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-assignslot-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-assignslot-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12962,7 +12962,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-f2-win-copyslot-no -->
-The model (`core-m3w-fa24`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `f2-win-copyslot-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `f2-win-copyslot-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13004,7 +13004,7 @@ error E3214: <fragment>:30:18: cannot bind '_' to a unique value read out of a f
 ```
 
 <!-- test: model-hand-ah-f2-win-nothing-rd -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-nothing-rd` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-nothing-rd` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13046,7 +13046,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-f2-win-nothing-wr -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-nothing-wr` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-nothing-wr` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13088,7 +13088,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-f2-win-nothing-no -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-nothing-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f2-win-nothing-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13130,7 +13130,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-m-cond-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-cond-store` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-cond-store` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13236,7 +13236,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-m-svc-wk -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `m-svc-wk` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `m-svc-wk` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13358,7 +13358,7 @@ error E3207: <fragment>:89:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ah-m-svc-wi -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-svc-wi` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-svc-wi` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13480,7 +13480,7 @@ error E3207: <fragment>:89:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ah-m-call-same -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-call-same` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-call-same` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13559,7 +13559,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-m-call-nested-open -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `m-call-nested-open` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `m-call-nested-open` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13638,7 +13638,7 @@ error E3199: <fragment>:67:5: 'g' cannot be opened: the value that holds it is r
 ```
 
 <!-- test: model-hand-ah-w-modify-field-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-store` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-store` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13737,7 +13737,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-field-keepfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-keepfn` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-keepfn` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13840,7 +13840,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-field-store-iso-slot -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13939,7 +13939,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-field-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-field-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14042,7 +14042,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-store` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-store` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14133,7 +14133,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-keepfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-keepfn` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-keepfn` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14228,7 +14228,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-store-iso-slot -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14319,7 +14319,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-modify-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14414,7 +14414,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-w-nested-modify-modify-outer-store -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-store` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-store` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14508,7 +14508,7 @@ error E3199: <fragment>:78:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-w-nested-modify-modify-outer-keepfn -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-keepfn` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-keepfn` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14606,7 +14606,7 @@ error E3199: <fragment>:82:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-w-nested-modify-modify-outer-write -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-write` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-write` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14700,7 +14700,7 @@ error E3199: <fragment>:78:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-w-nested-modify-modify-outer-store-iso-slot -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14794,7 +14794,7 @@ error E3199: <fragment>:78:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-w-nested-modify-modify-outer-take -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-nested-modify-modify-outer-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14892,7 +14892,7 @@ error E3199: <fragment>:82:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-w-beh-store-iso-slot -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-beh-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-beh-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15008,7 +15008,7 @@ error E3207: <fragment>:83:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ah-w-beh-take -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-beh-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-beh-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15128,7 +15128,7 @@ error E3207: <fragment>:83:4: this linear value comes from outside 'm1', where i
 ```
 
 <!-- test: model-hand-ah-w-call-arg-match2 -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-call-arg-match2` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-call-arg-match2` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15207,7 +15207,7 @@ error E3199: <fragment>:67:19: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-f1-whole-record-into-window-array -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-whole-record-into-window-array` of redteamAH.hand_ah5, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `f1-whole-record-into-window-array` of redteamAH.hand_ah5, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15281,7 +15281,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-wg-recovered-local-kept-in-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wg-recovered-local-kept-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wg-recovered-local-kept-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15360,7 +15360,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-wg-recovered-local-in-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wg-recovered-local-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `wg-recovered-local-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15439,7 +15439,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-wg-recovered-local-in-window-outer-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `wg-recovered-local-in-window-outer-alias` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `wg-recovered-local-in-window-outer-alias` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15511,7 +15511,7 @@ error E3196: <fragment>:61:17: cannot store a read-only 'Bx' into 'Mp.m1.y' whil
 ```
 
 <!-- test: model-hand-ah-wg-recover-outer-in-window -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `wg-recover-outer-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `wg-recover-outer-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15586,7 +15586,7 @@ error E3196: <fragment>:60:17: cannot store a read-only 'Bx' into 'Mp.m1.y' whil
 ```
 
 <!-- test: model-hand-ah-wg-recover-outer-send-in-window -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `wg-recover-outer-send-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `wg-recover-outer-send-in-window` of redteamAH.hand_ah6, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15639,7 +15639,7 @@ error E3200: <fragment>:42:14: 'w' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-ai-i1-for-isolated-array -->
-The model (`core-m3w-fa24`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `i1-for-isolated-array` of redteamAI.hand_ai4, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `i1-for-isolated-array` of redteamAI.hand_ai4, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15683,7 +15683,7 @@ error E3198: <fragment>:31:22: 'o' is isolated and cannot be read outside a bloc
 ```
 
 <!-- test: model-hand-ai-o1-open-then-consume-branches -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o1-open-then-consume-branches` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o1-open-then-consume-branches` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15732,7 +15732,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ai-o2-open-then-consume-branches-read-after -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o2-open-then-consume-branches-read-after` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o2-open-then-consume-branches-read-after` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15789,7 +15789,7 @@ error E3102: <fragment>:47:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ai-o3-open-both-branches-consume-after -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o3-open-both-branches-consume-after` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o3-open-both-branches-consume-after` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15841,7 +15841,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ai-o4-consume-in-own-modify-arm -->
-The model (`core-m3w-fa24`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `o4-consume-in-own-modify-arm` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `o4-consume-in-own-modify-arm` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15879,7 +15879,7 @@ error E3198: <fragment>:26:21: 'o' is isolated and cannot be read outside a bloc
 ```
 
 <!-- test: model-hand-ai-o5-own-modify-then-bare -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o5-own-modify-then-bare` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o5-own-modify-then-bare` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15921,7 +15921,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ai-o7-own-modify-other-var-bare -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `o7-own-modify-other-var-bare` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `o7-own-modify-other-var-bare` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15956,7 +15956,7 @@ error E3203: <fragment>:23:15: 'u' is open in 'm1' and cannot be reassigned ther
 ```
 
 <!-- test: model-hand-ai-h3-control-outer-local -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h3-control-outer-local` of redteamAI.hand_ai7, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h3-control-outer-local` of redteamAI.hand_ai7, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -15998,7 +15998,7 @@ error E3199: <fragment>:25:10: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ai-h3-control-local-in-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `h3-control-local-in-window` of redteamAI.hand_ai7, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `h3-control-local-in-window` of redteamAI.hand_ai7, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16040,7 +16040,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-aj-byref-mut-word -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `byref-mut-word` of redteamAJ.hand_aj2, in capmodel `reggio/REPORTRTAJ.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `byref-mut-word` of redteamAJ.hand_aj2, in capmodel `reggio/REPORTRTAJ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16090,7 +16090,7 @@ error E3197: <fragment>:29:3: cannot write 'keep' through 'o', which is read-onl
 ```
 
 <!-- test: model-hand-aj-ovo-int -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ovo-int` of redteamAJ.hand_aj5, in capmodel `reggio/REPORTRTAJ.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ovo-int` of redteamAJ.hand_aj5, in capmodel `reggio/REPORTRTAJ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16121,7 +16121,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-aj-control-plain-param -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `control-plain-param` of redteamAJ.hand_aj6, in capmodel `reggio/REPORTRTAJ.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `control-plain-param` of redteamAJ.hand_aj6, in capmodel `reggio/REPORTRTAJ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16176,7 +16176,7 @@ error E3199: <fragment>:36:10: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-aj-control-outer-var -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `control-outer-var` of redteamAJ.hand_aj6, in capmodel `reggio/REPORTRTAJ.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `control-outer-var` of redteamAJ.hand_aj6, in capmodel `reggio/REPORTRTAJ.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16239,7 +16239,7 @@ error E3199: <fragment>:41:10: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ak-isoparam-in-window-var -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `isoparam-in-window-var` of redteamAK.hand_ak1, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `isoparam-in-window-var` of redteamAK.hand_ak1, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16295,7 +16295,7 @@ error E3102: <fragment>:46:9: use of moved value 'o': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ak-isoparam-in-window-param -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `isoparam-in-window-param` of redteamAK.hand_ak1, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `isoparam-in-window-param` of redteamAK.hand_ak1, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16354,7 +16354,7 @@ error E3102: <fragment>:45:9: use of moved value 'o': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ak-byref-param-shadowed -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `byref-param-shadowed` of redteamAK.hand_ak1, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `byref-param-shadowed` of redteamAK.hand_ak1, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16410,7 +16410,7 @@ error E3199: <fragment>:36:10: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ak-field-path-outer-iso-slot -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `field-path-outer-iso-slot` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `field-path-outer-iso-slot` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16462,7 +16462,7 @@ error E3199: <fragment>:39:11: 'w.b' cannot be swapped: the value that holds it 
 ```
 
 <!-- test: model-hand-ak-field-path-outer-iso-var-slot -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `field-path-outer-iso-var-slot` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `field-path-outer-iso-var-slot` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16505,7 +16505,7 @@ error E3199: <fragment>:31:16: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ak-field-path-outer-iso-var-slot-opened -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `field-path-outer-iso-var-slot-opened` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `field-path-outer-iso-var-slot-opened` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16550,7 +16550,7 @@ error E3199: <fragment>:31:10: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ak-byref-linear-in-window-write -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `byref-linear-in-window-write` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `byref-linear-in-window-write` of redteamAK.hand_ak2, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16628,7 +16628,7 @@ error E3224: <fragment>:67:2: this linear value is only lent to this code (a par
 ```
 
 <!-- test: model-hand-ak-svc-behave-param-open-state-window -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `svc-behave-param-open-state-window` of redteamAK.hand_ak3, in capmodel `reggio/REPORTRTAK.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `svc-behave-param-open-state-window` of redteamAK.hand_ak3, in capmodel `reggio/REPORTRTAK.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16687,7 +16687,7 @@ error E3199: <fragment>:35:11: 'r' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-al-d-direct -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-direct` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-direct` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16758,7 +16758,7 @@ error E3200: <fragment>:59:10: 'stash(q) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-d-two-step -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-two-step` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-two-step` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16833,7 +16833,7 @@ error E3200: <fragment>:63:10: 'stash2(q) as isolated Ko' is not isolated: only 
 ```
 
 <!-- test: model-hand-al-d-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-part` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-part` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16904,7 +16904,7 @@ error E3200: <fragment>:59:10: 'part(q) as isolated Bx' is not isolated: only a 
 ```
 
 <!-- test: model-hand-al-d-recv-mkk -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-recv-mkK` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-recv-mkK` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -16971,7 +16971,7 @@ error E3200: <fragment>:55:10: 'q.mkK() as isolated Ko' is not isolated: only a 
 ```
 
 <!-- test: model-hand-al-d-recv-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-recv-part` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-recv-part` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17038,7 +17038,7 @@ error E3200: <fragment>:55:10: 'q.part() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-d-cond-arg -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-cond-arg` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-cond-arg` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17111,7 +17111,7 @@ error E3200: <fragment>:61:10: 'stash((q if c != 0 else q2)) as isolated Ko' is 
 ```
 
 <!-- test: model-hand-al-d-cond-recv -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-cond-recv` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-cond-recv` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17180,7 +17180,7 @@ error E3200: <fragment>:57:10: '(q if c != 0 else q2).mkK() as isolated Ko' is n
 ```
 
 <!-- test: model-hand-al-d-param-store -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-param-store` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-param-store` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17253,7 +17253,7 @@ error E3200: <fragment>:61:10: 'o as isolated Ko' is not isolated: only a clean 
 ```
 
 <!-- test: model-hand-al-d-new-direct -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-new-direct` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-new-direct` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17320,7 +17320,7 @@ error E3200: <fragment>:55:10: 'Ko.create(q.b, n: 1) as isolated Ko' is not isol
 ```
 
 <!-- test: model-hand-al-d-new-of-call -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-new-of-call` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-new-of-call` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17391,7 +17391,7 @@ error E3200: <fragment>:59:10: 'Ko.create(part(q), n: 1) as isolated Ko' is not 
 ```
 
 <!-- test: model-hand-al-d-iso-param -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-iso-param` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-iso-param` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17452,7 +17452,7 @@ error E3200: <fragment>:50:11: 'stash(q)' is not isolated: only a clean call, a 
 ```
 
 <!-- test: model-hand-al-d-return-iso -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-return-iso` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-return-iso` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17527,7 +17527,7 @@ error E3200: <fragment>:57:9: 'stash(t)' is not isolated: only a clean call, a `
 ```
 
 <!-- test: model-hand-al-d-return-iso-local -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-return-iso-local` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `d-return-iso-local` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17603,7 +17603,7 @@ error E3200: <fragment>:60:9: 'r' is not isolated: only a clean call, a `swap` o
 ```
 
 <!-- test: model-hand-al-c-outer-rec -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-outer-rec` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-outer-rec` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17683,7 +17683,7 @@ error E3200: <fragment>:68:10: 'sOq(o) as isolated Ko' is not isolated: only a c
 ```
 
 <!-- test: model-hand-al-c-outer-union -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-outer-union` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-outer-union` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17773,7 +17773,7 @@ error E3200: <fragment>:75:10: 'sOw(o) as isolated Bx' is not isolated: only a c
 ```
 
 <!-- test: model-hand-al-c-outer-arr -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-outer-arr` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-outer-arr` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17861,7 +17861,7 @@ error E3200: <fragment>:74:10: 'sOa(o) as isolated Bx' is not isolated: only a c
 ```
 
 <!-- test: model-hand-al-c-array-direct -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-array-direct` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-array-direct` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -17940,7 +17940,7 @@ error E3200: <fragment>:65:10: 'sA(a) as isolated Bx' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-al-f-field-arg -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-field-arg` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-field-arg` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18028,7 +18028,7 @@ error E3200: <fragment>:76:10: 'stash(h.q) as isolated Ko' is not isolated: only
 ```
 
 <!-- test: model-hand-al-f-field-recv -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-field-recv` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-field-recv` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18112,7 +18112,7 @@ error E3200: <fragment>:72:10: 'h.q.mkK() as isolated Ko' is not isolated: only 
 ```
 
 <!-- test: model-hand-al-f-whole-holder -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `f-whole-holder` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `f-whole-holder` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18200,7 +18200,7 @@ error E3200: <fragment>:76:10: 'sH(h) as isolated Ko' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-al-f-param-field -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-param-field` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-param-field` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18292,7 +18292,7 @@ error E3200: <fragment>:74:9: 'stash(h.q)' is not isolated: only a clean call, a
 ```
 
 <!-- test: model-hand-al-f-self-field -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-self-field` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f-self-field` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18375,7 +18375,7 @@ error E3200: <fragment>:46:10: 'stash(self.q)' is not isolated: only a clean cal
 ```
 
 <!-- test: model-hand-al-f-self -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `f-self` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `f-self` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18441,7 +18441,7 @@ error E3200: <fragment>:29:10: 'mkT(self)' is not isolated: only a clean call, a
 ```
 
 <!-- test: model-hand-al-b-for-binding -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `b-for-binding` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `b-for-binding` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18518,7 +18518,7 @@ error E3200: <fragment>:62:11: 'stash(t) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-b-arm-param-ret -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `b-arm-param-ret` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `b-arm-param-ret` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18605,7 +18605,7 @@ error E3200: <fragment>:64:23: 'stash(t)' is not isolated: only a clean call, a 
 ```
 
 <!-- test: model-hand-al-b-for-param-ret -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `b-for-param-ret` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `b-for-param-ret` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18687,7 +18687,7 @@ error E3200: <fragment>:59:10: 'stash(t)' is not isolated: only a clean call, a 
 ```
 
 <!-- test: model-hand-al-u-unique-result-iso -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `u-unique-result-iso` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `u-unique-result-iso` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18758,7 +18758,7 @@ error E3200: <fragment>:59:10: 'wrap(q) as isolated Tq' is not isolated: only a 
 ```
 
 <!-- test: model-hand-al-r-renamed -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-renamed` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-renamed` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18830,7 +18830,7 @@ error E3200: <fragment>:60:10: 'stash(q) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-r-refilled -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-refilled` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-refilled` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18907,7 +18907,7 @@ error E3200: <fragment>:65:10: 'stash(q) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-r-moved-branch -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-moved-branch` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-moved-branch` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -18987,7 +18987,7 @@ error E3200: <fragment>:68:10: 'stash(q) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-r-loop -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-loop` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r-loop` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19062,7 +19062,7 @@ error E3200: <fragment>:61:11: 'stash(q) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-al-k-closed -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-closed` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-closed` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19115,7 +19115,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-al-k-moved -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `k-moved` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `k-moved` of redteamAL/hand_al1.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19185,7 +19185,7 @@ error E3200: <fragment>:59:10: 'eatK(q) as isolated Ko' is not isolated: only a 
 ```
 
 <!-- test: model-hand-al-h1-min -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-min` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-min` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19252,7 +19252,7 @@ error E3200: <fragment>:55:10: 'stash((q if 1 != 0 else q)) as isolated Ko' is n
 ```
 
 <!-- test: model-hand-al-h1-two -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-two` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-two` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19320,7 +19320,7 @@ error E3200: <fragment>:56:10: 'stash((q if 1 != 0 else q2)) as isolated Ko' is 
 ```
 
 <!-- test: model-hand-al-h1-fresh-arm -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-fresh-arm` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-fresh-arm` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19387,7 +19387,7 @@ error E3200: <fragment>:55:10: 'stash((q if 1 != 0 else Tq.create(1, b: Bx.creat
 ```
 
 <!-- test: model-hand-al-h1-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-part` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-part` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19454,7 +19454,7 @@ error E3200: <fragment>:55:10: 'part((q if 1 != 0 else q)) as isolated Bx' is no
 ```
 
 <!-- test: model-hand-al-h1-recv -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-recv` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-recv` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19517,7 +19517,7 @@ error E3200: <fragment>:51:10: '(q if 1 != 0 else q).mkK() as isolated Ko' is no
 ```
 
 <!-- test: model-hand-al-h1-iso-param -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-iso-param` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-iso-param` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19574,7 +19574,7 @@ error E3200: <fragment>:46:11: 'stash((q if 1 != 0 else q))' is not isolated: on
 ```
 
 <!-- test: model-hand-al-h1-return-iso -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-return-iso` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-return-iso` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19645,7 +19645,7 @@ error E3200: <fragment>:55:9: 'k' is not isolated: only a clean call, a `swap` o
 ```
 
 <!-- test: model-hand-al-h1-return-iso-kept -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-return-iso-kept` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-return-iso-kept` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19728,7 +19728,7 @@ error E3200: <fragment>:63:8: 'stash((qV if 1 != 0 else qV))' is not isolated: o
 ```
 
 <!-- test: model-hand-al-h1-nested-cond -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-nested-cond` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-nested-cond` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19796,7 +19796,7 @@ error E3200: <fragment>:56:10: 'stash(((q if 1 != 0 else q2) if 1 != 0 else q2))
 ```
 
 <!-- test: model-hand-al-h1-cond-call-arm -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-cond-call-arm` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-cond-call-arm` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19863,7 +19863,7 @@ error E3200: <fragment>:55:10: '(stash(q) if 1 != 0 else stash(q)) as isolated K
 ```
 
 <!-- test: model-hand-al-h1-arm-store -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-arm-store` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-arm-store` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -19941,7 +19941,7 @@ error E3200: <fragment>:66:10: 'o as isolated Ko' is not isolated: only a clean 
 ```
 
 <!-- test: model-hand-al-h1-for-body -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-for-body` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-for-body` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20013,7 +20013,7 @@ error E3200: <fragment>:59:11: 'stash((q if 1 != 0 else q)) as isolated Ko' is n
 ```
 
 <!-- test: model-hand-al-h1-onecall -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `h1-onecall` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `h1-onecall` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20081,7 +20081,7 @@ error E3201: <fragment>:56:12: '(q if 1 != 0 else q)' is mutable outside 'k'; a 
 ```
 
 <!-- test: model-hand-al-h1-onecall-store -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `h1-onecall-store` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `h1-onecall-store` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20149,7 +20149,7 @@ error E3201: <fragment>:56:12: '(q if 1 != 0 else q)' is mutable outside 'k'; a 
 ```
 
 <!-- test: model-hand-al-h1-param-store -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-param-store` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-param-store` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20218,7 +20218,7 @@ error E3200: <fragment>:57:10: 'o as isolated Ko' is not isolated: only a clean 
 ```
 
 <!-- test: model-hand-al-h1-wrapper-field -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `h1-wrapper-field` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `h1-wrapper-field` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20294,7 +20294,7 @@ error E3214: <fragment>:64:21: cannot join a unique value read out of a field or
 ```
 
 <!-- test: model-hand-al-k-closed-cond -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-closed-cond` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `k-closed-cond` of redteamAL/hand_al2.txt, in capmodel `reggio/REPORTRTAL.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20346,8 +20346,114 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-al-h1-minimal -->
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-minimal` of redteamAL/hole_h1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tq is unique
+	var b as Bx
+
+	static function create(b Bx) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Tq'
+
+type Sb
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(bV isolated Bx)
+		modify bV 'm1'
+			bV.n = 9
+		end 'm1'
+	end 'take'
+end 'Sb'
+
+function part(t Tq) returns Bx
+	return t.b
+end 'part'
+
+function main() returns ExitCode
+	let s = spawn Sb.create(0)
+	let q = Tq.create(Bx.create(2))
+	let k = part((q if 1 != 0 else q)) as isolated Bx
+	try s.take(k) otherwise ignore
+	q.b.n = 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:41:10: 'part((q if 1 != 0 else q)) as isolated Bx' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
+<!-- test: model-hand-al-h1-minimal-control-bare -->
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `h1-minimal-control-bare` of redteamAL/hole_h1.txt, in capmodel `reggio/REPORTRTAL.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tq is unique
+	var b as Bx
+
+	static function create(b Bx) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Tq'
+
+type Sb
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(bV isolated Bx)
+		modify bV 'm1'
+			bV.n = 9
+		end 'm1'
+	end 'take'
+end 'Sb'
+
+function part(t Tq) returns Bx
+	return t.b
+end 'part'
+
+function main() returns ExitCode
+	let s = spawn Sb.create(0)
+	let q = Tq.create(Bx.create(2))
+	let k = part(q) as isolated Bx
+	try s.take(k) otherwise ignore
+	q.b.n = 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:41:10: 'part(q) as isolated Bx' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
 <!-- test: model-hand-am-un-wrap-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `un-wrap-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `un-wrap-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20427,7 +20533,7 @@ error E3200: <fragment>:68:10: 'partU(UQ.have(q)) as isolated Bx' is not isolate
 ```
 
 <!-- test: model-hand-am-un-wrap-cond -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `un-wrap-cond` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `un-wrap-cond` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20506,7 +20612,7 @@ error E3200: <fragment>:67:10: 'partU(UQ.have((q if 1 != 0 else q))) as isolated
 ```
 
 <!-- test: model-hand-am-un-wrap-bshared -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `un-wrap-bshared` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `un-wrap-bshared` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20585,7 +20691,7 @@ error E3200: <fragment>:67:10: 'partU(UQ.have(Tq.create(1, b: bV))) as isolated 
 ```
 
 <!-- test: model-hand-am-fp-oq-part -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fp-oq-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fp-oq-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20665,7 +20771,7 @@ error E3200: <fragment>:68:10: 'part(o.q) as isolated Bx' is not isolated: only 
 ```
 
 <!-- test: model-hand-am-fp-oq-recv -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fp-oq-recv` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fp-oq-recv` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20741,7 +20847,7 @@ error E3200: <fragment>:64:10: 'o.q.mkK() as isolated Ko' is not isolated: only 
 ```
 
 <!-- test: model-hand-am-fp-oq-part-recv -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fp-oq-part-recv` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fp-oq-part-recv` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20817,7 +20923,7 @@ error E3200: <fragment>:64:10: 'o.q.part() as isolated Bx' is not isolated: only
 ```
 
 <!-- test: model-hand-am-fp-oq-idb -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `fp-oq-idB` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `fp-oq-idB` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20897,7 +21003,7 @@ error E3200: <fragment>:68:10: 'idB(o.q.b) as isolated Bx' is not isolated: only
 ```
 
 <!-- test: model-hand-am-rc-part-idb -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `rc-part-idB` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `rc-part-idB` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -20968,7 +21074,7 @@ error E3200: <fragment>:59:10: 'idB(q.part()) as isolated Bx' is not isolated: o
 ```
 
 <!-- test: model-hand-am-rc-me -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `rc-me` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `rc-me` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21025,7 +21131,7 @@ error E3200: <fragment>:45:10: 'partM(q.me()) as isolated Bx' is not isolated: o
 ```
 
 <!-- test: model-hand-am-rc-me-consuming -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-me-consuming` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-me-consuming` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21084,7 +21190,7 @@ error E3102: <fragment>:46:16: use of moved value 'q': its ownership moved to an
 ```
 
 <!-- test: model-hand-am-rc-consuming-part -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21139,7 +21245,7 @@ error E3102: <fragment>:42:10: use of moved value 'q': its ownership moved to an
 ```
 
 <!-- test: model-hand-am-rc-consuming-part-first -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-part-first` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-part-first` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21192,7 +21298,7 @@ error E3102: <fragment>:41:10: use of moved value 'q': its ownership moved to an
 ```
 
 <!-- test: model-hand-am-rc-consuming-bshared -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-bshared` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3102, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-bshared` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21247,7 +21353,7 @@ error E3102: <fragment>:42:10: use of moved value 'q': its ownership moved to an
 ```
 
 <!-- test: model-hand-am-rc-consuming-cond -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3200, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-cond` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3200, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `rc-consuming-cond` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21301,7 +21407,7 @@ error E3200: <fragment>:42:10: '(q if 1 != 0 else q2).take() as isolated Bx' is 
 ```
 
 <!-- test: model-hand-am-id-part-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-part-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-part-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21377,7 +21483,7 @@ error E3200: <fragment>:64:10: 'part(idT(q)) as isolated Bx' is not isolated: on
 ```
 
 <!-- test: model-hand-am-id-part-after -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-part-after` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-part-after` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21452,7 +21558,7 @@ error E3200: <fragment>:63:10: 'part(idT(q)) as isolated Bx' is not isolated: on
 ```
 
 <!-- test: model-hand-am-id-keep-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-keep-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-keep-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21536,7 +21642,7 @@ error E3200: <fragment>:72:10: 'keepW(idT(qV)) as isolated Wq' is not isolated: 
 ```
 
 <!-- test: model-hand-am-id-cond-part -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `id-cond-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `id-cond-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21612,7 +21718,7 @@ error E3200: <fragment>:64:10: 'part(idT((q if 1 != 0 else q))) as isolated Bx' 
 ```
 
 <!-- test: model-hand-am-id-bshared -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `id-bshared` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `id-bshared` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21687,7 +21793,7 @@ error E3200: <fragment>:63:10: 'part(idT(Tq.create(1, b: bV))) as isolated Bx' i
 ```
 
 <!-- test: model-hand-am-nest-stash-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `nest-stash-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `nest-stash-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21762,7 +21868,7 @@ error E3200: <fragment>:63:10: 'Ko.create(idB(part(q)), n: 1) as isolated Ko' is
 ```
 
 <!-- test: model-hand-am-nest-idb-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `nest-idB-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `nest-idB-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21837,7 +21943,7 @@ error E3200: <fragment>:63:10: 'idB(part(q)) as isolated Bx' is not isolated: on
 ```
 
 <!-- test: model-hand-am-kt-b-direct -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-b-direct` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-b-direct` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21916,7 +22022,7 @@ error E3200: <fragment>:67:10: 'keepW(Tq.create(1, b: bV)) as isolated Wq' is no
 ```
 
 <!-- test: model-hand-am-kt-b-alias-before -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-alias-before` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-alias-before` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -21996,7 +22102,7 @@ error E3200: <fragment>:68:10: 'keepW(Tq.create(1, b: bV)) as isolated Wq' is no
 ```
 
 <!-- test: model-hand-am-kt-b-holder -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-holder` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-holder` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22075,7 +22181,7 @@ error E3200: <fragment>:67:10: 'keepW(Tq.create(1, b: o.keep)) as isolated Wq' i
 ```
 
 <!-- test: model-hand-am-kt-b-written -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-b-written` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-b-written` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22155,7 +22261,7 @@ error E3200: <fragment>:68:10: 'keepW(Tq.create(1, b: bV)) as isolated Wq' is no
 ```
 
 <!-- test: model-hand-am-kt-b-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-b-twice` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-b-twice` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22234,7 +22340,7 @@ error E3200: <fragment>:67:10: 'keepW(Tq.create(bV.n, b: bV)) as isolated Wq' is
 ```
 
 <!-- test: model-hand-am-kt-b-mkfn -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-mkfn` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-mkfn` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22318,7 +22424,7 @@ error E3200: <fragment>:72:10: 'keepW(mkT(bV)) as isolated Wq' is not isolated: 
 ```
 
 <!-- test: model-hand-am-kt-b-param -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-param` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-b-param` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22401,7 +22507,7 @@ error E3200: <fragment>:65:9: 'keepW(Tq.create(1, b: bV))' is not isolated: only
 ```
 
 <!-- test: model-hand-am-kt-refill -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-refill` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-refill` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22482,7 +22588,7 @@ error E3200: <fragment>:69:10: 'keepW(Tq.create(1, b: c)) as isolated Wq' is not
 ```
 
 <!-- test: model-hand-am-kt-refill2 -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-refill2` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-refill2` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22563,7 +22669,7 @@ error E3200: <fragment>:69:10: 'keepW(Tq.create(1, b: bV)) as isolated Wq' is no
 ```
 
 <!-- test: model-hand-am-kt-cond-b -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-cond-b` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `kt-cond-b` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22643,7 +22749,7 @@ error E3200: <fragment>:68:10: 'keepW(Tq.create(1, b: (bV if 1 != 0 else c))) as
 ```
 
 <!-- test: model-hand-am-kt-cond-b-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-cond-b-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `kt-cond-b-alias` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22723,7 +22829,7 @@ error E3200: <fragment>:68:10: 'keepW(Tq.create(1, b: (bV if 1 != 0 else bV))) a
 ```
 
 <!-- test: model-hand-am-ma-union-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ma-union-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ma-union-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22805,7 +22911,7 @@ error E3200: <fragment>:67:10: 'partU(u) as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-am-ma-cond-subject -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ma-cond-subject` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ma-cond-subject` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22888,7 +22994,7 @@ error E3200: <fragment>:68:10: 'partU((u if 1 != 0 else u2)) as isolated Bx' is 
 ```
 
 <!-- test: model-hand-am-ma-for-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ma-for-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ma-for-part` of redteamAM/hand_am1.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22963,7 +23069,7 @@ error E3200: <fragment>:62:11: 'part(t) as isolated Bx' is not isolated: only a 
 ```
 
 <!-- test: model-hand-am-ca-part-sync -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ca-part-sync` of redteamAM/hand_am2.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ca-part-sync` of redteamAM/hand_am2.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23020,7 +23126,7 @@ error E3200: <fragment>:46:10: 'part(q) as isolated Bx' is not isolated: only a 
 ```
 
 <!-- test: model-hand-am-ca-keep-sync -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ca-keep-sync` of redteamAM/hand_am2.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ca-keep-sync` of redteamAM/hand_am2.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23085,7 +23191,7 @@ error E3200: <fragment>:54:10: 'keepW(qV) as isolated Wq' is not isolated: only 
 ```
 
 <!-- test: model-hand-am-in-param-part-sync -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `in-param-part-sync` of redteamAM/hand_am2.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `in-param-part-sync` of redteamAM/hand_am2.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23148,7 +23254,7 @@ error E3200: <fragment>:44:9: 'part(t)' is not isolated: only a clean call, a `s
 ```
 
 <!-- test: model-hand-am-li-take-first -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-take-first` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-take-first` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23211,7 +23317,7 @@ error E3200: <fragment>:52:10: 'q.take() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-am-li-take-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-take-alias` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-take-alias` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23276,7 +23382,7 @@ error E3200: <fragment>:53:10: 'q.take() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-am-li-take-cond -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-COND`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `li-take-cond` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `li-take-cond` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23340,7 +23446,7 @@ error E3200: <fragment>:53:10: '(q if 1 != 0 else q2).take() as isolated Bx' is 
 ```
 
 <!-- test: model-hand-am-li-look -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-look` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-look` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23405,7 +23511,7 @@ error E3200: <fragment>:52:10: 'q.look() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-am-li-fn-take -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-fn-take` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-fn-take` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23472,7 +23578,7 @@ error E3200: <fragment>:56:10: 'tk(q) as isolated Bx' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-am-li-fn-take-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-fn-take-alias` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-fn-take-alias` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23541,7 +23647,7 @@ error E3200: <fragment>:57:10: 'tk(q) as isolated Bx' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-am-li-param-owned -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-param-owned` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `li-param-owned` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23610,7 +23716,7 @@ error E3200: <fragment>:50:10: 'l.take() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-am-ip-swap-out -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ip-swap-out` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ip-swap-out` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23663,7 +23769,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-am-ip-swap-out-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ip-swap-out-alias` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ip-swap-out-alias` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23718,7 +23824,7 @@ error E3200: <fragment>:43:13: 'q' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-am-ip-plain-result -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ip-plain-result` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `ip-plain-result` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23783,7 +23889,7 @@ error E3200: <fragment>:53:13: 'q' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-am-cl-plain-holds-closed -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `cl-plain-holds-closed` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `cl-plain-holds-closed` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23846,7 +23952,7 @@ error E3200: <fragment>:51:10: 'pp(p) as isolated Bx' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-am-cl-plain-holds-closed2 -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `cl-plain-holds-closed2` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `cl-plain-holds-closed2` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23916,7 +24022,7 @@ error E3200: <fragment>:58:10: 'pp(pV) as isolated Bx' is not isolated: only a c
 ```
 
 <!-- test: model-hand-am-cl-union-closed-head -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `cl-union-closed-head` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `cl-union-closed-head` of redteamAM/hand_am3.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -23983,7 +24089,7 @@ error E3200: <fragment>:51:10: 'pu(u) as isolated Bx' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-am-ha-handle-closed -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ha-handle-closed` of redteamAM/hand_am4.txt, in capmodel `reggio/REPORTRTAM.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ha-handle-closed` of redteamAM/hand_am4.txt, in capmodel `reggio/REPORTRTAM.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24049,7 +24155,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-m1-iso-modify-nb-moves-whole -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m1-iso-modify-nb-moves-whole` of redteamAN.hand_an1, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m1-iso-modify-nb-moves-whole` of redteamAN.hand_an1, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24098,7 +24204,7 @@ error E3214: <fragment>:37:20: cannot hand 'k' to an `isolated` position: 'k' is
 ```
 
 <!-- test: model-hand-an-n2-modify-holder-nb -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n2-modify-holder-nb` of redteamAN.hand_an1, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n2-modify-holder-nb` of redteamAN.hand_an1, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24141,7 +24247,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-s1-call-outer-plain-payload-stored -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-call-outer-plain-payload-stored` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-call-outer-plain-payload-stored` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24199,7 +24305,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-s1-call-outer-payload-stored-iso -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-call-outer-payload-stored-iso` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s1-call-outer-payload-stored-iso` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24257,7 +24363,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-p1-call-plain-payload-send -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-call-plain-payload-send` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-call-plain-payload-send` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24307,7 +24413,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-p1-swap-state -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-swap-state` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-swap-state` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24363,7 +24469,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-p1-cond-open-and-closed -->
-The model (`core-m3w-fa24`) refuses it by `R4-PICK`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `p1-cond-open-and-closed` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-PICK`; the compiler refuses it with E3200. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `p1-cond-open-and-closed` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24409,8 +24515,96 @@ end 'main'
 error E3200: <fragment>:33:12: a join of an isolated value with data that is not isolated is refused: every arm must be isolated, or a fresh value
 ```
 
+<!-- test: model-hand-ap-w1-modify-nested-decl -->
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w1-modify-nested-decl` of redteamAP.hand_ap4, in capmodel `reggio/REPORTRTAP.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function isoUT(x isolated UT)
+	let _ = x
+	let _ = 1 as Num
+end 'isoUT'
+
+function main() returns ExitCode
+	let g = Bx.create(1) as isolated Bx
+	let g2 = Bx.create(2) as isolated Bx
+	modify g 'm1'
+		let u = UT.have(Tk.create(1))
+		modify g2 'm2'
+			isoUT(u)
+		end 'm2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:35:10: 'g2' cannot be opened: the value that holds it is read-only while 'm1' is open
+```
+
+<!-- test: model-hand-ar-z-modify-store-iso-main -->
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `z-modify-store-iso-main` of redteamAR.hand_ar0, in capmodel `reggio/REPORTRTAR.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hd is unique
+	var u as UT
+
+	static function create(u UT) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Hd'
+
+function main() returns ExitCode
+	let g = Hd.create(UT.none) as isolated Hd
+	let x = UT.have(Tk.create(1)) as isolated UT
+	modify g 'm1'
+		g.u = x
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:29:9: cannot store an isolated 'UT' into 'u', which holds a mutable 'UT'; `merge` it first
+```
+
 <!-- test: model-hand-fa15-m-ub-let-otherwin-use -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-ub-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-ub-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24505,7 +24699,7 @@ error E3199: <fragment>:83:23: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-ub-let-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ub-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ub-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24604,7 +24798,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-ub-let-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-ub-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-ub-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24704,7 +24898,7 @@ error E3102: <fragment>:88:26: use of moved value 'o': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa15-m-ub-let-otherwin-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-ub-let-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-ub-let-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24799,7 +24993,7 @@ error E3199: <fragment>:83:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-ub-param-otherwin-use -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-ub-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-ub-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24897,7 +25091,7 @@ error E3199: <fragment>:82:23: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-ub-param-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ub-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ub-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -24999,7 +25193,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-ub-param-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-ub-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-ub-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25102,7 +25296,7 @@ error E3102: <fragment>:87:26: use of moved value 'o': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa15-m-ub-param-otherwin-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-ub-param-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-ub-param-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25200,7 +25394,7 @@ error E3199: <fragment>:82:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-mq-let-otherwin-use -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-mq-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-mq-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25295,7 +25489,7 @@ error E3199: <fragment>:83:23: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-mq-let-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-mq-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-mq-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25394,7 +25588,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-mq-let-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-mq-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-mq-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25494,7 +25688,7 @@ error E3102: <fragment>:88:26: use of moved value 'o': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa15-m-mq-let-otherwin-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-mq-let-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-mq-let-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25589,7 +25783,7 @@ error E3199: <fragment>:83:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-mq-param-otherwin-use -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-mq-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-mq-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25687,7 +25881,7 @@ error E3199: <fragment>:82:23: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-mq-param-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-mq-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-mq-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25789,7 +25983,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-mq-param-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-mq-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-mq-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25892,7 +26086,7 @@ error E3102: <fragment>:87:26: use of moved value 'o': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa15-m-mq-param-otherwin-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-mq-param-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-mq-param-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -25990,7 +26184,7 @@ error E3199: <fragment>:82:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-pc-let-otherwin-use -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26085,7 +26279,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-pc-let-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26184,7 +26378,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-pc-let-otherwin-readfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-let-otherwin-readfn` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-let-otherwin-readfn` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26283,7 +26477,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-pc-let-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `m-pc-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `m-pc-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26383,7 +26577,7 @@ error E3200: <fragment>:88:23: 'o' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-fa15-m-pc-param-otherwin-use -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26481,7 +26675,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-pc-param-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26583,7 +26777,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-pc-param-otherwin-readfn -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-readfn` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-readfn` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26685,7 +26879,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-pc-param-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `m-pc-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `m-pc-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26788,7 +26982,7 @@ error E3200: <fragment>:87:23: 'o' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-fa15-m-ut-let-otherwin-use -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -26896,7 +27090,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-ut-let-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27008,7 +27202,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-ut-param-otherwin-use -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27119,7 +27313,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-ut-param-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27234,7 +27428,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-vc-let-otherwin-use -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-vc-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-vc-let-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27334,7 +27528,7 @@ error E3199: <fragment>:88:23: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-vc-let-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-vc-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-vc-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27438,7 +27632,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-vc-let-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-vc-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-vc-let-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27543,7 +27737,7 @@ error E3102: <fragment>:93:26: use of moved value 'o': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa15-m-vc-let-otherwin-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-vc-let-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-vc-let-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27643,7 +27837,7 @@ error E3199: <fragment>:88:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-vc-param-otherwin-use -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-vc-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-vc-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27746,7 +27940,7 @@ error E3199: <fragment>:87:23: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-m-vc-param-otherwin-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-vc-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-vc-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27853,7 +28047,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-m-vc-param-otherwin-twice -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-vc-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `m-vc-param-otherwin-twice` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -27961,7 +28155,7 @@ error E3102: <fragment>:92:26: use of moved value 'o': its ownership moved to an
 ```
 
 <!-- test: model-hand-fa15-m-vc-param-otherwin-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-vc-param-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m-vc-param-otherwin-write` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28064,7 +28258,7 @@ error E3199: <fragment>:87:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa15-o-own-modify-use -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28098,7 +28292,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-o-own-modify-reads-after -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-reads-after` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-reads-after` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28140,7 +28334,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-o-own-modify-then-consume -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-own-modify-then-consume` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `o-own-modify-then-consume` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28183,7 +28377,7 @@ error E3102: <fragment>:30:8: use of moved value 'u': its ownership moved to ano
 ```
 
 <!-- test: model-hand-fa15-o-own-modify-plain -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-plain` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-plain` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28217,7 +28411,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-c10-window-iso-store -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c10-window-iso-store` of redteamFA15.hand_fa15c, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c10-window-iso-store` of redteamFA15.hand_fa15c, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28262,7 +28456,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa15-c29-mixed-plain-arm-keep -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c29-mixed-plain-arm-keep` of redteamFA15.hand_fa15c, in capmodel `reggio/REPORTFA15.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c29-mixed-plain-arm-keep` of redteamFA15.hand_fa15c, in capmodel `reggio/REPORTFA15.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28312,7 +28506,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa16-h3-onecall -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h3-onecall` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `h3-onecall` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28368,7 +28562,7 @@ error E3199: <fragment>:40:22: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa16-h3-onestmt -->
-The model (`core-m3w-fa24`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `h3-onestmt` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ISOREAD`; the compiler refuses it with E3199. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `h3-onestmt` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28420,7 +28614,7 @@ error E3199: <fragment>:36:15: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa16-rename-let -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `rename-let` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `rename-let` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28467,7 +28661,7 @@ error E3199: <fragment>:30:10: 'p' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa16-rename-call -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `rename-call` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `rename-call` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28518,7 +28712,7 @@ error E3199: <fragment>:34:10: 'p' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa16-plain-payload-window-data -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-payload-window-data` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-payload-window-data` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28570,7 +28764,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa16-ctl-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-take` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-take` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28627,7 +28821,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa16-ctl-slot -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-slot` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-slot` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28688,7 +28882,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa16-ctl-rename-fresh -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-rename-fresh` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-rename-fresh` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28734,7 +28928,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa16-ctl-rename-then-take -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-rename-then-take` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `ctl-rename-then-take` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28784,7 +28978,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa17-w-outer-further -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-outer-further` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-outer-further` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28834,7 +29028,7 @@ error E3207: <fragment>:38:19: 'wrUT' needs a writable parameter 'x' at line 28;
 ```
 
 <!-- test: model-hand-fa17-o-plain-fresh -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-plain-fresh` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-plain-fresh` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28862,7 +29056,7 @@ error E3204: <fragment>:16:3: 'o' holds a record from outside 'm1' and cannot be
 ```
 
 <!-- test: model-hand-fa17-o-union -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-union` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-union` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28894,7 +29088,7 @@ error E3204: <fragment>:21:3: 'o' holds a union from outside 'm1' and cannot be 
 ```
 
 <!-- test: model-hand-fa17-o-iso -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-iso` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-iso` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28921,7 +29115,7 @@ error E3204: <fragment>:16:3: 'o' holds an isolated value from outside 'm1' and 
 ```
 
 <!-- test: model-hand-fa17-o-unique -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-unique` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-unique` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -28957,7 +29151,7 @@ error E3204: <fragment>:24:3: 'o' holds a unique value from outside 'm1' and can
 ```
 
 <!-- test: model-hand-fa17-o-linear -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-linear` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `o-linear` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29016,7 +29210,7 @@ error E3204: <fragment>:47:3: 'o' holds a linear value from outside 'm1' and can
 ```
 
 <!-- test: model-hand-fa17-o-val -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-val` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-val` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29044,7 +29238,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa17-o-before-after -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-before-after` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-before-after` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29074,7 +29268,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa17-o-inner-local -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-inner-local` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-inner-local` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29101,7 +29295,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa18-aj-h1-control-plain-param -->
-The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `aj-h1-control-plain-param` of redteamFA18.hand_fa18, in capmodel `reggio/REPORTFA18.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `aj-h1-control-plain-param` of redteamFA18.hand_fa18, in capmodel `reggio/REPORTFA18.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29142,7 +29336,7 @@ error E3199: <fragment>:24:10: 'o' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-fa18-m7-swap-outer-iso-field-in-window -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m7-swap-outer-iso-field-in-window` of redteamFA18.hand_fa18, in capmodel `reggio/REPORTFA18.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3199. Model program `m7-swap-outer-iso-field-in-window` of redteamFA18.hand_fa18, in capmodel `reggio/REPORTFA18.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29184,7 +29378,7 @@ error E3199: <fragment>:30:11: 'w.keep' cannot be swapped: the value that holds 
 ```
 
 <!-- test: model-hand-fa18-m7-outer-immutable-var-assigned -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `m7-outer-immutable-var-assigned` of redteamFA18.hand_fa18, in capmodel `reggio/REPORTFA18.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `m7-outer-immutable-var-assigned` of redteamFA18.hand_fa18, in capmodel `reggio/REPORTFA18.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29211,7 +29405,7 @@ error E3204: <fragment>:16:3: 'p' holds immutable data from outside 'm1' and can
 ```
 
 <!-- test: model-hand-fa19-x-arm-stored-then-outer-sent -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-stored-then-outer-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-stored-then-outer-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29282,7 +29476,7 @@ error E3200: <fragment>:57:14: 'o' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-fa19-x-arm-outer-var-refilled-then-sent -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-outer-var-refilled-then-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-outer-var-refilled-then-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29353,7 +29547,7 @@ error E3200: <fragment>:57:14: 'o' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-fa19-x-arm-plain-part-sent -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-plain-part-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-plain-part-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29409,7 +29603,7 @@ error E3200: <fragment>:45:28: 't.b' is not isolated: only a clean call, a `swap
 ```
 
 <!-- test: model-hand-fa19-x-arm-param-then-outer-isolated -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-param-then-outer-isolated` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-param-then-outer-isolated` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29485,7 +29679,7 @@ error E3200: <fragment>:61:10: 'o as isolated Ko' is not isolated: only a clean 
 ```
 
 <!-- test: model-hand-fa19-x-arm-callee-fresh-result -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-callee-fresh-result` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-callee-fresh-result` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29561,7 +29755,7 @@ error E3200: <fragment>:61:10: 'stash(u) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-fa19-x-arm-callee-returns-plain-part -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-callee-returns-plain-part` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-arm-callee-returns-plain-part` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29627,7 +29821,7 @@ error E3200: <fragment>:51:10: 'part(u) as isolated Bx' is not isolated: only a 
 ```
 
 <!-- test: model-hand-fa19-x-arm-onecall-into-opened -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `x-arm-onecall-into-opened` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `x-arm-onecall-into-opened` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29702,7 +29896,7 @@ error E3201: <fragment>:59:26: 't' is mutable outside 'k'; a call into an isolat
 ```
 
 <!-- test: model-hand-fa19-x-for-stored-then-outer-sent -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-for-stored-then-outer-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-for-stored-then-outer-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29768,7 +29962,7 @@ error E3200: <fragment>:53:14: 'o' is not isolated: only a clean call, a `swap` 
 ```
 
 <!-- test: model-hand-fa19-x-for-plain-part-sent -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-for-plain-part-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-for-plain-part-sent` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29820,7 +30014,7 @@ error E3200: <fragment>:41:15: 't.b' is not isolated: only a clean call, a `swap
 ```
 
 <!-- test: model-hand-fa19-x-for-callee-fresh-result -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-for-callee-fresh-result` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-for-callee-fresh-result` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29891,7 +30085,7 @@ error E3200: <fragment>:57:10: 'stash(xs) as isolated Ko' is not isolated: only 
 ```
 
 <!-- test: model-hand-fa19-x-for-onecall-into-opened -->
-The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `x-for-onecall-into-opened` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `x-for-onecall-into-opened` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -29961,7 +30155,7 @@ error E3201: <fragment>:55:13: 't' is mutable outside 'k'; a call into an isolat
 ```
 
 <!-- test: model-hand-fa19-x-for-modify-stores-plain-part -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `x-for-modify-stores-plain-part` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-STORE`; the compiler refuses it with E3196. Model program `x-for-modify-stores-plain-part` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30010,7 +30204,7 @@ error E3196: <fragment>:37:13: cannot store a read-only 'Bx' into 'keep' while '
 ```
 
 <!-- test: model-hand-fa19-x-direct-lent-fresh-result -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-direct-lent-fresh-result` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `x-direct-lent-fresh-result` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30075,7 +30269,7 @@ error E3200: <fragment>:53:10: 'stash(q) as isolated Ko' is not isolated: only a
 ```
 
 <!-- test: model-hand-fa19-n-modify-arm-outer-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `n-modify-arm-outer-write` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `n-modify-arm-outer-write` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30128,7 +30322,7 @@ error E3197: <fragment>:41:14: cannot write 'n' through 'o', which is read-only 
 ```
 
 <!-- test: model-hand-fa19-n-modify-for-outer-write -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `n-modify-for-outer-write` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `n-modify-for-outer-write` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30177,7 +30371,7 @@ error E3197: <fragment>:37:4: cannot write 'n' through 'o', which is read-only w
 ```
 
 <!-- test: model-hand-fa19-n-modify-for-binding-write -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-modify-for-binding-write` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `n-modify-for-binding-write` of redteamFA19.hand_fa19, in capmodel `reggio/REPORTFA19.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30226,7 +30420,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p1-stash-same -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30299,7 +30493,7 @@ error E3200: <fragment>:61:10: 'stash((q if 1 != 0 else q)) as isolated Ko' is n
 ```
 
 <!-- test: model-hand-fa20-p1-part-same -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30372,7 +30566,7 @@ error E3200: <fragment>:61:10: 'part((q if 1 != 0 else q)) as isolated Bx' is no
 ```
 
 <!-- test: model-hand-fa20-p1-recv-mkk-same -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30441,7 +30635,7 @@ error E3200: <fragment>:57:10: '(q if 1 != 0 else q).mkK() as isolated Ko' is no
 ```
 
 <!-- test: model-hand-fa20-p1-recv-part-same -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-same` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30510,7 +30704,7 @@ error E3200: <fragment>:57:10: '(q if 1 != 0 else q).part() as isolated Bx' is n
 ```
 
 <!-- test: model-hand-fa20-p1-stash-two -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30583,7 +30777,7 @@ error E3200: <fragment>:61:10: 'stash((q if 1 != 0 else q2)) as isolated Ko' is 
 ```
 
 <!-- test: model-hand-fa20-p1-part-two -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30656,7 +30850,7 @@ error E3200: <fragment>:61:10: 'part((q if 1 != 0 else q2)) as isolated Bx' is n
 ```
 
 <!-- test: model-hand-fa20-p1-recv-mkk-two -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30725,7 +30919,7 @@ error E3200: <fragment>:57:10: '(q if 1 != 0 else q2).mkK() as isolated Ko' is n
 ```
 
 <!-- test: model-hand-fa20-p1-recv-part-two -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-two` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30794,7 +30988,7 @@ error E3200: <fragment>:57:10: '(q if 1 != 0 else q2).part() as isolated Bx' is 
 ```
 
 <!-- test: model-hand-fa20-p1-stash-fresh -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30867,7 +31061,7 @@ error E3200: <fragment>:61:10: 'stash((q if 1 != 0 else Tq.create(1, b: Bx.creat
 ```
 
 <!-- test: model-hand-fa20-p1-part-fresh -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -30940,7 +31134,7 @@ error E3200: <fragment>:61:10: 'part((q if 1 != 0 else Tq.create(1, b: Bx.create
 ```
 
 <!-- test: model-hand-fa20-p1-recv-mkk-fresh -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31009,7 +31203,7 @@ error E3200: <fragment>:57:10: '(q if 1 != 0 else Tq.create(1, b: Bx.create(2)))
 ```
 
 <!-- test: model-hand-fa20-p1-recv-part-fresh -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-fresh` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31078,7 +31272,7 @@ error E3200: <fragment>:57:10: '(q if 1 != 0 else Tq.create(1, b: Bx.create(2)))
 ```
 
 <!-- test: model-hand-fa20-p1-stash-fresh-first -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31151,7 +31345,7 @@ error E3200: <fragment>:61:10: 'stash((Tq.create(1, b: Bx.create(2)) if 1 != 0 e
 ```
 
 <!-- test: model-hand-fa20-p1-part-fresh-first -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31224,7 +31418,7 @@ error E3200: <fragment>:61:10: 'part((Tq.create(1, b: Bx.create(2)) if 1 != 0 el
 ```
 
 <!-- test: model-hand-fa20-p1-recv-mkk-fresh-first -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31293,7 +31487,7 @@ error E3200: <fragment>:57:10: '(Tq.create(1, b: Bx.create(2)) if 1 != 0 else q)
 ```
 
 <!-- test: model-hand-fa20-p1-recv-part-fresh-first -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-fresh-first` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31362,7 +31556,7 @@ error E3200: <fragment>:57:10: '(Tq.create(1, b: Bx.create(2)) if 1 != 0 else q)
 ```
 
 <!-- test: model-hand-fa20-p1-stash-nested -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31435,7 +31629,7 @@ error E3200: <fragment>:61:10: 'stash(((q2 if 0 != 0 else q) if 1 != 0 else q3))
 ```
 
 <!-- test: model-hand-fa20-p1-part-nested -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31508,7 +31702,7 @@ error E3200: <fragment>:61:10: 'part(((q2 if 0 != 0 else q) if 1 != 0 else q3)) 
 ```
 
 <!-- test: model-hand-fa20-p1-recv-mkk-nested -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31577,7 +31771,7 @@ error E3200: <fragment>:57:10: '((q2 if 0 != 0 else q) if 1 != 0 else q3).mkK() 
 ```
 
 <!-- test: model-hand-fa20-p1-recv-part-nested -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-nested` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31646,7 +31840,7 @@ error E3200: <fragment>:57:10: '((q2 if 0 != 0 else q) if 1 != 0 else q3).part()
 ```
 
 <!-- test: model-hand-fa20-p1-stash-nested-right -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-stash-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31719,7 +31913,7 @@ error E3200: <fragment>:61:10: 'stash((q3 if 1 != 0 else (q if 0 != 0 else q2)))
 ```
 
 <!-- test: model-hand-fa20-p1-part-nested-right -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-part-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31792,7 +31986,7 @@ error E3200: <fragment>:61:10: 'part((q3 if 1 != 0 else (q if 0 != 0 else q2))) 
 ```
 
 <!-- test: model-hand-fa20-p1-recv-mkk-nested-right -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-mkK-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31861,7 +32055,7 @@ error E3200: <fragment>:57:10: '(q3 if 1 != 0 else (q if 0 != 0 else q2)).mkK() 
 ```
 
 <!-- test: model-hand-fa20-p1-recv-part-nested-right -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-recv-part-nested-right` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -31930,7 +32124,7 @@ error E3200: <fragment>:57:10: '(q3 if 1 != 0 else (q if 0 != 0 else q2)).part()
 ```
 
 <!-- test: model-hand-fa20-p1-cond-two-args -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-cond-two-args` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-cond-two-args` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32004,7 +32198,7 @@ error E3200: <fragment>:62:10: 'part2((q if 1 != 0 else q2), u: Tq.create(1, b: 
 ```
 
 <!-- test: model-hand-fa20-p1-cond-in-method-chain -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-cond-in-method-chain` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p1-cond-in-method-chain` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32073,7 +32267,7 @@ error E3200: <fragment>:57:10: 'Ko.create((q if 1 != 0 else q2).part(), n: 1) as
 ```
 
 <!-- test: model-hand-fa20-p2-closed-cond-lent -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-closed-cond-lent` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-closed-cond-lent` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32131,7 +32325,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p2-closed-cond-recv -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-closed-cond-recv` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-closed-cond-recv` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32185,7 +32379,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p2-cond-of-values -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-cond-of-values` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-cond-of-values` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32230,7 +32424,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p3-lent-closed-direct -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-lent-closed-direct` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-lent-closed-direct` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32287,7 +32481,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p3-lent-closed-recv -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-lent-closed-recv` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-lent-closed-recv` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32340,7 +32534,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p3-lent-closed-two-step -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-lent-closed-two-step` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-lent-closed-two-step` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32401,7 +32595,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p3-kept-plain -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32479,7 +32673,7 @@ error E3200: <fragment>:67:10: 'keepW(qV) as isolated Wq' is not isolated: only 
 ```
 
 <!-- test: model-hand-fa20-p3-kept-plain-returned -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain-returned` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain-returned` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32549,7 +32743,7 @@ error E3200: <fragment>:59:10: 'idT(q) as isolated Tq' is not isolated: only a c
 ```
 
 <!-- test: model-hand-fa20-p3-kept-plain-two-step -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain-two-step` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain-two-step` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32631,7 +32825,7 @@ error E3200: <fragment>:71:10: 'keepW2(qV) as isolated Wq' is not isolated: only
 ```
 
 <!-- test: model-hand-fa20-p3-kept-plain-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain-alias` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `p3-kept-plain-alias` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32711,7 +32905,7 @@ error E3200: <fragment>:68:10: 'keepW(qV) as isolated Wq' is not isolated: only 
 ```
 
 <!-- test: model-hand-fa20-p3-kept-closed -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-kept-closed` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-kept-closed` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32775,7 +32969,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa20-p3-kept-temp -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-kept-temp` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p3-kept-temp` of redteamFA20.hand_fa20, in capmodel `reggio/REPORTFA20.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32852,7 +33046,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa21-a1-sync-control -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `a1-sync-control` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `a1-sync-control` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32905,7 +33099,7 @@ error E3200: <fragment>:42:10: 'part(q) as isolated Bx' is not isolated: only a 
 ```
 
 <!-- test: model-hand-fa21-r3-take-first -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-take-first` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-take-first` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -32979,7 +33173,7 @@ error E3200: <fragment>:63:10: 'q.take() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-fa21-r3-whole -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-whole` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-whole` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33053,7 +33247,7 @@ error E3200: <fragment>:63:10: 'q.whole() as isolated Ko' is not isolated: only 
 ```
 
 <!-- test: model-hand-fa21-r3-take-alias -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-take-alias` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-take-alias` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33129,7 +33323,7 @@ error E3200: <fragment>:64:10: 'q.take() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-fa21-r3-fn-take -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-fn-take` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-fn-take` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33207,7 +33401,7 @@ error E3200: <fragment>:67:10: 'tk(q) as isolated Bx' is not isolated: only a cl
 ```
 
 <!-- test: model-hand-fa21-r3-closed -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r3-closed` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r3-closed` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33261,7 +33455,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa21-r3-temp -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r3-temp` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r3-temp` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33334,7 +33528,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa21-r3-recv-param-control -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-recv-param-control` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `r3-recv-param-control` of redteamFA21.hand_fa21, in capmodel `reggio/REPORTFA21.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33412,7 +33606,7 @@ error E3200: <fragment>:61:10: 'l.take() as isolated Bx' is not isolated: only a
 ```
 
 <!-- test: model-hand-fa23-p1-nb-iso-union-in-modify -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `p1-nb-iso-union-in-modify` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
+The model (`core-m3w-fa25`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `p1-nb-iso-union-in-modify` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33450,7 +33644,7 @@ error E3203: <fragment>:26:12: 'k' is open in 'm1' and cannot be reassigned ther
 ```
 
 <!-- test: model-hand-fa23-p2-standing-cond-outer-sent -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-standing-cond-outer-sent` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-standing-cond-outer-sent` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33494,7 +33688,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-fa23-p2-payload-into-window -->
-The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-payload-into-window` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p2-payload-into-window` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -33539,4 +33733,198 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: model-hand-fa25-c-window-outer -->
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-window-outer` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function isoUT(x isolated UT)
+	let _ = x
+	let _ = 1 as Num
+end 'isoUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let _ = peekUT(u)
+	let _ = peekUT(u)
+	let g = Bx.create(1) as isolated Bx
+	modify g 'm1'
+		isoUT(u)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:43:9: 'u' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+```
+
+<!-- test: model-hand-fa25-c-window-outer-decl -->
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-window-outer-decl` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1))
+	let _ = peekUT(u)
+	let _ = peekUT(u)
+	let g = Bx.create(1) as isolated Bx
+	modify g 'm1'
+		let _ = u as isolated UT
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:38:11: 'u as isolated UT' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
+<!-- test: model-hand-fa25-c-kept-part-isoparam -->
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-kept-part-isoparam` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var n as Num
+	var b as Bx
+
+	static function create(n Num, b Bx) returns Self
+		return Self{n: n, b: b}
+	end 'create'
+end 'Tp'
+
+function peekP(x Tp)
+	let _ = x.n
+end 'peekP'
+
+function isoP(x isolated Tp)
+	modify x 'm1'
+		x.b.n = 9
+	end 'm1'
+end 'isoP'
+
+function main() returns ExitCode
+	let u = Tp.create(1, b: Bx.create(2))
+	let k = u.b
+	peekP(u)
+	peekP(u)
+	isoP(u)
+	k.n = 5
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:36:7: 'u' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+```
+
+<!-- test: model-hand-fa25-c-kept-part-isodecl -->
+The model (`core-m3w-fa25`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `c-kept-part-isodecl` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tp is unique
+	var n as Num
+	var b as Bx
+
+	static function create(n Num, b Bx) returns Self
+		return Self{n: n, b: b}
+	end 'create'
+end 'Tp'
+
+function peekP(x Tp)
+	let _ = x.n
+end 'peekP'
+
+function main() returns ExitCode
+	let u = Tp.create(1, b: Bx.create(2))
+	let k = u.b
+	peekP(u)
+	peekP(u)
+	let i = u as isolated Tp
+	modify i 'm1'
+		i.b.n = 9
+	end 'm1'
+	k.n = 5
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:30:10: 'u as isolated Tp' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
 ```

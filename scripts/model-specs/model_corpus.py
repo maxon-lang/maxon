@@ -9,12 +9,12 @@ import re
 import sys
 from dataclasses import dataclass
 
-DEFAULT_RULESET = "core-m3w-fa24"
+DEFAULT_RULESET = "core-m3w-fa25"
 WORKERS = "3"
 
 HAND_FAMILIES = (
-    "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO",
-    "FA14", "FA15", "FA16", "FA17", "FA18", "FA19", "FA20", "FA21", "FA22", "FA23", "FA24",
+    "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR",
+    "FA14", "FA15", "FA16", "FA17", "FA18", "FA19", "FA20", "FA21", "FA22", "FA23", "FA24", "FA25",
 )
 FINDING_FAMILIES = ("N", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG")
 
@@ -64,6 +64,7 @@ def model_stamp(model_dir):
 
 
 HAND_CASE_PREFIX = "hand_"
+HAND_TEXT_PREFIXES = (HAND_CASE_PREFIX, "hole_")
 
 
 def separated_cases(label, paths):
@@ -81,7 +82,7 @@ def hand_cases(family):
         module = f"redteam{family}.{os.path.basename(path)[:-3]}"
         for attack in importlib.import_module(module).ATTACKS:
             cases.append(Case(f"hand-{family}", f"{module}", attack.id, attack.note, attack.src))
-    hand_texts = sorted(glob.glob(os.path.join(f"redteam{family}", f"{HAND_CASE_PREFIX}*.txt")))
+    hand_texts = sorted(path for prefix in HAND_TEXT_PREFIXES for path in glob.glob(os.path.join(f"redteam{family}", f"{prefix}*.txt")))
     return cases + separated_cases(f"hand-{family}", hand_texts)
 
 
