@@ -550,23 +550,41 @@ let FunctionRowColumn = "frame="
 let TypeFieldRowPrefix = "+0x"
 let TypeRowPrefix = "["
 
-function functionRowOf(functionRows StringArray, name String) returns String
+union FunctionRowLookup
+	none
+	found(row String)
+end 'FunctionRowLookup'
+
+function isFunctionRowOf(row String, name String) returns bool
+	return row.contains(FunctionRowColumn) and firstToken(row) == name
+end 'isFunctionRowOf'
+
+function lookupFunctionRow(functionRows StringArray, name String) returns FunctionRowLookup
 	for row in functionRows 'eachRow'
-		if row.contains(FunctionRowColumn) and firstToken(row) == name 'thisFunction'
-			return row
+		if isFunctionRowOf(row, name: name) 'thisFunction'
+			return FunctionRowLookup.found(row)
 		end 'thisFunction'
 	end 'eachRow'
 
-	return AbsentEventText
+	return FunctionRowLookup.none
+end 'lookupFunctionRow'
+
+function functionRowOf(functionRows StringArray, name String) returns String
+	match lookupFunctionRow(functionRows, name: name) 'theRow'
+		none then panic("{noOwnFunctionRowMessage(functionRows, name: name)}")
+		found(row) then return row
+	end 'theRow'
 end 'functionRowOf'
 
 function localRowsOf(functionRows StringArray, name String) returns StringArray
 	let locals = StringArray.create(0)
 	var inside = false
+	var owned = false
 
 	for row in functionRows 'eachRow'
 		if row.contains(FunctionRowColumn) 'aFunctionRow'
-			inside = firstToken(row) == name
+			inside = isFunctionRowOf(row, name: name)
+			owned = owned or inside
 			continue
 		end 'aFunctionRow'
 
@@ -575,8 +593,16 @@ function localRowsOf(functionRows StringArray, name String) returns StringArray
 		end 'aLocalOfThisFunction'
 	end 'eachRow'
 
+	if not owned 'splicedIntoItsCaller'
+		panic("{noOwnFunctionRowMessage(functionRows, name: name)}")
+	end 'splicedIntoItsCaller'
+
 	return locals
 end 'localRowsOf'
+
+function noOwnFunctionRowMessage(functionRows StringArray, name String) returns String
+	return "debug tests: the gate could not run — the sidecar holds no function row for `{name}`, so on this target `{name}` has no row, and no locals, of its own: it was spliced into every caller, or no function of that name was emitted. A case that asks about a function's own row calls it from at least two sites. The function rows the sidecar holds: {listedLines(declaredFunctionRows(functionRows))}"
+end 'noOwnFunctionRowMessage'
 
 function declaredFunctionRows(functionRows StringArray) returns StringArray
 	let rows = StringArray.create(0)
@@ -1068,15 +1094,47 @@ let PrologueColumn = "prologue=+"
 
 let InsideRuntimeSymbolReason = "inside-runtime-symbol"
 
+let ClassifyOption = "--classify="
+let ClassifyArm64Option = "{ClassifyOption}arm64:"
+
 #if arch(arm64)
 	let PushedFramePointerBytes = 4 as PrintedNumber
 	let StackSlotMark = "[x29"
+	let HostClassifyOption = ClassifyArm64Option
+	let LongestHostInstructionBytes = 4 as PrintedNumber
 #endif
 
 #if not arch(arm64)
 	let PushedFramePointerBytes = 1 as PrintedNumber
 	let StackSlotMark = "[rbp"
+	let HostClassifyOption = ClassifyOption
+	let LongestHostInstructionBytes = MostBytesOfOneInstruction as PrintedNumber
 #endif
+
+function classifiedInstructionAt(executable FilePath, staged FilePath, offset PrintedNumber) returns String
+	let image = fileBytes(executable)
+	let text = imageText(image, target: hostTargetTriple())
+
+	if offset >= text.byteCount 'pastTheCode'
+		panic("debug tests: the gate could not run — offset {hexSpelling(offset)} lies past the {text.byteCount}-byte code section of {executable.toString()}, so there is no instruction there to classify.")
+	end 'pastTheCode'
+
+	let limit = offset + LongestHostInstructionBytes
+	var spelled = ""
+
+	for at in offset upto (limit if limit < text.byteCount else text.byteCount) 'eachByte'
+		let byte = try image.get((text.fileOffset + at) as ElementIndex) otherwise panic("debug tests: the gate could not run — the code section of {executable.toString()} ends past the image, at code offset {hexSpelling(at)}.")
+		spelled.append("{byte:02x}")
+	end 'eachByte'
+
+	let run = spawnCompiler([DebugSubcommandName, "{HostClassifyOption}{spelled}"], staged: staged, what: "`{DebugSubcommandName} {HostClassifyOption}{spelled}`")
+
+	if run.exitCode() != 0 'notClassified'
+		panic("debug tests: the gate could not run — `{DebugSubcommandName} {HostClassifyOption}{spelled}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+	end 'notClassified'
+
+	return withoutCarriageReturns(run.stdout).trim()
+end 'classifiedInstructionAt'
 
 typealias SidecarNumberArray = Array with PrintedNumber
 

@@ -3,12 +3,14 @@ let JoinedArmsCaseLabel = "sidecar-a-local-both-arms-assign-one-value-reads-it-a
 let JoinedArmsLocalName = "x"
 let JoinedArmsValueName = "k"
 let JoinedArmsHeldFunctionName = "blend"
+let JoinedArmsHeldCalls = 2
 let JoinedArmsFilled = 5
 let JoinedArmsFactor = 7
 let JoinedArmsTerm = 4
 let JoinedArmsFirstValue = "1"
 
-function joinedArmsAnswerAt(events JsonDocArray, line SourceLine) returns String
+function joinedArmsAnswersAt(events JsonDocArray, line SourceLine) returns StringArray
+	let answers = StringArray.create(0)
 	var atTheLine = false
 
 	for event in events 'eachEvent'
@@ -18,12 +20,13 @@ function joinedArmsAnswerAt(events JsonDocArray, line SourceLine) returns String
 		end 'aStop'
 
 		if atTheLine and eventKind(event) == ValueEventName 'itsAnswer'
-			return printedAnswer(event)
+			answers.push(printedAnswer(event))
+			atTheLine = false
 		end 'itsAnswer'
 	end 'eachEvent'
 
-	return AbsentEventText
-end 'joinedArmsAnswerAt'
+	return answers
+end 'joinedArmsAnswersAt'
 
 test 'a local both arms of an if assign one value reads that value after the join, in a frame slot and in a register'
 	let staged = builtFixture(JoinedArmsCaseLabel, fixture: JoinedArmsFixtureName)
@@ -54,16 +57,21 @@ test 'a local both arms of an if assign one value reads that value after the joi
 	Expect.notEqual(rowsCoveringAny(rowsNamed(slotLocals, name: JoinedArmsValueName), offsets: afterOffsets).count(), expected: 0, message: "no row of `{JoinedArmsValueName}` covers the `after` line in `{MainFunctionName}`, so nothing there holds the value both arms assign and the join has nothing to show. `{MainFunctionName}`'s locals were: {listedLines(slotLocals)}")
 	Expect.notEqual(rowsCoveringAny(rowsNamed(heldLocals, name: JoinedArmsValueName), offsets: heldAfterOffsets).count(), expected: 0, message: "no row of `{JoinedArmsValueName}` covers the `held-after` line in `{JoinedArmsHeldFunctionName}`, so nothing there holds the value both arms assign and the join has nothing to show. Its locals were: {listedLines(heldLocals)}")
 
-	let anchors = [beforeAt, afterAt, heldBeforeAt, heldAfterAt]
+	let mainAnchors = [beforeAt, afterAt]
+	let heldAnchors = [heldBeforeAt, heldAfterAt]
 	let commands = StringArray.create(0)
 
-	for line in anchors 'eachAnchor'
+	for line in mainAnchors 'eachMainAnchor'
 		commands.push("{BreakCommand} {lineTarget(line)}")
-	end 'eachAnchor'
+	end 'eachMainAnchor'
+
+	for line in heldAnchors 'eachHeldAnchor'
+		commands.push("{BreakCommand} {lineTarget(line)}")
+	end 'eachHeldAnchor'
 
 	commands.push(RunCommand)
 
-	for _ in anchors 'eachStop'
+	for _ in 0 upto mainAnchors.count() + heldAnchors.count() * JoinedArmsHeldCalls 'eachStop'
 		commands.push("{PrintCommand} {JoinedArmsLocalName}")
 		commands.push(ContinueCommand)
 	end 'eachStop'
@@ -72,22 +80,36 @@ test 'a local both arms of an if assign one value reads that value after the joi
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	for line in anchors 'eachAnchoredLine'
-		Expect.equal(stopsAtLine(events, line: line), expected: 1, message: "the anchored line {line} runs once, so its breakpoint stops once. It printed: {listedLines(eventKinds(events))}. {said}")
-	end 'eachAnchoredLine'
+	for line in mainAnchors 'eachMainLine'
+		Expect.equal(stopsAtLine(events, line: line), expected: 1, message: "the anchored line {line} of `{MainFunctionName}` runs once, so its breakpoint stops once. It printed: {listedLines(eventKinds(events))}. {said}")
+	end 'eachMainLine'
+
+	for line in heldAnchors 'eachHeldLine'
+		Expect.equal(stopsAtLine(events, line: line), expected: JoinedArmsHeldCalls, message: "`{JoinedArmsHeldFunctionName}` is called from {JoinedArmsHeldCalls} sites, so its anchored line {line} runs {JoinedArmsHeldCalls} times and its breakpoint stops at each. It printed: {listedLines(eventKinds(events))}. {said}")
+	end 'eachHeldLine'
 
 	let assigned = "{JoinedArmsFilled * JoinedArmsFactor + JoinedArmsTerm}"
-	let shownBefore = joinedArmsAnswerAt(events, line: beforeAt)
-	let shownHeldBefore = joinedArmsAnswerAt(events, line: heldBeforeAt)
+	let shownBefore = joinedArmsAnswersAt(events, line: beforeAt)
+	let shownHeldBefore = joinedArmsAnswersAt(events, line: heldBeforeAt)
 
-	Expect.isTrue(shownBefore == JoinedArmsFirstValue or isUnavailableAnswer(shownBefore), message: "before the `if` in `{MainFunctionName}`, `{JoinedArmsLocalName}` is {JoinedArmsFirstValue}, or not shown; it read `{shownBefore}`, although neither arm has assigned {assigned} yet. {said}")
-	Expect.isTrue(shownHeldBefore == JoinedArmsFirstValue or isUnavailableAnswer(shownHeldBefore), message: "before the `if` in `{JoinedArmsHeldFunctionName}`, `{JoinedArmsLocalName}` is {JoinedArmsFirstValue}, or not shown; it read `{shownHeldBefore}`, although neither arm has assigned {assigned} yet. {said}")
+	Expect.equal(shownBefore.count(), expected: 1, message: "the stop at the `before` line answers its `{PrintCommand} {JoinedArmsLocalName}`. {said}")
+	Expect.equal(shownHeldBefore.count(), expected: JoinedArmsHeldCalls, message: "each stop at the `held-before` line answers its `{PrintCommand} {JoinedArmsLocalName}`. {said}")
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(shownBefore, trueValues: [JoinedArmsFirstValue])), message: "before the `if` in `{MainFunctionName}`, `{JoinedArmsLocalName}` is {JoinedArmsFirstValue}, or not shown; it read {listedLines(shownBefore)}, although neither arm has assigned {assigned} yet. {said}")
+	Expect.isEmpty(listedLines(answersNeitherTrueNorUnavailable(shownHeldBefore, trueValues: [JoinedArmsFirstValue])), message: "before the `if` in `{JoinedArmsHeldFunctionName}`, `{JoinedArmsLocalName}` is {JoinedArmsFirstValue}, or not shown; it read {listedLines(shownHeldBefore)}, although neither arm has assigned {assigned} yet. {said}")
 
-	let shownAfter = joinedArmsAnswerAt(events, line: afterAt)
-	let shownHeldAfter = joinedArmsAnswerAt(events, line: heldAfterAt)
+	let shownAfter = joinedArmsAnswersAt(events, line: afterAt)
+	let shownHeldAfter = joinedArmsAnswersAt(events, line: heldAfterAt)
 
-	Expect.equal(shownAfter, expected: assigned, message: "after the `if` in `{MainFunctionName}`, `{JoinedArmsLocalName}` holds {assigned} on every path, since both arms assign `{JoinedArmsValueName}`, and `{JoinedArmsValueName}`'s frame slot still holds it here. Neither arm's version reaches the join, so the join's own version must open there: a version that repeats an earlier version's value is left without rows of its own only where the earlier version's rows already cover it. {said}")
-	Expect.equal(shownHeldAfter, expected: assigned, message: "after the `if` in `{JoinedArmsHeldFunctionName}`, `{JoinedArmsLocalName}` holds {assigned} on every path, since both arms assign `{JoinedArmsValueName}`, and `{JoinedArmsValueName}`'s register still holds it here. Neither arm's version reaches the join, so the join's own version must open there: a version that repeats an earlier version's value is left without rows of its own only where the earlier version's rows already cover it. {said}")
+	Expect.equal(shownAfter.count(), expected: 1, message: "the stop at the `after` line answers its `{PrintCommand} {JoinedArmsLocalName}`. {said}")
+	Expect.equal(shownHeldAfter.count(), expected: JoinedArmsHeldCalls, message: "each stop at the `held-after` line answers its `{PrintCommand} {JoinedArmsLocalName}`. {said}")
+
+	for shown in shownAfter 'eachAfter'
+		Expect.equal(shown, expected: assigned, message: "after the `if` in `{MainFunctionName}`, `{JoinedArmsLocalName}` holds {assigned} on every path, since both arms assign `{JoinedArmsValueName}`, and `{JoinedArmsValueName}`'s frame slot still holds it here. Neither arm's version reaches the join, so the join's own version must open there: a version that repeats an earlier version's value is left without rows of its own only where the earlier version's rows already cover it. {said}")
+	end 'eachAfter'
+
+	for shown in shownHeldAfter 'eachHeldAfter'
+		Expect.equal(shown, expected: assigned, message: "after the `if` in `{JoinedArmsHeldFunctionName}`, `{JoinedArmsLocalName}` holds {assigned} on every path, since both arms assign `{JoinedArmsValueName}`, and `{JoinedArmsValueName}`'s register still holds it here. Neither arm's version reaches the join, so the join's own version must open there: a version that repeats an earlier version's value is left without rows of its own only where the earlier version's rows already cover it. {said}")
+	end 'eachHeldAfter'
 
 	discardStagedDir(staged)
 end 'a local both arms of an if assign one value reads that value after the join, in a frame slot and in a register'

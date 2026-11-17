@@ -10,6 +10,8 @@ let PeMagicSecondByte = 0x5A
 
 let MachOTextSectionName = "__text"
 let MachOSectionAddressOffset = 32
+let MachOSectionSizeOffset = 40
+let MachOSectionFileOffsetOffset = 48
 let MachOHeaderScanBytes = 4096
 let ElfEntryAddressOffset = 24
 let ElfProgramHeaderTableOffset = 32
@@ -77,17 +79,27 @@ function littleEndianAt(bytes ByteArray, at PrintedNumber, width PrintedNumber) 
 	return value
 end 'littleEndianAt'
 
-function machOTextAddress(bytes ByteArray) returns PrintedNumber
+function machOTextSectionHeader(bytes ByteArray) returns PrintedNumber
 	let name = MachOTextSectionName.toByteArray()
 
 	for at in 0 upto MachOHeaderScanBytes 'eachOffset'
 		if bytesSpell(bytes, at: at, name: name) 'theSectionHeader'
-			return littleEndianAt(bytes, at: (at + MachOSectionAddressOffset) as PrintedNumber, width: WordBytes)
+			return at as PrintedNumber
 		end 'theSectionHeader'
 	end 'eachOffset'
 
 	panic("the gate could not run - no {MachOTextSectionName} section header in the first {MachOHeaderScanBytes} bytes of a Mach-O image")
+end 'machOTextSectionHeader'
+
+function machOTextAddress(bytes ByteArray) returns PrintedNumber
+	return littleEndianAt(bytes, at: machOTextSectionHeader(bytes) + MachOSectionAddressOffset, width: WordBytes)
 end 'machOTextAddress'
+
+function machOText(image ByteArray) returns ImageText
+	let header = machOTextSectionHeader(image)
+
+	return ImageText.create(littleEndianAt(image, at: header + MachOSectionFileOffsetOffset, width: DwordBytes), byteCount: littleEndianAt(image, at: header + MachOSectionSizeOffset, width: WordBytes))
+end 'machOText'
 
 enum ImageFormat
 	machO
@@ -171,13 +183,9 @@ function elfText(image ByteArray) returns ImageText
 	panic("the gate could not run - no executable load segment of the ELF image holds its entry point")
 end 'elfText'
 
-function noX64MachOText(target String) returns ImageText
-	panic("the gate could not run - the {target} image is a Mach-O, which is not one of the two x64 image formats (ELF and PE)")
-end 'noX64MachOText'
-
 function imageText(image ByteArray, target String) returns ImageText
 	return match imageFormatOf(image, target: target) 'format'
-		machO gives noX64MachOText(target)
+		machO gives machOText(image)
 		elf gives elfText(image)
 		pe gives peText(image)
 	end 'format'

@@ -47,8 +47,6 @@ let SymbolizeOption = "--symbolize"
 let DumpTargetKey = "target:"
 let DumpBuildIdKey = "build-id:"
 
-// A function row's code range, `[START, END)`. The bracket is also what tells a function row apart from
-// the local-variable rows nested under it (`total  [rbp-0x10]  : i64`), which carry no `)`.
 let SidecarDumpRangeOpen = "["
 
 // How a declaration's CLOSE is recognized in the staged fixture source. Its opening line and the name in
@@ -95,26 +93,27 @@ test 'the sidecar names this build, this source and every function the fixture d
 
 	let missing = StringArray.create(0)
 	let degenerate = StringArray.create(0)
+	let listedRows = StringArray.create(0)
 
 	for name in declared 'eachDeclaredFunction'
-		let row = functionRowNamed(functionRows, name: name)
-
-		if row.isEmpty() 'notListed'
-			missing.push(name)
-			continue
-		end 'notListed'
-
-		if codeRangeBound(row, upper: true) <= codeRangeBound(row, upper: false) 'emptyRange'
-			degenerate.push("{name}: {row}")
-		end 'emptyRange'
+		match lookupFunctionRow(functionRows, name: name) 'theRow'
+			none then missing.push(name)
+			found(row) then listedRows.push(row)
+		end 'theRow'
 	end 'eachDeclaredFunction'
+
+	for row in listedRows 'eachListedRow'
+		if codeRangeBound(row, upper: true) <= codeRangeBound(row, upper: false) 'emptyRange'
+			degenerate.push("{firstToken(row)}: {row}")
+		end 'emptyRange'
+	end 'eachListedRow'
 
 	Expect.isEmpty(listedLines(missing), message: "the dump's `{DumpFunctionsHeading}…)` section lists no row for these functions, which the staged fixture DECLARES. A debugger cannot stop inside a function the sidecar does not know exists. The section held: {listedLines(functionRows)}")
 	Expect.isEmpty(listedLines(degenerate), message: "these functions are listed with a code range whose end does not exceed its start, so the sidecar says they occupy no code and no offset can ever fall inside one.")
 
 	// ⭐ THE JOIN — an offset the dump published INSIDE one named function, asked of the other table.
 	let probeName = try declared.get(0) otherwise panic("sidecar-dump.test: a roster asserted non-empty has a first element")
-	let probeRow = functionRowNamed(functionRows, name: probeName)
+	let probeRow = functionRowOf(functionRows, name: probeName)
 	let probeOffset = firstLineRowTokenWithin(dump, atLeast: codeRangeBound(probeRow, upper: false), below: codeRangeBound(probeRow, upper: true))
 	Expect.notEqual(probeOffset, expected: "", message: "the dump's `{DumpLineTableHeading}…)` section holds no row inside `{probeName}`'s code range — its row reads `{probeRow}`. A function with a code range and no line rows is one a debugger can name and never stop in.")
 
@@ -177,24 +176,6 @@ function anyRowNames(rows StringArray, name String) returns bool
 
 	return false
 end 'anyRowNames'
-
-// The function row whose first word is exactly `name`, or EMPTY when the section holds none.
-//
-// ⚠ A row must also carry a `[…)` code range. The locals nested under a function row are words followed by
-// `[rbp-0x10]` and no `)`, so without that test a local could be mistaken for the function it sits under
-// and answer this question with something that is not a range.
-function functionRowNamed(rows StringArray, name String) returns String
-	for row in rows 'eachRow'
-		let tokens = whitespaceTokens(row)
-		let first = try tokens.get(0) otherwise continue
-
-		if first == name and carriesCodeRange(row) 'theRow'
-			return row
-		end 'theRow'
-	end 'eachRow'
-
-	return ""
-end 'functionRowNamed'
 
 // Whether a row spells a `[START, END)` code range.
 function carriesCodeRange(row String) returns bool
