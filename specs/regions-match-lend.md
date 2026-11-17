@@ -601,8 +601,8 @@ end 'main'
 error E3102: <fragment>:29:20: cannot lend 'uV' to parameter 'u' of 'Tk.absorb', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
 ```
 
-<!-- test: a-writing-lend-of-the-matched-variable-to-a-function-value-beside-an-arm-binding-is-refused -->
-`BothFn` declares its first parameter `mutable`, so a call through `f` writes through `uV` while naming `tV`.
+<!-- test: a-by-reference-pass-of-the-matched-variable-to-a-function-value-in-a-binding-arm-is-refused -->
+`BothFn` declares its first parameter `mutable`, so a call through `f` passes `uV` by reference, and `uV` stays put in the `have(tV)` arm that binds its payload.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -640,7 +640,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:32:18: cannot lend 'uV' to a `mutable` parameter of 'BothFn', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+error E3203: <fragment>:32:18: 'uV' roots what 'outer' lends or iterates and cannot be reassigned or passed by reference inside it
 ```
 
 <!-- test: a-read-only-lend-of-the-matched-variable-as-the-receiver-beside-an-arm-binding-is-accepted -->
@@ -735,8 +735,8 @@ end 'main'
 0
 ```
 
-<!-- test: a-writing-lend-of-the-matched-variable-to-an-interface-method-beside-an-arm-binding-is-refused -->
-`Both.both` declares its first parameter `mutable`, so a call through the interface value `w` writes through `uV` while naming `tV`, whichever conformer `w` holds.
+<!-- test: a-by-reference-pass-of-the-matched-variable-to-an-interface-method-in-a-binding-arm-is-refused -->
+`Both.both` declares its first parameter `mutable`, so a call through the interface value `w` passes `uV` by reference, whichever conformer `w` holds, and `uV` stays put in the `have(tV)` arm that binds its payload.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -787,7 +787,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:41:19: cannot lend 'uV' to a `mutable` parameter of 'Both.both', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 'uV' in a statement that names no binding of the arm
+error E3203: <fragment>:41:19: 'uV' roots what 'outer' lends or iterates and cannot be reassigned or passed by reference inside it
 ```
 
 <!-- test: a-read-only-lend-of-the-matched-variable-to-an-interface-method-beside-an-arm-binding-is-accepted -->
@@ -1461,6 +1461,124 @@ end 'main'
 ```
 ```stdout
 7
+```
+
+<!-- test: error.an-arm-that-binds-a-plain-payload-may-not-reassign-the-matched-variable -->
+The `held(b)` arm binds a payload of `s`, so `s` stays put there even though `Slot` holds only plain data (ruling 29).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function main() returns ExitCode
+	var s = Slot.held(Box.create(1))
+
+	match s 'which'
+		empty then break
+		held(b) then s = Slot.held(Box.create(b.n + 1))
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:22:16: 's' roots what 'which' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: error.an-arm-that-binds-a-plain-payload-may-not-pass-the-matched-variable-by-reference -->
+`refill` may replace `s`, so `s` is not passed by reference inside the `held(b)` arm that binds its payload.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function refill(s mutable Slot, n Count)
+	s = Slot.held(Box.create(n))
+end 'refill'
+
+function main() returns ExitCode
+	var s = Slot.held(Box.create(1))
+
+	match s 'which'
+		empty then break
+		held(b) then refill(s, n: b.n)
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:26:16: 's' roots what 'which' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: an-arm-that-binds-a-plain-payload-writes-a-field-of-the-matched-root -->
+The `plain(n)` arm binds a plain payload, so `h` stays put but stays writable: only an arm that binds a unique or isolated payload makes it read-only.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Token is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Mixed
+	none
+	plain(n Num)
+	owned(t Token)
+end 'Mixed'
+
+type Holder is unique
+	var u as Mixed
+	var n as Num
+
+	static function create(u Mixed) returns Self
+		return Self{u: u, n: 0}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Mixed.plain(5))
+
+	match h.u 'which'
+		none then break
+		plain(n) then h.n = n
+		owned then break
+	end 'which'
+
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+5
+```
+```exitcode
+0
 ```
 
 <!-- test: error.a-writing-lend-of-the-matched-variable-beside-a-binding-path-is-refused -->

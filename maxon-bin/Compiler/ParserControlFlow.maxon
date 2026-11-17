@@ -4422,13 +4422,16 @@ extension Parser
 
 	function collectCarriedPositions(positions MoveSlotIndexColumn, name ByteArray)
 		var link = self.innermostMutableVar(name)
-		var walking = true
 
-		while walking 'chain'
+		while true 'chain'
+			var next = InnermostMutableVar.none
+
 			match link 'which'
-				none then walking = false
-				at(position) then link = self.carryAndFollowShadow(positions, position: position)
+				none then break 'chain'
+				at(position) then next = self.carryAndFollowShadow(positions, position: position)
 			end 'which'
+
+			link = next
 		end 'chain'
 	end 'collectCarriedPositions'
 
@@ -5120,15 +5123,16 @@ extension Parser
 				end 'aConsumedScrutinee'
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
-				let armLendsTheSubject = hasPayloadBindings and not lentRoots.isEmpty()
-				let lentArmFloor = self.enterLentArm(lentRoots, condRoots: condRoots, scrutStart: scrutStart, scrutEnd: scrutEnd, bindsPayloads: armLendsTheSubject)
-				let heldByTheLend = self.pauseLentHolders(scrut) if armLendsTheSubject else PausedHolders.create()
+				let armKeepsTheRootsPut = hasPayloadBindings and lendsItsSubject
+				let armPausesTheHolders = not lentRoots.isEmpty() and self.armBindsAUniqueOrIsolatedPayload(arm)
+				let lentArmFloor = self.enterLentArm(lentRoots, condRoots: condRoots, scrutStart: scrutStart, scrutEnd: scrutEnd, bindsPayloads: hasPayloadBindings)
+				let heldByTheLend = self.pauseLentHolders(scrut) if armPausesTheHolders else PausedHolders.create()
 
 				if condRootsReadOnly 'everyCondRootIsReadOnly'
 					self.pauseRoots(condRoots, into: heldByTheLend)
 				end 'everyCondRootIsReadOnly'
 
-				let stayingFloor = self.pushRoots(condRoots, onto: self.bodyState.stayingRoots, label: matchLabel)
+				let stayingFloor = self.pushRoots(subjectRoots.roots if armKeepsTheRootsPut else condRoots, onto: self.bodyState.stayingRoots, label: matchLabel)
 				let outerLendingLabel = self.statement.lendingLabel
 
 				if not heldByTheLend.values.isEmpty() 'readOnlyInTheArm'
@@ -5821,6 +5825,20 @@ extension Parser
 		let label = self.bodyState.stayingRoots.subjectAt(index)
 		throw self.regionRefusal(ErrorCode.semanticOpenedSlotReassigned, message: "'{String.from(name)}' roots what '{label}' lends or iterates and cannot be reassigned or passed by reference inside it", line: anchor.line, column: anchor.column)
 	end 'requireRootStaysPut'
+
+	function armBindsAUniqueOrIsolatedPayload(arm EnumPatternArm) returns bool
+		if arm.bindsAnIsolatedPayload() 'anIsolatedPayload'
+			return true
+		end 'anIsolatedPayload'
+
+		for binding in arm.bindings 'eachBinding'
+			if not binding.isDiscard and self.valueHoldsAUniqueRecord(self.bodyState.scope.getInfo(binding.nameTok.value).boundValue) 'aUniquePayload'
+				return true
+			end 'aUniquePayload'
+		end 'eachBinding'
+
+		return false
+	end 'armBindsAUniqueOrIsolatedPayload'
 
 	function pauseRoots(roots LentArmRoots, into PausedHolders)
 		for value in roots.values 'eachRoot'

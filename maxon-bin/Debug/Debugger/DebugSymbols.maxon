@@ -217,13 +217,16 @@ function siteEntriesOf(reader MxdbgReader) returns DebugSiteEntryMap
 	for range in 0 upto reader.inlineRangeCount() 'eachRange'
 		let start = reader.inlineRangeStart(range as MxdbgIndex)
 		var walking = MxdbgInlineSiteLookup.site(reader.inlineRangeSite(range as MxdbgIndex))
-		var climbing = true
 
-		while climbing 'eachEnclosingSite'
+		while true 'eachEnclosingSite'
+			var next = MxdbgInlineSiteLookup.none
+
 			match walking 'site'
-				none then climbing = false
-				site(index) then walking = noteSiteEntry(entries, reader: reader, site: index, start: start)
+				none then break 'eachEnclosingSite'
+				site(index) then next = noteSiteEntry(entries, reader: reader, site: index, start: start)
 			end 'site'
+
+			walking = next
 		end 'eachEnclosingSite'
 	end 'eachRange'
 

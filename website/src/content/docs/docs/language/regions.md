@@ -401,7 +401,10 @@ of an enclosing `modify` or of an acquired state is **E3197** (`cannot write 'n'
 while 'x1' is open`), and a call that needs that data writable is **E3207**. Data the arm creates, the payload
 through its binding and a variable that holds a number are writable. An arm that binds no `isolated` payload
 opens no window, even over a case that holds one: `have then o.n = 5` writes outer data, and an arm of
-`match h.u` that binds nothing writes `h`. A `match` whose subject is read through an `isolated` value that is
+`match h.u` that binds nothing writes `h`. In every arm that binds a payload, whatever the union holds, the
+variable the `match` reads stays put: reassigning it, rebinding it in a tuple assignment or passing it to a
+`mutable` parameter is **E3203**; its fields stay writable unless the arm binds a `unique` or `isolated`
+payload. A `match` whose subject is read through an `isolated` value that is
 not open (`match job.state`) still opens that value for the whole statement, every arm included. A union with
 a linear payload is consumed by the `match`, so its arms own their payloads and open no window, a frozen union
 lends nothing, and a union held in an `isolated` local hands its payload out as a region of its own.

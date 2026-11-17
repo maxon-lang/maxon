@@ -23,6 +23,12 @@ release's version as its heading when the release is cut.
   E3214. A call that only reads it stays legal.
   Fix: write through the binding, or make the write, copy or store before or after the `match`.
 
+- Inside a `match` arm that binds a payload, the variable the `match` reads (`s` in `match s`, `h` in
+  `match h.u`) stays put, whatever the union holds: reassigning it, rebinding it in a tuple assignment or
+  passing it to a `mutable` parameter there is E3203 (`'s' roots what 'which' lends or iterates and cannot
+  be reassigned or passed by reference inside it`). An arm that binds nothing may still reassign it.
+  Fix: assign the variable after the `match`, from a value the arm gives.
+
 - A variable moved before an `if` and refilled in only some of its branches is moved after the `if`, so a
   read of it there is E3102.
   Fix: refill it in every branch, or leave the moved value unread until the next assignment.

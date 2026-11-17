@@ -14572,3 +14572,46 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: model-hand-fa24-d3d-match-path-mixed-union-bare-plain-binding-arm-field-write-control -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `d3d-match-path-mixed-union-bare-plain-binding-arm-field-write-control` of redteamFA24/hand_fa24.txt, in capmodel `reggio/REPORTFA24.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UM
+	none
+	pl(n Num)
+	uq(t Tk)
+end 'UM'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Hm is unique
+	var u as UM
+	var n as Num
+
+	static function create(u UM, n Num) returns Self
+		return Self{u: u, n: n}
+	end 'create'
+end 'Hm'
+
+function main() returns ExitCode
+	let h = Hm.create(UM.pl(1), n: 0)
+	match h.u 'x1'
+		none then break
+		pl(x) then h.n = x
+		uq then break
+	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
