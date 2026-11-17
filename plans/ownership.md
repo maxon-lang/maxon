@@ -5,7 +5,8 @@ Class issue: #309 · Priority: P0
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked
-here and every issue it waits on is closed. The plan lands once, after its last stage.
+here and every issue it waits on is closed. A `deferred` stage is skipped. The plan lands once, after its
+last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|

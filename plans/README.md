@@ -14,10 +14,12 @@ plan). In short:
 - **One session works one plan, stage by stage,** in the order its "Stage order" table gives. A stage is one
   local commit that ticks its box; nothing is pushed between stages.
 - **A stage starts only when everything it waits on is done:** a stage of this plan ticked, a stage of
-  another plan landed with that plan, an issue closed. A "Needs a ruling" entry is a question to the
-  maintainer first.
+  another plan landed with that plan, an issue closed.
 - **The plan lands once, after its last stage:** its stage commits are squashed into one commit that
   marks the plan's "Done" cell below and carries `Fixes #<class issue>`. Comments and documentation are written then, on the plan's final shape.
+- **An open question takes the plan's recommendation,** recorded under the plan's "Rulings".
+- **`deferred`** marks a stage, or a whole plan, that is left out of the queues: it is skipped, and its class
+  issue stays open for it.
 - "Not beside" names stages that change the same files: whichever plan lands second rebases over the first.
 
 ## The plans
@@ -28,8 +30,8 @@ plan). In short:
 | [declaration-identity](declaration-identity.md): Every declaration has one resolved identity (origin, layer, owner, kind): no lookup, key or message rebuilds it from a spelling | #18 | P1 | 9 | A | 2 |  |
 | [kept-answers](kept-answers.md): The compiler answers every by-name, by-type and per-compile question from one kept, keyed answer, and a ladder per program dimension shows it | #308 | P1 | 11 | A | 3 |  |
 | [determinism](determinism.md): Compiler output, caches, allocation counts and reports are a function of the program: one environment gate, one source order key, and a table walk that names its order | #311 | P1 | 7 | A | 4 |  |
-| [constants](constants.md): A constant is declared once; a copy across a boundary no name crosses is sealed, read or pinned, and a gate refuses any other | #53 | P2 | 3 | A | 5 |  |
-| [unused-methods](unused-methods.md): maxon lint reports a method nothing uses, and its spelling census counts only what can name a declaration | #69 | P2 | 3 | A | 6 |  |
+| [constants](constants.md): A constant is declared once; a copy across a boundary no name crosses is sealed, read or pinned, and a gate refuses any other | #53 | P2 | 3 | A | 5 | deferred |
+| [unused-methods](unused-methods.md): maxon lint reports a method nothing uses, and its spelling census counts only what can name a declaration | #69 | P2 | 3 | A | 6 | deferred |
 | [generics](generics.md): A generic body is judged once, from its bounds alone, and every instance the program writes or infers is judged once at one door | #310 | P0 | 8 | B | 1 |  |
 | [map-string-cost](map-string-cost.md): A stored element has one door per operation, reached alike from concrete, generic and library code: Map, String and hash cost what Go's do | #82 | P1 | 10 | B | 2 |  |
 | [structural-equality](structural-equality.md): One verdict per type supplies equals, compare, hash and clone, and every door reads it; each Map and Set hashes under its own seed | #312 | P1 | 8 | B | 2 |  |

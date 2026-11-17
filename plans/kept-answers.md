@@ -5,7 +5,8 @@ Class issue: #308 · Priority: P1
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked
-here and every issue it waits on is closed. The plan lands once, after its last stage.
+here and every issue it waits on is closed. A `deferred` stage is skipped. The plan lands once, after its
+last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
@@ -17,9 +18,9 @@ here and every issue it waits on is closed. The plan lands once, after its last 
 | [ ] | 6 | The two recursive instance questions are kept per `GenericInstanceId`, so chains of nested instance aliases check in linear time | 1 |  | Where do kept type answers live for a front-end worker? (recommended: in the signature settle, read-only afterwards; alternative: lazily, journaled as `deepCloneAnswers` is) |
 | [ ] | 7 | One kept transfer verdict per (subject, kind) holds the promise reach, opaque-slot refusal, clone gate, blocker and strategy | 6, [generics](generics.md) 7 | 2, 3, 4 |  |
 | [ ] | 8 | An open generic chain of `sendable`-bounded instances is linear in every compile phase | 7 |  |  |
-| [ ] | 9 | A std-pass worker builds each step's workspace once for its life and reuses it across functions |  |  |  |
-| [ ] | 10 | A backend worker owns its op variant facts and takes its ABI table `immutable`, with no per-worker clone |  |  |  |
-| [ ] | 11 | Whether a target provides every host facility is settled once per compile, not per function and spawn site |  |  |  |
+| deferred | 9 | A std-pass worker builds each step's workspace once for its life and reuses it across functions |  |  |  |
+| deferred | 10 | A backend worker owns its op variant facts and takes its ABI table `immutable`, with no per-worker clone |  |  |  |
+| deferred | 11 | Whether a target provides every host facility is settled once per compile, not per function and spawn site |  |  |  |
 
 ## Problem
 

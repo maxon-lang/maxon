@@ -5,7 +5,8 @@ Class issue: #311 · Priority: P1
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked
-here and every issue it waits on is closed. The plan lands once, after its last stage.
+here and every issue it waits on is closed. A `deferred` stage is skipped. The plan lands once, after its
+last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
@@ -13,9 +14,9 @@ here and every issue it waits on is closed. The plan lands once, after its last 
 | [ ] | 2 | A file's source order key is (layer, root-relative path), computed once per file at load, and no comparison reads the working directory | 1 |  |  |
 | [ ] | 3 | A lint-only analysis writes nothing lowering reads: `EffectSummary` asks the generic-instance registry through a non-minting lookup | 1 |  |  |
 | [ ] | 4 | The spec runner orders its suite and report by spec name in byte order, whatever the filesystem's listing order |  |  |  |
-| [ ] | 5 | `Map` and `Set` walk in a named order through `inKeyOrder()` or `inTableOrder()` |  |  | How is the walk rule enforced? (a) a `maxon lint` rule for every program; (b) only the compiler's own build; (c) no rule, only the gate. Recommended: (a). |
-| [ ] | 6 | Every table walk in the compiler, stdlib, tests and examples names its order, minting walks taking `inKeyOrder()` | 5 |  |  |
-| [ ] | 7 | A bare `for` over a `Map` or `Set` is a lint finding that names both walk doors | 6 |  |  |
+| deferred | 5 | `Map` and `Set` walk in a named order through `inKeyOrder()` or `inTableOrder()` |  |  | How is the walk rule enforced? (a) a `maxon lint` rule for every program; (b) only the compiler's own build; (c) no rule, only the gate. Recommended: (a). |
+| deferred | 6 | Every table walk in the compiler, stdlib, tests and examples names its order, minting walks taking `inKeyOrder()` | 5 |  |  |
+| deferred | 7 | A bare `for` over a `Map` or `Set` is a lint finding that names both walk doors | 6 |  |  |
 
 ## Problem
 

@@ -5,7 +5,8 @@ Class issue: #82 · Priority: P1
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked
-here and every issue it waits on is closed. The plan lands once, after its last stage.
+here and every issue it waits on is closed. A `deferred` stage is skipped. The plan lands once, after its
+last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
@@ -18,7 +19,7 @@ here and every issue it waits on is closed. The plan lands once, after its last 
 | [ ] | 7 | A short key's hash is one runtime call that takes the seed as an argument, with no separate seed load and no span guard | [structural-equality](structural-equality.md) 4 |  |  |
 | [ ] | 8 | Map and Set are one table core with control words, capped tables, and a rehash that moves keys with no retain or release; two commits | 3, [structural-equality](structural-equality.md) 4, [structural-equality](structural-equality.md) 5 |  | Open questions 2 and 3: the table's storage shape (three columns per capped table, recommended, or a compiler-owned group storage kind) and whether the cached hash column is dropped (recommended on equal readings) or kept |
 | [ ] | 9 | A generic type is compiled per instantiation, so a method costs the same at one call site or at ten; starts only if stage 3 confirms #106's gate | 3 |  | Stage 3's reading of #106's gate: starts only if the gate is confirmed; otherwise withdrawing #106 is the maintainer's decision |
-| [ ] | 10 | The closing measurement: every Map and hash row re-measured on both hosts, each at 1.0 or below against Go or each remaining term naming an open issue | 1, 2, 3, 4, 5, 6, 7, 8, 9 |  |  |
+| deferred | 10 | The closing measurement: every Map and hash row re-measured on both hosts, each at 1.0 or below against Go or each remaining term naming an open issue | 1, 2, 3, 4, 5, 6, 7, 8, 9 |  |  |
 
 ## Problem
 
