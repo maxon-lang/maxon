@@ -432,8 +432,9 @@ function commandInbox(options) {
   printMessages(unread(required(options, 'as')));
 }
 
-function commandAck(options, ids) {
+function commandAck(options, given) {
   const id = required(options, 'as');
+  const ids = given.flatMap(arg => String(arg).split(ACK_SEPARATOR)).filter(Boolean);
   if (ids.length === 0) fail('ack needs the ids of the messages read');
   for (const comment of ids) api('POST', `repos/${repo()}/issues/comments/${comment}/reactions`, { content: READ_REACTION });
   const acked = new Set(ids.map(String));
@@ -458,7 +459,7 @@ async function commandWait(options) {
 }
 
 async function commandStep(options) {
-  if (options.ack !== undefined) commandAck(options, options.ack.split(ACK_SEPARATOR).filter(Boolean));
+  if (options.ack !== undefined) commandAck(options, [options.ack]);
   await commandHeartbeat(options);
   commandInbox(options);
 }
