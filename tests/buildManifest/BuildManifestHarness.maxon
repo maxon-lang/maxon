@@ -95,8 +95,7 @@ let SecondsPerMinute = 60
 	let ShellCommandFlag = "-Command"
 	let ShellNoProfileFlag = "-NoProfile"
 #else
-	let PosixShellName = "sh"
-	let PosixShellCommandFlag = "-c"
+	let ExecWithOwnPidScriptName = "exec-with-own-pid"
 	let ExecWithOwnPidScript = "printf 'pid=%s\\ntoken=%s\\nhost=%s\\n' \"$$\" \"$1\" \"$2\" > \"$3\" && exec \"$4\" build"
 	let ChangeModeCommandName = "chmod"
 	let ReadOnlyDirectoryMode = "a-w"
@@ -481,7 +480,7 @@ end 'recordOf'
 	let OwnProcessToken = "build-manifest-reused-id"
 
 	function spawnManifestBuildUnderARecordOfItsOwnPid(staged FilePath) returns CollectedOutput
-		return spawnInStaged(staged, executable: Executable.name(PosixShellName), arguments: [PosixShellCommandFlag, ExecWithOwnPidScript, PosixShellName, OwnProcessToken, thisLockHost(staged), treeLockOf(staged).toString(), testedCompilerPath().toString()], environment: EnvMap.create())
+		return spawnInStaged(staged, executable: posixShell(), arguments: [PosixShellCommandFlag, ExecWithOwnPidScript, ExecWithOwnPidScriptName, OwnProcessToken, thisLockHost(staged), treeLockOf(staged).toString(), testedCompilerPath().toString()], environment: EnvMap.create())
 	end 'spawnManifestBuildUnderARecordOfItsOwnPid'
 
 	function spawnManifestBuildInAReadOnlyCheckout(caseLabel String) returns CollectedOutput

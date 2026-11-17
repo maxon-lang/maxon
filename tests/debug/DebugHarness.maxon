@@ -873,6 +873,7 @@ end 'lineTarget'
 
 let HeldStopWording = "stopped ("
 let HeldStopDeadlineMs = 120000
+let ProgramExitedWording = "the program exited with code"
 
 function sessionHeldAt(staged FilePath, anchor String, environment Environment = Environment.inherit) returns ReplSession
 	let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
@@ -887,6 +888,93 @@ function sessionHeldAt(staged FilePath, anchor String, environment Environment =
 
 	return session
 end 'sessionHeldAt'
+
+#if os(Macos)
+	let DetachedRoundStubGoneDeadlineMs = 20000
+	let DetachedRoundCleanupDeadlineMs = 60000
+
+	union CleanupContinue
+		programGone
+		answered(delivered bool)
+
+		function displayReason() returns String
+			return match self 'which'
+				programGone gives "the program was already gone, so no SIGCONT was sent"
+				answered(delivered) gives "the SIGCONT sent to the program that had not ended was {"delivered" if delivered else "refused"}"
+			end 'which'
+		end 'displayReason'
+	end 'CleanupContinue'
+
+	union RoundEnd
+		ended
+		missed(place ProcessPlace, said String, continued CleanupContinue, killed bool)
+
+		function hasEnded() returns bool
+			return match self 'which'
+				ended gives true
+				missed gives false
+			end 'which'
+		end 'hasEnded'
+
+		function displayReason(program Pid) returns String
+			return match self 'which'
+				ended gives "the session reported the end of process {program}"
+				missed(place, said, continued, killed) gives "Process {program} at the deadline: {place.displayReason()}. {continued.displayReason()}. After the cleanup wait the program {"was still there and was killed outright" if killed else "was gone"}. The session said: {said}"
+			end 'which'
+		end 'displayReason'
+	end 'RoundEnd'
+
+	type DetachedRound
+		let sessionId as Pid
+		let program as Pid
+		let place as ProcessPlace
+		let roundEnd as RoundEnd
+		let finished as bool
+		let markerPresent as bool
+		let said as String
+		let evidence as String
+
+		static function run(staged FilePath, environment Environment, endWording String, endDeadlineMs DurationMs) returns DetachedRound
+			let marker = staged.join(BurstFinishedMarkerName)
+			let session = sessionHeldAt(staged, anchor: BurstSpinAnchorName, environment: environment)
+			let sessionId = session.processId()
+			let program = burstProcessId(staged)
+
+			session.say(DetachCommand)
+
+			let place = placeOnceHandedBack(program, stubGoneDeadlineMs: DetachedRoundStubGoneDeadlineMs)
+			var roundEnd = RoundEnd.ended
+
+			if not session.sayUntilThe(endWording, deadlineMs: endDeadlineMs) 'leftRunning'
+				let placeAtTheDeadline = placeOf(program)
+				let saidAtTheDeadline = session.said()
+				var continued = CleanupContinue.programGone
+
+				if placeAtTheDeadline.isListed() 'stillThere'
+					continued = CleanupContinue.answered(continueProcess(program as DebuggeeProcessId))
+				end 'stillThere'
+
+				_ = session.sayUntilThe(ProgramExitedWording, deadlineMs: DetachedRoundCleanupDeadlineMs)
+
+				let killed = placeOf(program).isListed()
+
+				if killed 'leftBehind'
+					killedOutright(program)
+				end 'leftBehind'
+
+				roundEnd = RoundEnd.missed(placeAtTheDeadline, said: saidAtTheDeadline, continued: continued, killed: killed)
+			end 'leftRunning'
+
+			session.say(QuitCommand)
+
+			let finished = session.finish(DetachedRoundCleanupDeadlineMs)
+			let markerPresent = File.exists(marker)
+			removedIfThere(marker)
+
+			return Self{sessionId: sessionId, program: program, place: place, roundEnd: roundEnd, finished: finished, markerPresent: markerPresent, said: session.said(), evidence: session.evidence()}
+		end 'run'
+	end 'DetachedRound'
+#endif
 
 // One staged, built fixture — the preamble every case in this corpus opens with, in ONE place. A build
 // that failed stops the case running at all, so it panics naming the fixture rather than failing an

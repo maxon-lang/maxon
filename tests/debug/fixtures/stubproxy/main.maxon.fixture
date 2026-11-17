@@ -15,6 +15,7 @@ let SmallBufferMode = "small-buffer"
 let SilentMode = "silent"
 let ProbeAnswerMode = "probe-answer"
 let ProbeSwallowMode = "probe-swallow"
+let ReleasedStoppedMode = "released-stopped"
 let AdvertiseYes = "yes"
 
 let SupportedQuery = "qSupported"
@@ -39,8 +40,23 @@ let KillRequest = "k"
 let SawMarker = "saw "
 let SwallowedMarker = "swallowed "
 let InterruptWording = "interrupt"
+let AcknowledgedReply = "OK"
+let StoppedMarker = "stopped "
+let StoppedParentWording = " under "
+let UnstoppedMarker = "never stopped "
+let StopRefusedMarker = "could not stop "
+
+let StoppedState = "T"
+let ProcessListingTool = "ps"
+let ProcessFieldsOption = "-o"
+let ProcessFields = "ppid=,stat="
+let ProcessIdOption = "-p"
+let ListedFieldSeparator = " "
+let ListingBudgetMs = 10000
+let StopBudgetMs = 10000
 
 let ReverseConnectOption = "-R"
+let AttachOption = "--attach="
 let Loopback = "127.0.0.1"
 let HostPortSeparator = ":"
 let PacketStart = "$"
@@ -70,7 +86,13 @@ union Scenario
 	silent(after String)
 	smallBuffer(limit PacketBytes, advertised bool)
 	probes(fate ProbeFate)
+	releasedStopped(program Pid)
 end 'Scenario'
+
+union ReleasedState
+	stopped(parent String, stat String)
+	notStopped
+end 'ReleasedState'
 
 type Endpoint
 	export let host as String
@@ -89,11 +111,12 @@ type Relay
 	var done as bool
 	var awaitingHalt as bool
 	var lifted as bool
+	var detachAsked as bool
 	var held as String
 	var log as String
 
 	static function create(driver TcpClient, stub TcpClient, scenario Scenario, trace FilePath) returns Relay
-		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, lifted: false, held: "", log: ""}
+		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, lifted: false, detachAsked: false, held: "", log: ""}
 	end 'create'
 
 	function step() returns bool
@@ -121,7 +144,8 @@ type Relay
 			answers or
 			lateHalt or
 			smallBuffer or
-			probes gives false
+			probes or
+			releasedStopped gives false
 		end 'which'
 	end 'stubIsMuted'
 
@@ -142,8 +166,37 @@ type Relay
 			silent(after) gives self.continuedInPlaceOf(piece, after: after)
 			smallBuffer(limit, advertised) gives self.forwardedWithinTheBuffer(piece, limit: limit, advertised: advertised)
 			probes(fate) gives self.forwardedMindingTheProbe(piece, fate: fate)
+			releasedStopped gives self.forwardedMindingTheDetach(piece)
 		end 'which'
 	end 'routed'
+
+	function forwardedMindingTheDetach(piece String) returns bool
+		if not self.done and requestIn(piece) == DetachRequest 'theDetach'
+			self.detachAsked = true
+			self.noted("{SawMarker}{DetachRequest}")
+		end 'theDetach'
+
+		return sent(self.stub, text: piece)
+	end 'forwardedMindingTheDetach'
+
+	function forwardedOnceTheReleasedStops(text String, program Pid) returns bool
+		if self.done or not self.detachAsked 'notTheAcknowledgement'
+			return sent(self.driver, text: text)
+		end 'notTheAcknowledgement'
+
+		var alive = true
+
+		for piece in packetsOf(text) 'eachPiece'
+			if not self.done and requestIn(piece) == AcknowledgedReply 'theAcknowledgement'
+				self.done = true
+				self.noted(stopReportFor(program))
+			end 'theAcknowledgement'
+
+			alive = sent(self.driver, text: piece) and alive
+		end 'eachPiece'
+
+		return alive
+	end 'forwardedOnceTheReleasedStops'
 
 	function forwardedMindingTheProbe(piece String, fate ProbeFate) returns bool
 		if containsInterrupt(piece) 'anInterrupt'
@@ -254,6 +307,18 @@ type Relay
 	end 'continuedInPlaceOf'
 
 	function toDriver(text String) returns bool
+		return match self.scenario 'which'
+			releasedStopped(program) gives self.forwardedOnceTheReleasedStops(text, program: program)
+
+			answers or
+			lateHalt or
+			silent or
+			smallBuffer or
+			probes gives self.forwardedUnlessHeld(text)
+		end 'which'
+	end 'toDriver'
+
+	function forwardedUnlessHeld(text String) returns bool
 		if self.stubIsMuted() 'theStubIsMuted'
 			return true
 		end 'theStubIsMuted'
@@ -266,7 +331,7 @@ type Relay
 		self.held = text
 
 		return true
-	end 'toDriver'
+	end 'forwardedUnlessHeld'
 
 	function close()
 		self.driver.close()
@@ -334,7 +399,56 @@ function containsInterrupt(piece String) returns bool
 	return false
 end 'containsInterrupt'
 
-function scenarioFromEnvironment() returns Scenario
+function stopReportFor(program Pid) returns String
+	if not stopProcess(program as DebuggeeProcessId) 'refused'
+		return "{StopRefusedMarker}{program}"
+	end 'refused'
+
+	let started = Clock.nowMs()
+
+	while Clock.elapsedMs(started) < StopBudgetMs 'untilItStops'
+		match releasedStateOf(program) 'state'
+			stopped(parent, stat) then return "{StoppedMarker}{program}{StoppedParentWording}{parent} ({stat})"
+			notStopped then sleep(PollMs)
+		end 'state'
+	end 'untilItStops'
+
+	return "{UnstoppedMarker}{program}"
+end 'stopReportFor'
+
+function releasedStateOf(program Pid) returns ReleasedState
+	let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessFieldsOption, ProcessFields, ProcessIdOption, "{program}"], deadline: WaitDeadline.within(ListingBudgetMs)) otherwise (e) 'noListing'
+		panic("the stub proxy could not list process {program}: {e.displayReason()}")
+	end 'noListing'
+
+	let fields = StringArray.create(0)
+
+	for piece in listed.stdout.trim().split(ListedFieldSeparator) 'eachPiece'
+		if not piece.isEmpty() 'aField'
+			fields.push(piece)
+		end 'aField'
+	end 'eachPiece'
+
+	let parent = try fields.get(0) otherwise return ReleasedState.notStopped
+	let stat = try fields.get(1) otherwise return ReleasedState.notStopped
+
+	return ReleasedState.stopped(parent, stat: stat) if stat.startsWith(StoppedState) else ReleasedState.notStopped
+end 'releasedStateOf'
+
+function attachedProcess(arguments StringArray) returns Pid
+	for argument in arguments 'eachArgument'
+		if argument.startsWith(AttachOption) 'theAttach'
+			let digits = argument.replaceFirst(AttachOption, with: "")
+			let id = try int.fromString(digits) otherwise panic("'{digits}' after {AttachOption} is not a process id")
+
+			return id as Pid
+		end 'theAttach'
+	end 'eachArgument'
+
+	panic("the stub proxy is started with {AttachOption} and a process id, as the debugger starts its stub")
+end 'attachedProcess'
+
+function scenarioFromEnvironment(arguments StringArray) returns Scenario
 	let mode = setting(ModeVariable)
 
 	if mode == LateHaltMode 'late'
@@ -361,7 +475,11 @@ function scenarioFromEnvironment() returns Scenario
 		return Scenario.probes(ProbeFate.swallowed)
 	end 'probeSwallowed'
 
-	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode}, {SilentMode}, {SmallBufferMode}, {ProbeAnswerMode} and {ProbeSwallowMode}")
+	if mode == ReleasedStoppedMode 'releasedStopped'
+		return Scenario.releasedStopped(attachedProcess(arguments))
+	end 'releasedStopped'
+
+	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode}, {SilentMode}, {SmallBufferMode}, {ProbeAnswerMode}, {ProbeSwallowMode} and {ReleasedStoppedMode}")
 end 'scenarioFromEnvironment'
 
 function packetBytesFromEnvironment() returns PacketBytes
@@ -378,8 +496,8 @@ function pull(source TcpClient) returns Pulled
 		match e 'why'
 			timedOut then return Pulled.idle
 			closed or
-				failed or
-				secure then return Pulled.closed
+			failed or
+			secure then return Pulled.closed
 		end 'why'
 	end 'nothing'
 
@@ -531,7 +649,7 @@ function served(arguments StringArray) returns ExitCode
 	try door.setAcceptDeadline(ConnectBudgetMs) otherwise panic("the stub proxy could not put a deadline on its door")
 	let stubSocket = try door.accept() otherwise panic("the real stub did not connect to the proxy")
 
-	return relayed(stub, stubSocket: stubSocket, driver: driver, scenario: scenarioFromEnvironment(), drains: drains)
+	return relayed(stub, stubSocket: stubSocket, driver: driver, scenario: scenarioFromEnvironment(arguments), drains: drains)
 end 'served'
 
 function relayed(stub StreamingSubprocess, stubSocket TcpClient, driver Endpoint, scenario Scenario, drains StubDrains) returns ExitCode

@@ -626,7 +626,6 @@ enum TraceHostVerb
 	readTracee
 	awaitTracee
 	signalThread
-	signalProcess
 end 'TraceHostVerb'
 
 function traceHostCall(verb TraceHostVerb, a0 RegisterWord, a1 RegisterWord, a2 RegisterWord, a3 RegisterWord, a4 RegisterWord) returns RegisterWord
@@ -638,7 +637,6 @@ function traceHostCall(verb TraceHostVerb, a0 RegisterWord, a1 RegisterWord, a2 
 			readTracee then answer = __Builtins.debugTraceeRead(a0, a1, a2, a3, a4) as RegisterWord
 			awaitTracee then answer = __Builtins.debugAwaitTracee(a0, a1, a2) as RegisterWord
 			signalThread then answer = __Builtins.debugThreadSignal(a0, a1, a2) as RegisterWord
-			signalProcess then answer = __Builtins.debugProcessSignal(a0, a1) as RegisterWord
 		end 'verb'
 
 		return answer
@@ -646,6 +644,30 @@ function traceHostCall(verb TraceHostVerb, a0 RegisterWord, a1 RegisterWord, a2 
 		panic("traceHostCall: `{verb.name}`({a0}, {a1}, {a2}, {a3}, {a4}) asks a host with no process-trace channel — a debug session here drives its debuggee through the backend `backendForHost` vouched for")
 	#endif
 end 'traceHostCall'
+
+public function signalProcess(process DebuggeeProcessId, signal DebuggeeSignal) returns bool
+	#if os(Linux)
+		return __Builtins.debugProcessSignal(process as RegisterWord, signal as RegisterWord) != 0
+	#else
+		panic("signalProcess: this host has no POSIX signals to send {signal} to process {process}")
+	#endif
+end 'signalProcess'
+
+public function continueProcess(process DebuggeeProcessId) returns bool
+	#if os(Linux) or os(Macos)
+		return signalProcess(process, signal: SignalContinue)
+	#else
+		panic("continueProcess: this host has no POSIX signals to continue process {process} with")
+	#endif
+end 'continueProcess'
+
+public function stopProcess(process DebuggeeProcessId) returns bool
+	#if os(Linux) or os(Macos)
+		return signalProcess(process, signal: SignalStop)
+	#else
+		panic("stopProcess: this host has no POSIX signals to stop process {process} with")
+	#endif
+end 'stopProcess'
 
 #if arch(arm64)
 	let GeneralBlockBytes = 272 as ScratchBytes
@@ -735,6 +757,16 @@ let PtraceEventStop = 128
 let SignalCodeEventShift = 8
 let SignalCodeSentByKill = 0
 public let NoTraceSignal = 0 as DebuggeeSignal
+
+#if os(Macos)
+	let SignalContinue = 19 as DebuggeeSignal
+	let SignalStop = 17 as DebuggeeSignal
+#endif
+
+#if os(Linux)
+	let SignalContinue = 18 as DebuggeeSignal
+	let SignalStop = 19 as DebuggeeSignal
+#endif
 
 let TraceProcRoot = "/proc"
 let TraceProcTaskDirectory = "task"
@@ -935,10 +967,6 @@ public type ProcessTrace
 	public function signalThread(process DebuggeeProcessId, thread DebuggeeThreadId, signal DebuggeeSignal) returns bool
 		return traceHostCall(TraceHostVerb.signalThread, a0: process as RegisterWord, a1: thread as RegisterWord, a2: signal as RegisterWord, a3: 0, a4: 0) != 0
 	end 'signalThread'
-
-	public function signalProcess(process DebuggeeProcessId, signal DebuggeeSignal) returns bool
-		return traceHostCall(TraceHostVerb.signalProcess, a0: process as RegisterWord, a1: signal as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
-	end 'signalProcess'
 
 	function signalInfoRead(thread DebuggeeThreadId) returns bool
 		return traceHostCall(TraceHostVerb.request, a0: PtraceGetSigInfo, a1: thread as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceSigInfoSlot), a4: 0) != 0
