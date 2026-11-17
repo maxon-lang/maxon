@@ -250,10 +250,38 @@ function commandInit() {
   console.log(`fleet issue #${issue.number} ready in ${repo()}`);
 }
 
+const ASSIGN_KIND = 'ASSIGN';
+const OVER_BUDGET_OPTION = 'over-budget';
+const OVER_BUDGET_CONSENT = 'yes';
+const PAUSE_ACTION = 'pause';
+
+function recipientAccount(to, options) {
+  if (options.account !== undefined) {
+    if (!ACCOUNT_LABEL_PATTERN.test(options.account)) fail(`the account label must be ${ACCOUNT_LABEL_LENGTH} lowercase hex digits`);
+    return options.account;
+  }
+  const beat = readFleet().heartbeats.find(entry => entry.key === to);
+  if (!beat) fail(`${to} has no heartbeat, so its account's budget is unknown; pass --account <label> for the account it will run on`);
+  return beat.data.account;
+}
+
+function requireBudgetRoom(to, options) {
+  const acct = recipientAccount(to, options);
+  const entry = budgetPlan().find(row => row.account === acct);
+  if (!entry || !entry.action.startsWith(PAUSE_ACTION)) return;
+  if (options[OVER_BUDGET_OPTION] === OVER_BUDGET_CONSENT) {
+    console.error(`fleet: account ${acct} reads "${entry.action}"; sending the ASSIGN to ${to} anyway (--${OVER_BUDGET_OPTION} ${OVER_BUDGET_CONSENT})`);
+    return;
+  }
+  const windows = entry.windows.map(window => `${window.key} ${window.used}% (${window.why})`).join('; ');
+  fail(`refusing ASSIGN to ${to}: account ${acct} reads "${entry.action}" (${windows}). A paused account takes no new task; reply PAUSE instead. Only on the user's explicit word, pass --${OVER_BUDGET_OPTION} ${OVER_BUDGET_CONSENT}`);
+}
+
 function commandSend(options) {
   const from = required(options, 'as');
   const to = required(options, 'to');
   const text = readFileSync(required(options, 'file'), 'utf8').trim();
+  if (text.split(/\s/, 1)[0] === ASSIGN_KIND) requireBudgetRoom(to, options);
   const box = ensureIssue(LABELS.mailbox, mailboxTitle(to));
   const posted = api('POST', `repos/${repo()}/issues/${box.number}/comments`, { body: `FROM ${from}\n\n${text}` });
   console.log(`sent ${posted.id} to ${to}`);
@@ -370,7 +398,7 @@ function allowedConsumers(current, rate, now) {
   return { limit: headroom / (rate * hoursLeft), why: `${rate.toFixed(2)}%/h per consumer, ${hoursLeft.toFixed(1)} h left` };
 }
 
-function commandBudget() {
+function budgetPlan() {
   const { issue, heartbeats, histories } = readFleet();
   const now = nowSeconds();
   const accounts = [...new Set(heartbeats.map(entry => entry.data.account))].sort();
@@ -417,7 +445,11 @@ function commandBudget() {
     plan.push({ account: acct, working, available, target, action, hasLiveSample: Boolean(liveSample), sampleAgeMinutes, windows });
   }
 
-  console.log(JSON.stringify(plan, null, 2));
+  return plan;
+}
+
+function commandBudget() {
+  console.log(JSON.stringify(budgetPlan(), null, 2));
 }
 
 const MAIN_REMOTE = 'origin';

@@ -95,7 +95,9 @@ on the other account. Your fleet id is `orchestrator`.
 
 - `node .claude/fleet/fleet.mjs inbox --as orchestrator` — unread messages, each with its id.
 - `… ack --as orchestrator <id> …` — mark them read, once acted on.
-- `… send --as orchestrator --to <id> --file <path>` — write the message in your scratchpad first.
+- `… send --as orchestrator --to <id> --file <path>` — write the message in your scratchpad first. It
+  refuses an `ASSIGN` to a worker whose account `budget` reads `pause`; `--over-budget yes` overrides it
+  only on the user's word, and `--account <label>` names the account of a worker with no heartbeat yet.
 - `… heartbeat --as orchestrator --model <your model id> --state working` — at every wake, so the
   account has a usage sample even when none of its workers can report one.
 - `… status` — every session's last heartbeat. `… budget` — the sizing below.

@@ -14,6 +14,9 @@ and no issue is assigned twice.
   reply `PAUSE` and stop here. A worker already on a task finishes it. An account the user is burning
   down to a reset (a standing ruling on the fleet issue) is the exception: it takes work whatever its
   pacing says.
+- `fleet.mjs send` enforces this: it refuses an `ASSIGN` to a worker whose account reads `pause`. Pass
+  `--over-budget yes` only on the user's explicit word, such as the burn-down exception. A worker with no
+  heartbeat yet needs `--account <label>`.
 - Never reuse a long-running session the user has retired.
 
 ## 2. Which issue?
