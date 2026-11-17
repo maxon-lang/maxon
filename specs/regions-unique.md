@@ -3429,6 +3429,171 @@ end 'main'
 1 7 5
 ```
 
+<!-- test: a-match-expression-naming-one-unique-local-in-every-arm-moves-it -->
+A `match` expression whose every arm names `q` moves it once when bound, nested or not: `r` would otherwise be a second name for `q`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function viaMatch(p Pick) returns Num
+	let q = Tk.create(1)
+	let r = match p 'k'
+		first gives q
+		second gives q
+	end 'k'
+	r.n = 5
+	return q.n
+end 'viaMatch'
+
+function viaNestedMatch(p Pick, inner bool) returns Num
+	let q = Tk.create(2)
+	let r = match p 'k'
+		first gives q
+		second gives q if inner else q
+	end 'k'
+	r.n = 5
+	return q.n
+end 'viaNestedMatch'
+
+function main() returns ExitCode
+	print("{viaMatch(Pick.first)} {viaNestedMatch(Pick.second, inner: true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:24:9: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:34:9: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-try-fallback-in-a-cond-of-a-unique-local-bound-moves-it -->
+A conditional whose arms are a value `try` falling back to `q` and `q` itself moves `q` when bound, whichever edge ran.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function mk(n Num) returns Tk throws MkError
+	if n == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Tk.create(n)
+end 'mk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let r = (try mk(0) otherwise q) if chosen(1) else q
+	r.n = 5
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:32:10: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-merge-naming-one-unique-local-in-every-arm-hands-it-on-once -->
+A conditional, a `match` expression and a value `try` that name `q` in every arm that can name it, alone or nested in another merge, hand the one value on: each binding reads what `q` held, and nothing is released twice.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function mk(n Num) returns Tk throws MkError
+	if n == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Tk.create(n)
+end 'mk'
+
+function viaCond(flag bool, inner bool) returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let r = q if flag else q
+	let s = (q2 if inner else q2) if flag else q2
+	return r.n * 10 + s.n
+end 'viaCond'
+
+function viaMatch(p Pick, inner bool) returns Num
+	let q = Tk.create(3)
+	let q2 = Tk.create(4)
+	let r = match p 'k'
+		first gives q
+		second gives q
+	end 'k'
+	let s = match p 'k'
+		first gives q2
+		second gives q2 if inner else q2
+	end 'k'
+	return r.n * 10 + s.n
+end 'viaMatch'
+
+function viaTry(code Num, flag bool) returns Num
+	let q = Tk.create(5)
+	let q2 = Tk.create(6)
+	let r = try mk(code) otherwise q
+	let s = (try mk(code) otherwise q2) if flag else q2
+	return r.n * 10 + s.n
+end 'viaTry'
+
+function main() returns ExitCode
+	print("{viaCond(true, inner: false)} {viaCond(false, inner: true)}\n")
+	print("{viaMatch(Pick.first, inner: true)} {viaMatch(Pick.second, inner: false)}\n")
+	print("{viaTry(0, flag: true)} {viaTry(7, flag: false)}\n")
+	return 0
+end 'main'
+```
+```stdout
+12 12
+34 34
+56 76
+```
+```exitcode
+0
+```
+
 <!-- test: a-bound-try-fallback-of-a-unique-local-releases-it-on-either-edge -->
 The bound value `try` owns whichever value reached it, and the fallback local is released on both edges.
 ```maxon

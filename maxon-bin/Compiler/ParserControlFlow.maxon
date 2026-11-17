@@ -6712,7 +6712,7 @@ extension Parser
 		// stay live and the box is released once by each. `emitIncref` in place rather than `__mm_retain` for
 		// the reason its header gives: the phi mints its own id, so no two BINDINGS come to share one — which
 		// is the whole of `coOwnImmutableRebindSource`'s fresh-name argument and does not apply here.
-		if self.giveAliasesAnOutlivingImmutableBinding(give, ownedFloor: ownedFloor) and not self.valueIsAnOwnedIsolatedLocal(give) 'coOwnedImmutableSource'
+		if self.giveAliasesAnOutlivingImmutableBinding(give, ownedFloor: ownedFloor) and not self.mergeEdgeMovesItsOwner(give) 'coOwnedImmutableSource'
 			// The incref belongs on the ARM's edge, not on `currentBlock`: the arm runs on one path, and a
 			// reference taken on the unconditional path would be owed by the phi on an edge that never took it.
 			// The same placement `promoteBorrowedMergeEdge` makes, for the same reason.
@@ -6730,6 +6730,10 @@ extension Parser
 	function valueIsAnOwnedIsolatedLocal(value ValueId) returns bool
 		return self.valueIsAnOwnedIsolatedRegion(value) and self.valueIsOwnedHeap(value)
 	end 'valueIsAnOwnedIsolatedLocal'
+
+	function mergeEdgeMovesItsOwner(value ValueId) returns bool
+		return self.valueIsAnOwnedIsolatedLocal(value) or self.valueIsLinear(value)
+	end 'mergeEdgeMovesItsOwner'
 
 	// The four clauses of `settleArmGive`'s question, named so the sentence above is the code: the arm holds
 	// records that die at its exit, the give is a MANAGED pointer (a scalar borrows nothing), it does not

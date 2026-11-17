@@ -5915,7 +5915,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:25:2: this drops 'a', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:23:13: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-ab-d-two-args-same -->
@@ -12069,7 +12069,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:29:2: this drops 'a', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:27:13: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-ac-cond-union-fresh -->
@@ -16102,7 +16102,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:33:2: this drops 'a', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:31:13: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-ad-o-iter-array -->
@@ -29674,82 +29674,6 @@ end 'main'
 0
 ```
 
-<!-- test: model-hand-ap-m1-arm-moves-arm-names -->
-The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `m1-arm-moves-arm-names` of redteamAP.hand_ap4, in capmodel `reggio/REPORTRTAP.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type RlM
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function me(consuming self) returns RlM
-		return self
-	end 'me'
-end 'RlM'
-
-function lg(x Num) returns Num
-	return x
-end 'lg'
-
-function main() returns ExitCode
-	let r = RlM.create(1)
-	let c = (r.me() if lg(1) != 0 else r)
-	c.fin(1)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3223: <fragment>:27:18: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
-```
-
-<!-- test: model-hand-ap-m1-arm-moves-arm-names-rev -->
-The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `m1-arm-moves-arm-names-rev` of redteamAP.hand_ap4, in capmodel `reggio/REPORTRTAP.txt`.
-
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type RlM
-	var code as Num
-
-	static function create(code Num) returns Self
-		return Self{code: code}
-	end 'create'
-
-	function fin(consuming self, c Num)
-		let _ = c
-		destruct self
-	end 'fin'
-
-	function me(consuming self) returns RlM
-		return self
-	end 'me'
-end 'RlM'
-
-function lg(x Num) returns Num
-	return x
-end 'lg'
-
-function main() returns ExitCode
-	let r = RlM.create(1)
-	let c = (r if lg(0) != 0 else r.me())
-	c.fin(1)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3223: <fragment>:27:13: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
-```
-
 <!-- test: model-hand-ap-m1-arms-finalize-different -->
 The model (`core-m3w-fa25`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `m1-arms-finalize-different` of redteamAP.hand_ap4, in capmodel `reggio/REPORTRTAP.txt`.
 
@@ -34720,6 +34644,109 @@ end 'main'
 error E3200: <fragment>:37:8: 'r' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
+<!-- test: model-hand-fa25-a-cond-linear-same -->
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-cond-linear-same` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let r = Rl.create(1)
+	let c = (r if lg(1) != 0 else r)
+	c.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa25-a-cond-linear-same-then-use -->
+The model (`core-m3w-fa25`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a-cond-linear-same-then-use` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let r = Rl.create(1)
+	let c = (r if lg(1) != 0 else r)
+	c.fin(1)
+	r.fin(2)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:42:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- test: model-hand-fa25-a-cond-linear-two-vars -->
 The model (`core-m3w-fa25`) refuses it by `R-LIN-COND`; the compiler refuses it with E3223. Model program `a-cond-linear-two-vars` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
 
@@ -34769,8 +34796,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:43:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
-error E3223: <fragment>:43:2: this drops 'q', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:41:13: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-fa25-a-cond-linear-var-and-temp -->
@@ -34821,7 +34847,58 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:42:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:40:13: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: model-hand-fa25-a-cond-linear-nested -->
+The model (`core-m3w-fa25`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a-cond-linear-nested` of redteamFA25.hand_fa25, in capmodel `reggio/REPORTFA25.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let r = Rl.create(1)
+	let c = ((r if lg(0) != 0 else r) if lg(1) != 0 else r)
+	c.fin(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: model-hand-fa25-a-cond-linear-nested-two -->
@@ -34873,8 +34950,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:43:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
-error E3223: <fragment>:43:2: this drops 'q', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:41:36: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-fa25-c-kept-part-linear-send -->
@@ -35035,7 +35111,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:42:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:40:24: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-fa25-a-cond-linear-temp-beside-nested-sent -->
@@ -35108,7 +35184,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:63:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:57:25: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: model-hand-fa25-a-cond-linear-nested-both-temps -->
@@ -35159,5 +35235,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:42:2: this drops 'r', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:40:58: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```

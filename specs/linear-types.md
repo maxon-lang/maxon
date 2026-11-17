@@ -3740,7 +3740,7 @@ error E3224: <fragment>:44:25: a `spawn` takes no linear argument: a factory tha
 ```
 
 <!-- test: cond-over-two-linear-locals-is-refused -->
-The conditional expression moves both locals and uses one, so the other is dropped and each is reported where the function ends.
+The conditional expression moves `a` in one arm and `b` in the other, so each path drops the local its arm did not name, and the drop is reported at the conditional.
 ```maxon
 typealias Code = int(0 to 999)
 
@@ -3776,8 +3776,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:27:2: this drops 'a', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
-error E3223: <fragment>:27:2: this drops 'b', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:24:12: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
 ```
 
 <!-- test: a-conditional-expression-whose-arms-build-the-value-is-accepted -->
@@ -3823,6 +3822,391 @@ fin 2
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-merge-naming-one-linear-local-in-every-arm-moves-it-once -->
+A conditional or a `match` expression whose every arm names the same linear local moves it once, nested merges included, and the merged value carries its obligation: consuming the merged value consumes the local.
+```maxon
+typealias Code = int(0 to 999)
+
+enum Pick
+	first
+	second
+	third
+end 'Pick'
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function viaCond(flag bool)
+	let a = Resp.create(1)
+	let c = a if flag else a
+	c.fin()
+end 'viaCond'
+
+function viaNestedCond(flag bool, inner bool)
+	let a = Resp.create(2)
+	let c = (a if inner else a) if flag else a
+	c.fin()
+end 'viaNestedCond'
+
+function viaMatch(p Pick)
+	let a = Resp.create(3)
+	let c = match p 'k'
+		first gives a
+		second gives a
+		third gives a
+	end 'k'
+	c.fin()
+end 'viaMatch'
+
+function viaNestedMatch(p Pick, inner bool)
+	let a = Resp.create(4)
+	let c = match p 'k'
+		first gives a
+		second gives a if inner else a
+		third gives a
+	end 'k'
+	c.fin()
+end 'viaNestedMatch'
+
+function main() returns ExitCode
+	viaCond(true)
+	viaCond(false)
+	viaNestedCond(false, inner: true)
+	viaNestedCond(true, inner: false)
+	viaMatch(Pick.first)
+	viaMatch(Pick.third)
+	viaNestedMatch(Pick.second, inner: true)
+	viaNestedMatch(Pick.second, inner: false)
+	return 0
+end 'main'
+```
+```stdout
+fin 1
+fin 1
+fin 2
+fin 2
+fin 3
+fin 3
+fin 4
+fin 4
+```
+```exitcode
+0
+```
+
+<!-- test: a-linear-local-a-cond-moved-is-refused-after-it -->
+The conditional moved `a`, nested or not, so finalizing it again is a use after the move.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function viaCond(flag bool)
+	let a = Resp.create(1)
+	let c = a if flag else a
+	c.fin()
+	a.fin()
+end 'viaCond'
+
+function viaNestedCond(flag bool, inner bool)
+	let a = Resp.create(2)
+	let c = (a if inner else a) if flag else a
+	c.fin()
+	a.fin()
+end 'viaNestedCond'
+
+function main() returns ExitCode
+	viaCond(true)
+	viaNestedCond(true, inner: true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:28:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-linear-local-a-match-expression-moved-is-refused-after-it -->
+The `match` expression moved `a`, nested or not, so finalizing it again is a use after the move.
+```maxon
+typealias Code = int(0 to 999)
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function viaMatch(p Pick)
+	let a = Resp.create(1)
+	let c = match p 'k'
+		first gives a
+		second gives a
+	end 'k'
+	c.fin()
+	a.fin()
+end 'viaMatch'
+
+function viaNestedMatch(p Pick, inner bool)
+	let a = Resp.create(2)
+	let c = match p 'k'
+		first gives a
+		second gives a if inner else a
+	end 'k'
+	c.fin()
+	a.fin()
+end 'viaNestedMatch'
+
+function main() returns ExitCode
+	viaMatch(Pick.first)
+	viaNestedMatch(Pick.second, inner: true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:39:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-cond-of-one-linear-local-lent-to-a-method-call-is-refused -->
+The conditional moves `a` even when its value is only lent: the merged value is a temporary the method call borrows and nothing consumes.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+
+	function peek() returns Code
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function pick(flag bool) returns Code
+	let a = Resp.create(1)
+	let n = (a if flag else a).peek()
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:23:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: a-cond-naming-a-linear-local-in-one-arm-is-refused -->
+Only the first arm names `a`, so the path through the other arm drops it: the verdict an `if` gets when one branch consumes a linear local (`a-branch-consuming-a-linear-local-in-one-arm-is-refused`).
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function pick(flag bool)
+	let a = Resp.create(1)
+	let c = a if flag else Resp.create(2)
+	c.fin()
+end 'pick'
+
+function main() returns ExitCode
+	pick(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:19:12: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: a-branch-consuming-a-linear-local-in-one-arm-is-refused -->
+The `if` form of `a-cond-naming-a-linear-local-in-one-arm-is-refused`: the `else` branch drops `a`.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function pick(flag bool)
+	let a = Resp.create(1)
+
+	if flag 'chosen'
+		a.fin()
+	end 'chosen' else 'built'
+		Resp.create(2).fin()
+	end 'built'
+end 'pick'
+
+function main() returns ExitCode
+	pick(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:20:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: a-try-fallback-naming-a-linear-local-is-refused -->
+A value `try`'s fallback names `a` and its call arm does not, alone or as the arm of a conditional, so the path where the call succeeds drops `a`: the rule `a-cond-naming-a-linear-local-in-one-arm-is-refused` follows.
+```maxon
+typealias Code = int(0 to 999)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function make(code Code) returns Resp throws MkError
+	if code == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Resp.create(code)
+end 'make'
+
+function viaTry(code Code)
+	let a = Resp.create(1)
+	let c = try make(code) otherwise a
+	c.fin()
+end 'viaTry'
+
+function viaNestedTry(code Code, flag bool)
+	let a = Resp.create(2)
+	let c = (try make(code) otherwise a) if flag else a
+	c.fin()
+end 'viaNestedTry'
+
+function main() returns ExitCode
+	viaTry(0)
+	viaNestedTry(0, flag: true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3223: <fragment>:31:10: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+error E3223: <fragment>:37:11: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+```
+
+<!-- test: a-linear-local-a-try-fallback-moved-is-refused-after-it -->
+The value `try` moved `a` into its result, so finalizing `a` afterwards is a use after the move: the record is finalized once.
+```maxon
+typealias Code = int(0 to 999)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function make(code Code) returns Resp throws MkError
+	if code == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Resp.create(code)
+end 'make'
+
+function viaTry(code Code)
+	let a = Resp.create(1)
+	let c = try make(code) otherwise a
+	c.fin()
+	a.fin()
+end 'viaTry'
+
+function main() returns ExitCode
+	viaTry(0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:33:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: a-break-out-of-a-loop-with-a-live-linear-value-is-refused -->
