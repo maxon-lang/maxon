@@ -1,0 +1,38 @@
+#if os(Windows)
+	let MomentHeldCase = "a-run-removes-an-ended-runners-scratch-holding-a-file-held-for-a-moment"
+	let MomentHeldTestName = "the tests run after the sweep of the scratch an ended runner left"
+	let MomentHeldBuildDirName = "test"
+	let MomentHeldScratchPrefix = "scratch-"
+	let MomentHeldFileName = "held.txt"
+	let MomentHeldMarkerName = "first-pass.txt"
+	let MomentHeldHoldMs = 600
+
+	test 'a run removes the scratch of an ended runner whose file another process holds for a moment past the sweep'
+		let caseDir = fixtureDir("{FixturesDir}/{MomentHeldCase}")
+		let ended = caseDir.join(ProjectProductsDirName).join(MomentHeldBuildDirName).join("{MomentHeldScratchPrefix}{endedProcessId()}")
+		let held = ended.join(MomentHeldFileName)
+		let marker = ended.join(MomentHeldMarkerName)
+
+		Expect.isTrue(Directory.create(ended), message: "the gate could not create {ended.toString()}")
+		File.writeText(marker, content: "nothing holds this file\n")
+		File.writeText(held, content: "a process holds this file without delete sharing\n")
+
+		let run = runHoldingPastRemoval(fixtureArgv(caseDir, caseName: MomentHeldCase), staged: Directory.currentPath(), environment: pinnedHashEnvironment(), held: held, marker: marker, release: HolderRelease.pastRemovalBy(MomentHeldHoldMs), what: "the '{MomentHeldCase}' case")
+		let endedRemoved = not Directory.exists(ended)
+		let refusals = run.removalRefusalsNaming(ended.filename())
+		let report = "{run.output.stdout}{run.output.stderr}"
+
+		if not endedRemoved 'endedStays'
+			discardStagedDir(ended)
+		end 'endedStays'
+
+		match run.markerRemoval 'firstPass'
+			removedAt then Expect.equal(run.holderExit, expected: 0, message: "the file holder {run.holderPid} exited {run.holderExit} once it was released, so the file may not have been held when the sweep first asked for it. It printed: {report}")
+			stayed then Expect.fail("the run never removed {marker.toString()}, which nothing holds, so it never swept the scratch of the ended runner. It printed: {report}")
+		end 'firstPass'
+
+		Expect.isEmpty(listedLines(refusals), message: "the run gave up on a file of an ended runner's scratch that was released {MomentHeldHoldMs} ms after the sweep's first pass, instead of waiting for it.")
+		Expect.isTrue(endedRemoved, message: "the run left {ended.toString()}, the scratch of a runner that has ended, whose file was released {MomentHeldHoldMs} ms after the sweep's first pass. It printed: {report}")
+		expectRanOnePassingTest(run.output, testName: MomentHeldTestName, caseName: MomentHeldCase)
+	end 'a run removes the scratch of an ended runner whose file another process holds for a moment past the sweep'
+#endif

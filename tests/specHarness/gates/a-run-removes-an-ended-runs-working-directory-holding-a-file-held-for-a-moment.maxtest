@@ -1,0 +1,45 @@
+#if os(Windows)
+	let MomentHeldRunDirPrefix = ".spec-run-"
+	let MomentHeldRunFileName = "held.txt"
+	let MomentHeldRunMarkerName = "first-pass.txt"
+	let MomentHeldRunHoldMs = 600
+
+	test 'a run removes the working directory of an ended run whose file another process holds for a moment past the sweep'
+		let staged = stagedGateFixture()
+		let ended = staged.join("{MomentHeldRunDirPrefix}{endedProcessId()}")
+		let held = ended.join(MomentHeldRunFileName)
+		let marker = ended.join(MomentHeldRunMarkerName)
+
+		Expect.isTrue(Directory.create(ended), message: "the gate could not create {ended.toString()}")
+		File.writeText(marker, content: "nothing holds this file\n")
+		File.writeText(held, content: "a process holds this file without delete sharing\n")
+
+		let run = runHoldingPastRemoval([SpecTestCommandWord, staged.toString()], staged: staged, environment: Environment.inherit, held: held, marker: marker, release: HolderRelease.pastRemovalBy(MomentHeldRunHoldMs), what: "`{SpecTestCommandWord}` at {staged.toString()}")
+		let said = everythingSaid(run.output)
+		let broken = StringArray.create(0)
+
+		match run.markerRemoval 'firstPass'
+			removedAt then break
+			stayed then broken.push("the run never removed {marker.toString()}, which nothing holds, so it never swept the working directory of the ended run")
+		end 'firstPass'
+
+		if run.holderExit != 0 'holderFailed'
+			broken.push("the file holder {run.holderPid} exited {run.holderExit} once it was released, so the file may not have been held when the sweep first asked for it")
+		end 'holderFailed'
+
+		for refusal in run.removalRefusalsNaming(ended.filename()) 'eachRefusal'
+			broken.push("the run gave up on a file of an ended run's working directory that was released {MomentHeldRunHoldMs} ms after the sweep's first pass, instead of waiting for it: {refusal}")
+		end 'eachRefusal'
+
+		if Directory.exists(ended) 'endedRunStays'
+			broken.push("the run left {ended.toString()}, the working directory of a run that has ended, whose file was released {MomentHeldRunHoldMs} ms after the sweep's first pass")
+		end 'endedRunStays'
+
+		if run.output.exitCode() != SuccessExitCode 'runFailed'
+			broken.push("the run exited {run.output.exitCode()}. It said:\n{said}\n")
+		end 'runFailed'
+
+		discardStagedDir(staged)
+		requireNothingBroken(broken, headline: "a run's sweep of an ended run's working directory holding a file held for a moment")
+	end 'a run removes the working directory of an ended run whose file another process holds for a moment past the sweep'
+#endif

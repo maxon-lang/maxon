@@ -1,0 +1,71 @@
+#if os(Windows)
+	let WaitSpentCase = "a-run-reports-an-ended-runners-held-scratch-file-once-its-wait-is-spent"
+	let WaitSpentTestName = "the tests run after the sweep gives up on the file an ended runner left held"
+	let WaitSpentBuildDirName = "test"
+	let WaitSpentScratchPrefix = "scratch-"
+	let WaitSpentFileName = "held.txt"
+	let WaitSpentMarkerName = "first-pass.txt"
+	let WaitSpentReportPrefix = "test: could not remove "
+	let WaitSpentReportSuffix = ", which a test run that has ended left in its scratch directory"
+	// The compiler's JustRunFileBusyWaitMs, which a corpus cannot name: the two move together.
+	let SweepBusyWaitMs = 2000
+	let WaitSpentLeastMs = SweepBusyWaitMs / 2
+	let WaitSpentMostMs = SweepBusyWaitMs * 3
+
+	test 'a run reports the file of an ended runner held past the sweep only once the sweep has waited about its bound for it'
+		let caseDir = fixtureDir("{FixturesDir}/{WaitSpentCase}")
+		let ended = caseDir.join(ProjectProductsDirName).join(WaitSpentBuildDirName).join("{WaitSpentScratchPrefix}{endedProcessId()}")
+		let held = ended.join(WaitSpentFileName)
+		let marker = ended.join(WaitSpentMarkerName)
+
+		Expect.isTrue(Directory.create(ended), message: "the gate could not create {ended.toString()}")
+		File.writeText(marker, content: "nothing holds this file\n")
+		File.writeText(held, content: "a process holds this file without delete sharing for the whole run\n")
+
+		let run = runHoldingPastRemoval(fixtureArgv(caseDir, caseName: WaitSpentCase), staged: Directory.currentPath(), environment: pinnedHashEnvironment(), held: held, marker: marker, release: HolderRelease.afterTheRun, what: "the '{WaitSpentCase}' case")
+		let reports = reportsOf(run.stderrLines, held: held)
+		let report = "{run.output.stdout}{run.output.stderr}"
+
+		discardStagedDir(ended)
+
+		Expect.equal(run.holderExit, expected: 0, message: "the file holder {run.holderPid} exited {run.holderExit} once it was released, so the file may not have been held for the whole run. It printed: {report}")
+		Expect.equal(reports.count(), expected: 1, message: "the run must report {held.toString()}, which another process held for the whole run, once, as `{WaitSpentReportPrefix}<file>{WaitSpentReportSuffix}`. It printed: {report}")
+
+		let reported = try reports.get(0) otherwise panic("the gate could not run — one report was counted and is gone")
+
+		match run.markerRemoval 'firstPass'
+			removedAt(instantMs) then expectWaitedAboutTheBound(instantMs, reportedAtMs: reported.arrivedAtMs, report: report)
+			stayed then Expect.fail("the run never removed {marker.toString()}, which nothing holds, so it never swept the scratch of the ended runner. It printed: {report}")
+		end 'firstPass'
+
+		expectRanOnePassingTest(run.output, testName: WaitSpentTestName, caseName: WaitSpentCase)
+	end 'a run reports the file of an ended runner held past the sweep only once the sweep has waited about its bound for it'
+
+	function expectWaitedAboutTheBound(removedAtMs InstantMs, reportedAtMs InstantMs, report String) throws TestFailure
+		let waitedMs = (reportedAtMs - removedAtMs) as DurationMs if reportedAtMs > removedAtMs else 0 as DurationMs
+
+		try Expect.atLeast(waitedMs, than: WaitSpentLeastMs, message: "the run reported the held file {waitedMs} ms after its sweep's first pass removed the file beside it, so it gave up long before its {SweepBusyWaitMs} ms bound for a file refused as busy. It printed: {report}")
+		try Expect.lessThan(waitedMs, than: WaitSpentMostMs, message: "the run reported the held file {waitedMs} ms after its sweep's first pass removed the file beside it, far past its {SweepBusyWaitMs} ms bound for a file refused as busy. It printed: {report}")
+	end 'expectWaitedAboutTheBound'
+
+	function reportsOf(lines TimedLineArray, held FilePath) returns TimedLineArray
+		let heldPhysically = try held.resolvedPhysically() otherwise panic("the gate could not run — {held.toString()} is not there to be resolved, though nothing removed it")
+		let reports = TimedLineArray.create(0)
+
+		for line in lines 'eachLine'
+			if not line.text.startsWith(WaitSpentReportPrefix) or not line.text.endsWith(WaitSpentReportSuffix) 'notTheSweepsReport'
+				continue
+			end 'notTheSweepsReport'
+
+			let spelled = line.text.replaceFirst(WaitSpentReportPrefix, with: "").replace(WaitSpentReportSuffix, with: "")
+			let named = try FilePath.from(spelled) otherwise continue
+			let namedPhysically = try named.resolvedPhysically() otherwise continue
+
+			if namedPhysically.equals(heldPhysically) 'namesTheHeldFile'
+				reports.push(line)
+			end 'namesTheHeldFile'
+		end 'eachLine'
+
+		return reports
+	end 'reportsOf'
+#endif

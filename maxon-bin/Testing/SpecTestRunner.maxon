@@ -1061,11 +1061,9 @@ function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatt
 
 	spliceRemintedBlocks(specPath, parsedText: parsed.text, reminted: reminted)
 
-	for sharedProgram in batch.batches 'eachBatch'
-		discardBuild(sharedProgram.program.writtenFiles, exePath: sharedProgram.program.exePath)
-	end 'eachBatch'
-
-	clearSharedTiers(tempDir, tests: tests)
+	// Last: reruns, the batched-failure diagnosis and the verdicts read this directory up to here, and
+	// whatever is written into it after this stays on disk.
+	emptyScratchDirectory(tempDir)
 
 	return SpecRun.create(results, cpu: cpu, batch: performed.tally, harnessErrors: batch.harnessErrors)
 end 'runOneSpec'
@@ -3438,7 +3436,7 @@ end 'applyOverlaySections'
 typealias StagedSectionNameSet = Set with String
 
 function emptyScratchDirectory(dir FilePath)
-	for stuck in Directory.removeContents(dir) 'eachStuck'
+	for stuck in Directory.removeContents(dir, waitForBusy: JustRunFileBusyWait) 'eachStuck'
 		printError("error: could not remove {stuck.toString()}, which is in the scratch directory {dir.toString()} a spec run stages into\n")
 	end 'eachStuck'
 end 'emptyScratchDirectory'

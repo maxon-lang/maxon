@@ -993,7 +993,8 @@ physical path, every symbolic link along it resolved, so a path a test prints fr
 variable holds. A test reads them through [`TestScratch`](STDLIB_REFERENCE.md#testscratch). Both are removed
 when the process ends, and a process that passes but leaves an entry in either FAILS, each entry named as
 `left MAXON_TEST_SCRATCH/<name>`. A run removes the scratch directories that runs whose process has ended
-left.
+left. Each removal waits up to about 2 s for a file another process holds open against deletion, as a
+process outside the run can on Windows for a moment after a program runs.
 
 **Processes a test leaves.** On every native target a test that passes but leaves a process running when
 it ends FAILS, naming each one as `<pid> <name>`, and the process is ended. A process the test waited for
@@ -3585,7 +3586,9 @@ Running with both variables set to the pair named reproduces the failing phase.
 Every case's program runs with its working directory in `.spec-run-<pid>/`, a directory of the run's own
 directly under the checkout root, and on a native target a case that leaves a process running fails,
 naming it (`docs/SPECS.md`, "What a case leaves behind"). An entry a case leaves in that
-directory is reported after the summary as `left .spec-run/<name>`, and the run exits **1**.
+directory is reported after the summary as `left .spec-run/<name>`, and the run exits **1**. Removing
+that directory, and emptying each spec's scratch directory `.spec-tmp/<spec>/` when its cases finish,
+waits up to about 2 s for a file another process holds open against deletion.
 
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](#the-tree-lock).

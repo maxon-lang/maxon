@@ -996,7 +996,8 @@ physical path, every symbolic link along it resolved, so a path a test prints fr
 variable holds. A test reads them through [`TestScratch`](/docs/stdlib/testing/#testscratch). Both are removed
 when the process ends, and a process that passes but leaves an entry in either FAILS, each entry named as
 `left MAXON_TEST_SCRATCH/<name>`. A run removes the scratch directories that runs whose process has ended
-left.
+left. Each removal waits up to about 2 s for a file another process holds open against deletion, as a
+process outside the run can on Windows for a moment after a program runs.
 
 **Processes a test leaves.** On every native target a test that passes but leaves a process running when
 it ends FAILS, naming each one as `<pid> <name>`, and the process is ended. A process the test waited for

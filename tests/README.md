@@ -92,7 +92,7 @@ tests/
   support/                       not a corpus: the helpers every corpus shares, `public` where a corpus calls them, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
     Staging.maxon                `stagingDir`, `clearStagedTree`, `discardStagedDir`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`, `stagedRemoval`: the removal door `clearStagedTree` and `discardStagedDir` go through, which waits up to `StagedRemovalBoundMs` (10 s, or the bound a case passes) for a file another process holds open without sharing delete, and answers `StagedRemoval.nothingStays` or a `StuckReport` of what stayed: each entry's class on one last removal of it, whether it was waited for and if not why, the time spent against the bound, and on Windows which processes hold the entries still there, from `fixtures/holders/holders.ps1`; the panic of `clearStagedTree` and `discardStagedDir` carries it
-    Spawn.maxon                  `runIn`, `runCompiler` (both throw `SubprocessError`), `spawnFailureMessage`, `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `refuseBrokenRead`, `endedProcessId`, `endedWithin`: waits, bounded, for a process to end, because the directory a running program runs in cannot be removed, `backdatedToTheYear2000`, `fileHeldOpen`: a `FileHolder` process that holds a file open, for a fixed `FileHold.forMs` or `untilReleased`, once it has announced its pid, and whose `ended()` closes its stdin, which releases an `untilReleased` hold, and waits for its exit
+    Spawn.maxon                  `runIn`, `runCompiler` (both throw `SubprocessError`), `spawnFailureMessage`, `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `refuseBrokenRead`, `endedProcessId`, `endedWithin`: waits, bounded, for a process to end, because the directory a running program runs in cannot be removed, `backdatedToTheYear2000`, `fileHeldOpen`: a `FileHolder` process that holds a file open, for a fixed `FileHold.forMs` or `untilReleased`, once it has announced its pid, and whose `ended()` closes its stdin, which releases an `untilReleased` hold, and waits for its exit, `runHoldingPastRemoval`: the compiler run with a file held `untilReleased` beside a marker file nothing holds, both in a directory the run removes or empties; the marker's removal is that removal's first pass, and the hold ends `HolderRelease.pastRemovalBy` a fixed time after it or `afterTheRun`, always before the `HeldRun` comes back with the run's `CollectedOutput`, its stderr lines each with the instant it arrived (`TimedLine`), the `MarkerRemoval` it saw, the holder's exit and `removalRefusalsNaming` an entry
     FedProcess.maxon             `runFedAfterLine`, `FedRun`, `StagedRunEnd`: a child fed after it prints a line, pumped without blocking, its exit followed by a tail drain bounded by silence and by a cap
     HeldPipe.maxon               `stagedHeldPipe`, `heldPipeLinesMissingFrom`, `endHeldPipeHolder`: the program that exits while a process it started holds its output, and the cleanup of that process, which throws a `TestFailure` naming the product when the output it forwarded names no holder
     fixtures/heldpipe/main.maxon.fixture   the held-pipe program: it prints a line, starts a holder that prints eight lines 400 ms apart and then holds the pipe until told to stop; given the argument `linger` (Linux) it instead starts that holder in a session of its own with `setsid` and sleeps past any deadline - stored name only, see rule 1
@@ -134,6 +134,8 @@ tests/
     a-test-and-a-build-of-one-project-compile-the-same-files.maxtest   a `.maxproj` listing only `src`: `maxon test` and `maxon build` both leave out a `stray/` that does not compile
     a-quoted-frame-is-output-and-a-real-leak-is-not.maxtest   a descendant frame quoted mid-line, echoed from another run or carrying no token is test output; a frame forging the run's own token fails on the count the binary ended with; a leak after unterminated stderr is still named; a test binary given no `--descendant-token` stops naming the option
     a-test-project-whose-support-code-has-lint-findings-passes.maxtest   support code that drops a pure result and holds an unused unexported function and an unused `export` compiles under `maxon test`, and its test passes
+    a-run-removes-an-ended-runners-scratch-holding-a-file-held-for-a-moment.maxtest   an ended runner's project scratch holding a file another process holds without delete sharing until 600 ms past the sweep's first pass is removed, and the run reports nothing about it (Windows only)
+    a-run-reports-an-ended-runners-held-scratch-file-once-its-wait-is-spent.maxtest   an ended runner's project scratch holding a file held for the whole run is reported with its `could not remove` line, which arrives between half and three times the sweep's 2 s wait after its first pass, and the run's own test passes (Windows only)
   test-fixtures/<case>/
     <name>.maxtest               a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
@@ -1072,6 +1074,7 @@ tests/
     a-member-spelled-with-its-owner-in-another-types-section-is-documented.maxtest         `Owner.member` documents a member wherever the document spells it
     a-member-of-a-non-public-extension-belongs-to-the-extended-type.maxtest               a `public` member of an `extension` is owned by the extended type whatever the extension's own modifier
     each-shared-harness-helper-is-defined-once.maxtest       every `public function` in `tests/support/*.maxon` is declared by that one file and by no other `.maxon` or `.maxtest` under `tests/`
+    every-removal-the-test-runners-make-waits-for-a-file-a-just-run-program-holds.maxtest   every line under `maxon-bin/Testing/` calling `Directory.removeTree(` or `Directory.removeContents(` passes `waitForBusy: JustRunFileBusyWait`, and at least one does
     the-readme-layout-tree-lists-every-test-case.maxtest     the layout tree lists every test case
   targets/
     the-compiler-accepts-exactly-the-targets-the-table-lists.maxtest     `--target`'s refusal lists the table's `target` column, in its order
@@ -1278,7 +1281,11 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
   E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
-  and a refused shard naming the live-network cases the whole directory left out, a report in the spec
+  and a refused shard naming the live-network cases the whole directory left out, the working directory of a run
+  that has ended removed on Windows though another process holds a file in it without delete sharing until shortly
+  after the sweep's first pass, the scratch directory of each spec a run ran left in place and empty, on Windows
+  too when another process holds a file in it without delete sharing until shortly after the emptying's first
+  pass, a report in the spec
   directory's listing order, then declaration order, printed byte for byte the same at `--workers=1` and
   `--workers=4` while the spec reported first finishes last, and a `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
@@ -2150,6 +2157,12 @@ skipped would drop out of the roster and read exactly like a documented name.
 
 `each-shared-harness-helper-is-defined-once.maxtest` reads every `public function` in `tests/support/*.maxon`
 and fails naming each one that another `.maxon` or `.maxtest` under `tests/` declares again.
+
+`every-removal-the-test-runners-make-waits-for-a-file-a-just-run-program-holds.maxtest` reads every `.maxon` under
+`maxon-bin/Testing/` and fails naming each line, comment lines aside, that calls `Directory.removeTree(` or
+`Directory.removeContents(` without `waitForBusy: JustRunFileBusyWait)` on it, and fails when it finds no such call at all.
+On Windows a process outside the run opens each executable a test or a spec case has just run for a few milliseconds
+without delete sharing, so every removal of what a run leaves waits, under one shared bound, for a file refused as busy.
 
 `the-readme-layout-tree-lists-every-test-case.maxtest` reads the fenced tree in this file and every `.maxtest`
 under each directory directly under `tests/`, descending into all but `fixtures/` and dot-directories, which

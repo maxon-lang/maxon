@@ -88,14 +88,14 @@ function removeEndedScratchIn(parent FilePath, prefix String)
 	end 'unlistable'
 
 	for directory in ended 'eachEndedRun'
-		for stuck in Directory.removeTree(directory) 'eachStuck'
+		for stuck in Directory.removeTree(directory, waitForBusy: JustRunFileBusyWait) 'eachStuck'
 			printError("{TestCommandName}: could not remove {stuck.toString()}, which a test run that has ended left in its scratch directory\n")
 		end 'eachStuck'
 	end 'eachEndedRun'
 end 'removeEndedScratchIn'
 
 function freshScratchDirectory(directory FilePath) returns FilePath throws TestStagingError
-	let stale = Directory.removeTree(directory)
+	let stale = Directory.removeTree(directory, waitForBusy: JustRunFileBusyWait)
 
 	if not stale.isEmpty() 'staleStays'
 		throw TestStagingError.refused("could not clear the scratch directory {directory.toString()} an earlier process left: {joinedWith(spelledOut(stale), separator: ListSeparator)}")
@@ -111,7 +111,7 @@ function freshScratchDirectory(directory FilePath) returns FilePath throws TestS
 end 'freshScratchDirectory'
 
 function refusalAfterRemoving(directory FilePath, reason String) returns TestStagingError
-	let stuck = Directory.removeTree(directory)
+	let stuck = Directory.removeTree(directory, waitForBusy: JustRunFileBusyWait)
 
 	if stuck.isEmpty() 'removed'
 		return TestStagingError.refused(reason)
@@ -125,7 +125,7 @@ function discardScratchDirectory(directory FilePath, variable String, left Strin
 		left.push(leftover)
 	end 'eachLeftover'
 
-	for stuck in Directory.removeTree(directory) 'eachStuck'
+	for stuck in Directory.removeTree(directory, waitForBusy: JustRunFileBusyWait) 'eachStuck'
 		printError("{TestCommandName}: could not remove {stuck.toString()}, in a test's scratch directory\n")
 	end 'eachStuck'
 end 'discardScratchDirectory'

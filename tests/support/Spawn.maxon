@@ -12,6 +12,9 @@ let FileHolderAnnouncementPrefix = "holding "
 let FileHolderUntilReleasedWord = "untilReleased"
 let FileHolderEndMs = 10000
 let FileHolderWhat = "the file holder"
+let HeldRunLongestMs = 100000
+let HeldRunEndMs = 10000
+let RemovalRefusalWording = "could not remove "
 
 #if os(Windows)
 	let WindowsLinkToolName = "cmd"
@@ -224,15 +227,231 @@ public type FileHolder
 	export function ended() returns ExitInt
 		child.closeStdin()
 
-		let status = try child.wait(deadline: WaitDeadline.within(FileHolderEndMs)) otherwise (failure) 'notEnded'
-			panic("the gate could not run — waiting for {FileHolderWhat} ({pid}) to end ended in {failure.displayReason()}.")
-		end 'notEnded'
-
+		let status = exitWithin(child, deadlineMs: FileHolderEndMs, what: "{FileHolderWhat} ({pid})")
 		child.release()
 
 		return status
 	end 'ended'
 end 'FileHolder'
+
+function exitWithin(child StreamingSubprocess, deadlineMs WaitDeadlineMs, what String) returns ExitInt
+	return try child.wait(deadline: WaitDeadline.within(deadlineMs)) otherwise (failure) 'notEnded'
+		panic("{unendedMessage(what, failure: failure)}")
+	end 'notEnded'
+end 'exitWithin'
+
+function unendedMessage(what String, failure SubprocessError) returns String
+	return "the gate could not run — waiting for {what} to end ended in {failure.displayReason()}."
+end 'unendedMessage'
+
+public union HolderRelease
+	pastRemovalBy(holdMs FileHoldMs)
+	afterTheRun
+end 'HolderRelease'
+
+public union MarkerRemoval
+	removedAt(instantMs InstantMs)
+	stayed
+end 'MarkerRemoval'
+
+public type TimedLine
+	public let arrivedAtMs as InstantMs
+	public let text as String
+
+	static function of(arrivedAtMs InstantMs, text String) returns TimedLine
+		return Self{arrivedAtMs: arrivedAtMs, text: text}
+	end 'of'
+end 'TimedLine'
+
+public typealias TimedLineArray = Array with TimedLine
+
+public type HeldRun
+	public let output as CollectedOutput
+	public let stderrLines as TimedLineArray
+	public let markerRemoval as MarkerRemoval
+	public let holderPid as Pid
+	public let holderExit as ExitInt
+
+	static function of(output CollectedOutput, stderrLines TimedLineArray, markerRemoval MarkerRemoval, holderPid Pid, holderExit ExitInt) returns HeldRun
+		return Self{output: output, stderrLines: stderrLines, markerRemoval: markerRemoval, holderPid: holderPid, holderExit: holderExit}
+	end 'of'
+
+	public function removalRefusalsNaming(entry String) returns StringArray
+		let refusals = StringArray.create(0)
+
+		for line in stderrLines 'eachLine'
+			if line.text.contains(RemovalRefusalWording) and line.text.contains(entry) 'refusesIt'
+				refusals.push(line.text)
+			end 'refusesIt'
+		end 'eachLine'
+
+		return refusals
+	end 'removalRefusalsNaming'
+end 'HeldRun'
+
+union HolderState
+	holding
+	ended(exit ExitInt)
+end 'HolderState'
+
+type HolderWatch
+	let holder as FileHolder
+	let marker as FilePath
+	let release as HolderRelease
+	var removal as MarkerRemoval
+	var state as HolderState
+
+	static function over(holder FileHolder, marker FilePath, release HolderRelease) returns HolderWatch
+		return Self{holder: holder, marker: marker, release: release, removal: MarkerRemoval.stayed, state: HolderState.holding}
+	end 'over'
+
+	function observe()
+		self.noteRemoval()
+
+		if self.releaseIsDue() 'due'
+			_ = self.released()
+		end 'due'
+	end 'observe'
+
+	function noteRemoval()
+		match self.removal 'removal'
+			removedAt then return
+			stayed then self.removal = removalNow(self.marker)
+		end 'removal'
+	end 'noteRemoval'
+
+	function releaseIsDue() returns bool
+		return match self.release 'release'
+			pastRemovalBy(holdMs) gives self.removedFor(holdMs)
+			afterTheRun gives false
+		end 'release'
+	end 'releaseIsDue'
+
+	function removedFor(holdMs FileHoldMs) returns bool
+		return match self.removal 'removal'
+			removedAt(instantMs) gives Clock.elapsedMs(instantMs) >= holdMs as DurationMs
+			stayed gives false
+		end 'removal'
+	end 'removedFor'
+
+	function released() returns ExitInt
+		match self.state 'state'
+			ended(exit) then return exit
+			holding then break
+		end 'state'
+
+		let exit = self.holder.ended()
+		self.state = HolderState.ended(exit)
+
+		return exit
+	end 'released'
+end 'HolderWatch'
+
+function removalNow(marker FilePath) returns MarkerRemoval
+	return MarkerRemoval.stayed if File.exists(marker) else MarkerRemoval.removedAt(Clock.nowMs())
+end 'removalNow'
+
+type TimedCapture implements ChildLineSink
+	let streams as StreamCapture
+	let stderrLines as TimedLineArray
+
+	static function create() returns TimedCapture
+		return Self{streams: StreamCapture.create(), stderrLines: TimedLineArray.create(0)}
+	end 'create'
+
+	function heard(stream StdioStream, text String)
+		let line = withoutCarriageReturns(text)
+		self.streams.heard(stream, text: line)
+
+		if stream == StdioStream.stderr 'onStderr'
+			self.stderrLines.push(TimedLine.of(Clock.nowMs(), text: line))
+		end 'onStderr'
+	end 'heard'
+
+	function broken(stream StdioStream, reason String)
+		self.streams.broken(stream, reason: reason)
+	end 'broken'
+end 'TimedCapture'
+
+public function runHoldingPastRemoval(arguments StringArray, staged FilePath, environment Environment, held FilePath, marker FilePath, release HolderRelease, what String) returns HeldRun
+	let holder = fileHeldOpen(held, hold: FileHold.untilReleased)
+	let holderPid = holder.pid
+	let watch = HolderWatch.over(holder, marker: marker, release: release)
+	let started = Clock.nowMs()
+
+	let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: arguments, workingDirectory: WorkingDirectory.at(staged), environment: environment) otherwise (failure) 'notStarted'
+		_ = watch.released()
+		panic("{spawnFailureMessage(what, failure: failure)}")
+	end 'notStarted'
+
+	child.closeStdin()
+
+	let pid = try child.processId() otherwise (failure) 'noPid'
+		abandonedChild(child, watch: watch, what: what)
+		panic("the gate could not run — {what} has no process id ({failure.displayReason()}).")
+	end 'noPid'
+
+	let pump = try ChildPump.of(child) otherwise (failure) 'outputNotTaken'
+		abandonedChild(child, watch: watch, what: what)
+		panic("the gate could not run — could not take the output of {what} ({failure.displayReason()}).")
+	end 'outputNotTaken'
+
+	let capture = TimedCapture.create()
+
+	if not drainedWithinTheLongestRun(pump, capture: capture, watch: watch, started: started) 'overran'
+		abandonedRun(pump, child: child, watch: watch, what: what)
+		panic("{what} was still writing {HeldRunLongestMs} ms after it started, so its process tree was ended. It wrote to stdout: {capture.streams.stdout} and to stderr: {capture.streams.stderr}")
+	end 'overran'
+
+	let code = try child.wait(deadline: WaitDeadline.within(HeldRunEndMs)) otherwise (failure) 'notEnded'
+		abandonedRun(pump, child: child, watch: watch, what: what)
+		panic("{unendedMessage(what, failure: failure)}")
+	end 'notEnded'
+
+	let durationMs = Clock.elapsedMs(started)
+	pump.release(child)
+
+	let holderExit = watch.released()
+
+	match capture.streams.health 'health'
+		intact then break
+		failed(stream, reason) then refuseBrokenRead(what, stream: stream, reason: reason)
+	end 'health'
+
+	return HeldRun.of(CollectedOutput.create(TerminationStatus.exited(code), stdout: capture.streams.stdout, stderr: capture.streams.stderr, pid: pid, durationMs: durationMs), stderrLines: capture.stderrLines, markerRemoval: watch.removal, holderPid: holderPid, holderExit: holderExit)
+end 'runHoldingPastRemoval'
+
+// The pump's reader services do every read of the child: a read on this thread parks it until bytes
+// arrive, and the marker would go unwatched while the run is silent.
+function drainedWithinTheLongestRun(pump ChildPump, capture TimedCapture, watch HolderWatch, started InstantMs) returns bool
+	while Clock.remainingMs(started, deadlineMs: HeldRunLongestMs) > 0 'pumping'
+		let event = pump.nextWithin(ProcessEndPollMs, started: started, deadlineMs: HeldRunLongestMs)
+		event.deliverTo(capture)
+		watch.observe()
+
+		match event 'event'
+			said or
+			closed or
+			broke or
+			silent then continue
+			exhausted then return true
+		end 'event'
+	end 'pumping'
+
+	return false
+end 'drainedWithinTheLongestRun'
+
+function abandonedRun(pump ChildPump, child StreamingSubprocess, watch HolderWatch, what String)
+	pump.stop()
+	abandonedChild(child, watch: watch, what: what)
+end 'abandonedRun'
+
+function abandonedChild(child StreamingSubprocess, watch HolderWatch, what String)
+	let treeEnd = child.endTree()
+	child.release()
+	_ = watch.released()
+	requireTreeEnd(treeEnd, what: what)
+end 'abandonedChild'
 
 public function fileHeldOpen(path FilePath, hold FileHold) returns FileHolder
 	#if os(Windows)

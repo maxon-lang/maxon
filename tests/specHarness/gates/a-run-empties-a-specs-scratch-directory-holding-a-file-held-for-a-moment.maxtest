@@ -1,0 +1,50 @@
+#if os(Windows)
+	let MomentHeldScratchRootName = ".spec-tmp"
+	let MomentHeldScratchSpecName = "passes"
+	let MomentHeldScratchFileName = "held.txt"
+	let MomentHeldScratchMarkerName = "first-pass.txt"
+	let MomentHeldScratchHoldMs = 600
+
+	test 'a run empties the scratch directory of a spec it ran whose file another process holds for a moment past the emptying'
+		let staged = stagedGateFixture()
+		let scratch = staged.join(MomentHeldScratchRootName).join(MomentHeldScratchSpecName)
+		let held = scratch.join(MomentHeldScratchFileName)
+		let marker = scratch.join(MomentHeldScratchMarkerName)
+
+		Expect.isTrue(Directory.create(scratch), message: "the gate could not create {scratch.toString()}")
+		File.writeText(marker, content: "nothing holds this file\n")
+		File.writeText(held, content: "a process holds this file without delete sharing\n")
+
+		let run = runHoldingPastRemoval([SpecTestCommandWord, staged.toString()], staged: staged, environment: Environment.inherit, held: held, marker: marker, release: HolderRelease.pastRemovalBy(MomentHeldScratchHoldMs), what: "`{SpecTestCommandWord}` at {staged.toString()}")
+		let said = everythingSaid(run.output)
+		let broken = StringArray.create(0)
+
+		match run.markerRemoval 'firstPass'
+			removedAt then break
+			stayed then broken.push("the run never removed {marker.toString()}, which nothing holds, so it never emptied {scratch.toString()}, the scratch directory of a spec it ran")
+		end 'firstPass'
+
+		if run.holderExit != 0 'holderFailed'
+			broken.push("the file holder {run.holderPid} exited {run.holderExit} once it was released, so the file may not have been held when the emptying first asked for it")
+		end 'holderFailed'
+
+		for refusal in run.removalRefusalsNaming(held.filename()) 'eachRefusal'
+			broken.push("the run gave up on a file of a spec's scratch directory that was released {MomentHeldScratchHoldMs} ms after the emptying's first pass, instead of waiting for it: {refusal}")
+		end 'eachRefusal'
+
+		if Directory.isDirectory(scratch) 'scratchKept'
+			for entry in listing(scratch) 'eachLeft'
+				broken.push("the run left {entry.toString()} in {scratch.toString()}, the scratch directory of a spec it ran")
+			end 'eachLeft'
+		end 'scratchKept' else 'scratchGone'
+			broken.push("the run removed {scratch.toString()}, the scratch directory of a spec it ran, which it empties and keeps")
+		end 'scratchGone'
+
+		if run.output.exitCode() != SuccessExitCode 'runFailed'
+			broken.push("the run exited {run.output.exitCode()}. It said:\n{said}\n")
+		end 'runFailed'
+
+		discardStagedDir(staged)
+		requireNothingBroken(broken, headline: "a run's emptying of a spec's scratch directory holding a file held for a moment")
+	end 'a run empties the scratch directory of a spec it ran whose file another process holds for a moment past the emptying'
+#endif

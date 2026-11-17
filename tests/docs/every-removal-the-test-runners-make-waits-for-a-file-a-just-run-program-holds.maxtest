@@ -1,0 +1,47 @@
+let TestRunnersSourceDir = "maxon-bin/Testing"
+let RemovalCalls = ["Directory.removeTree(", "Directory.removeContents("]
+// The closing paren keeps a longer name, such as JustRunFileBusyWaitMs, from passing.
+let JustRunWaitArgument = "waitForBusy: JustRunFileBusyWait)"
+let SourceLineComment = "//"
+
+typealias SourceLineNumber = int(1 to u64.max)
+
+test 'every removal the test runners make waits for a file a just-run program holds'
+	let sources = try FilePath.from(TestRunnersSourceDir) otherwise panic("the gate could not run — '{TestRunnersSourceDir}' is not a spellable path")
+	Expect.isTrue(Directory.isDirectory(sources), message: "there is no {TestRunnersSourceDir}/ directory to read. Every path here is relative to the CHECKOUT ROOT; run it from there.")
+
+	let calls = StringArray.create(0)
+	let unbounded = StringArray.create(0)
+
+	for source in filesUnderEndingWith(sources, suffix: MaxonSourceSuffix) 'eachSource'
+		var number = 1 as SourceLineNumber
+
+		for line in withoutCarriageReturns(fileText(source)).split(LineFeed) 'eachLine'
+			let code = line.trim()
+
+			if not code.startsWith(SourceLineComment) and callsARemoval(code) 'aRemoval'
+				let located = "{source.toString()}:{number}: {code}"
+				calls.push(located)
+
+				if not code.contains(JustRunWaitArgument) 'waitsForNothing'
+					unbounded.push(located)
+				end 'waitsForNothing'
+			end 'aRemoval'
+
+			number = number + 1
+		end 'eachLine'
+	end 'eachSource'
+
+	Expect.isTrue(calls.count() > 0, message: "no line under {TestRunnersSourceDir}/ calls {joined(RemovalCalls, separator: " or ")}, so this audit read nothing it could hold to the rule.")
+	Expect.isEmpty(listedLines(unbounded), message: "these removals under {TestRunnersSourceDir}/ do not pass `{JustRunWaitArgument}` on the line of the call. A file a test or a spec case has just run can be held for a few milliseconds by another process that opens new executables without delete sharing, so a removal in one pass reports it, or leaves its directory, for a hold that ends at once:")
+end 'every removal the test runners make waits for a file a just-run program holds'
+
+function callsARemoval(code String) returns bool
+	for call in RemovalCalls 'eachCall'
+		if code.contains(call) 'callsIt'
+			return true
+		end 'callsIt'
+	end 'eachCall'
+
+	return false
+end 'callsARemoval'

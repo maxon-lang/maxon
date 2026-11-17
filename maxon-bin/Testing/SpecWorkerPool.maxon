@@ -2654,12 +2654,12 @@ function prepareSharedDirs(specDir FilePath) throws CompileError
 	end 'checkoutUnlistable'
 
 	for ended in endedRuns 'eachEndedRun'
-		for stuck in Directory.removeTree(ended) 'eachEndedStuck'
+		for stuck in Directory.removeTree(ended, waitForBusy: JustRunFileBusyWait) 'eachEndedStuck'
 			printError("warning: could not remove {stuck.toString()}, which a spec run that has ended left in the checkout\n")
 		end 'eachEndedStuck'
 	end 'eachEndedRun'
 
-	let stale = Directory.removeContents(runWorkingDir)
+	let stale = Directory.removeContents(runWorkingDir, waitForBusy: JustRunFileBusyWait)
 
 	for stuck in stale 'eachStuck'
 		printError("error: could not remove {stuck.toString()}, which an earlier run left in the cases' working directory\n")
@@ -2681,7 +2681,7 @@ function settleRunWorkingDir(harnessErrors StringArray)
 		harnessErrors.push(leftover)
 	end 'eachLeftover'
 
-	for stuck in Directory.removeContents(runWorkingDir) 'eachStuck'
+	for stuck in Directory.removeContents(runWorkingDir, waitForBusy: JustRunFileBusyWait) 'eachStuck'
 		harnessErrors.push("could not remove {stuck.toString()}")
 	end 'eachStuck'
 

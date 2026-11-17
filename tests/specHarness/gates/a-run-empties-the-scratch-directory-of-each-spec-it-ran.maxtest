@@ -1,0 +1,31 @@
+let RanSpecScratchRootName = ".spec-tmp"
+let RanSpecName = "passes"
+let RanSpecPlantedName = "planted.txt"
+
+test 'a run empties the scratch directory of each spec it ran and keeps the directory'
+	let staged = stagedGateFixture()
+	let scratch = staged.join(RanSpecScratchRootName).join(RanSpecName)
+	let planted = scratch.join(RanSpecPlantedName)
+
+	Expect.isTrue(Directory.create(scratch), message: "the gate could not create {scratch.toString()}")
+	File.writeText(planted, content: "planted in the spec's scratch directory before the run\n")
+
+	let run = runSpecTest(staged, includeNetwork: false)
+	let said = everythingSaid(run)
+	let broken = StringArray.create(0)
+
+	if Directory.isDirectory(scratch) 'scratchKept'
+		for entry in listing(scratch) 'eachLeft'
+			broken.push("the run left {entry.toString()} in {scratch.toString()}, the scratch directory of a spec it ran")
+		end 'eachLeft'
+	end 'scratchKept' else 'scratchGone'
+		broken.push("the run removed {scratch.toString()}, the scratch directory of a spec it ran, which it empties and keeps")
+	end 'scratchGone'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	discardStagedDir(staged)
+	requireNothingBroken(broken, headline: "a run's emptying of the scratch directory of a spec it ran")
+end 'a run empties the scratch directory of each spec it ran and keeps the directory'

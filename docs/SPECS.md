@@ -503,7 +503,8 @@ end 'main'
 
 ### Staged files and diagnostic paths
 
-A case compiles from a scratch directory under `<spec dir>/.spec-tmp/`, which `.gitignore` covers. A
+A case compiles from a scratch directory under `<spec dir>/.spec-tmp/`, which `.gitignore` covers. Each
+spec has its own, `.spec-tmp/<spec>/`, which the run empties and keeps when that spec's cases finish. A
 ```maxoncstderr block names the case's file as `<spec directory>/<spec>/<test>.maxon:<line>:<column>` — for
 a case in `specs/arrays.md` named `push`, `specs/arrays/push.maxon:3:5` — or by the placeholder
 `<fragment>:3:5`. Whichever spelling an expectation uses, the harness rewrites it and the compiler's
@@ -517,7 +518,9 @@ directly under the checkout root, so a relative path resolves the same way on ev
 the checkout's `bin/`. The parent names it to its workers with `--run-dir`, so a `spec-test` a case starts
 names one of its own. A run removes the directories that runs whose process has ended left, and starts
 from an empty one of its own. Every entry still in it when the run ends is reported after the summary as
-`left .spec-run/<name>`, and the run exits 1.
+`left .spec-run/<name>`, and the run exits 1. Removing these directories, and emptying a spec's scratch
+directory, waits up to about 2 s for a file another process holds open against deletion: on Windows a
+process outside the run can hold a program that has just run for a moment.
 
 On every native lane a case that leaves a process running FAILS, naming each one as `<pid> <name>`, and
 the process is ended. The harness sets `MAXON_TRACK_DESCENDANTS` for every execution; the program's runtime
