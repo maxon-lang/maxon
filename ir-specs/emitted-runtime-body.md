@@ -126,13 +126,15 @@ data {
   __mrt_cpu_sha_usable@40 = i64 0
   __mrt_hash_seed@48 = i64 0
   __mrt_hash_tier@56 = i64 0
-  __slab_arena_list@64 = i64 0
-  __slab_arena_map_l1@72 = i64 0
-  __slab_state@80 = i64 0
-  __mrt_console_probe_stdin@88 = i8 0
-  __mrt_console_probe_stdout@89 = i8 0
-  __mrt_console_probe_stderr@90 = i8 0
-  __mrt_program_started@91 = i8 0
+  __mrt_hash_secret@64 = i64 0
+  __mrt_hash_pinned@72 = i64 0
+  __slab_arena_list@80 = i64 0
+  __slab_arena_map_l1@88 = i64 0
+  __slab_state@96 = i64 0
+  __mrt_console_probe_stdin@104 = i8 0
+  __mrt_console_probe_stdout@105 = i8 0
+  __mrt_console_probe_stderr@106 = i8 0
+  __mrt_program_started@107 = i8 0
 }
 
 func @main {
@@ -1390,10 +1392,12 @@ data {
   __mrt_cpu_sha_usable@32 = i64 0
   __mrt_hash_seed@40 = i64 0
   __mrt_hash_tier@48 = i64 0
-  __slab_arena_list@56 = i64 0
-  __slab_arena_map_l1@64 = i64 0
-  __slab_state@72 = i64 0
-  __mrt_program_started@80 = i8 0
+  __mrt_hash_secret@56 = i64 0
+  __mrt_hash_pinned@64 = i64 0
+  __slab_arena_list@72 = i64 0
+  __slab_arena_map_l1@80 = i64 0
+  __slab_state@88 = i64 0
+  __mrt_program_started@96 = i8 0
 }
 
 func @main {
@@ -2393,10 +2397,12 @@ data {
   __mrt_cpu_aes_usable@8 = i64 1
   __mrt_hash_seed@16 = i64 0
   __mrt_hash_tier@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_hash_secret@32 = i64 0
+  __mrt_hash_pinned@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
+  __mrt_program_started@72 = i8 0
 }
 
 func @main {
@@ -6137,10 +6143,12 @@ data {
   __mrt_cpu_sha_usable@40 = i64 0
   __mrt_hash_seed@48 = i64 0
   __mrt_hash_tier@56 = i64 0
-  __slab_arena_list@64 = i64 0
-  __slab_arena_map_l1@72 = i64 0
-  __slab_state@80 = i64 0
-  __mrt_program_started@88 = i8 0
+  __mrt_hash_secret@64 = i64 0
+  __mrt_hash_pinned@72 = i64 0
+  __slab_arena_list@80 = i64 0
+  __slab_arena_map_l1@88 = i64 0
+  __slab_state@96 = i64 0
+  __mrt_program_started@104 = i8 0
 }
 
 func @main {
@@ -23134,13 +23142,15 @@ data {
   __mrt_cpu_sha_usable@40 = i64 0
   __mrt_hash_seed@48 = i64 0
   __mrt_hash_tier@56 = i64 0
-  __slab_arena_list@64 = i64 0
-  __slab_arena_map_l1@72 = i64 0
-  __slab_state@80 = i64 0
-  __mrt_console_probe_stdin@88 = i8 0
-  __mrt_console_probe_stdout@89 = i8 0
-  __mrt_console_probe_stderr@90 = i8 0
-  __mrt_program_started@91 = i8 0
+  __mrt_hash_secret@64 = i64 0
+  __mrt_hash_pinned@72 = i64 0
+  __slab_arena_list@80 = i64 0
+  __slab_arena_map_l1@88 = i64 0
+  __slab_state@96 = i64 0
+  __mrt_console_probe_stdin@104 = i8 0
+  __mrt_console_probe_stdout@105 = i8 0
+  __mrt_console_probe_stderr@106 = i8 0
+  __mrt_program_started@107 = i8 0
 }
 
 func @main {
@@ -23843,10 +23853,12 @@ data {
   __mrt_cpu_sha_usable@32 = i64 0
   __mrt_hash_seed@40 = i64 0
   __mrt_hash_tier@48 = i64 0
-  __slab_arena_list@56 = i64 0
-  __slab_arena_map_l1@64 = i64 0
-  __slab_state@72 = i64 0
-  __mrt_program_started@80 = i8 0
+  __mrt_hash_secret@56 = i64 0
+  __mrt_hash_pinned@64 = i64 0
+  __slab_arena_list@72 = i64 0
+  __slab_arena_map_l1@80 = i64 0
+  __slab_state@88 = i64 0
+  __mrt_program_started@96 = i8 0
 }
 
 func @main {
@@ -24545,10 +24557,12 @@ data {
   __mrt_cpu_aes_usable@8 = i64 1
   __mrt_hash_seed@16 = i64 0
   __mrt_hash_tier@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_hash_secret@32 = i64 0
+  __mrt_hash_pinned@40 = i64 0
+  __slab_arena_list@48 = i64 0
+  __slab_arena_map_l1@56 = i64 0
+  __slab_state@64 = i64 0
+  __mrt_program_started@72 = i8 0
 }
 
 func @main {
@@ -25265,10 +25279,12 @@ data {
   __mrt_cpu_sha_usable@40 = i64 0
   __mrt_hash_seed@48 = i64 0
   __mrt_hash_tier@56 = i64 0
-  __slab_arena_list@64 = i64 0
-  __slab_arena_map_l1@72 = i64 0
-  __slab_state@80 = i64 0
-  __mrt_program_started@88 = i8 0
+  __mrt_hash_secret@64 = i64 0
+  __mrt_hash_pinned@72 = i64 0
+  __slab_arena_list@80 = i64 0
+  __slab_arena_map_l1@88 = i64 0
+  __slab_state@96 = i64 0
+  __mrt_program_started@104 = i8 0
 }
 
 func @main {

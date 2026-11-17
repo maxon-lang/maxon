@@ -1,12 +1,17 @@
 export let HashSeedName = b"__hash_seed"
 export let HashInitName = b"__hash_init"
 export let HashElementsStoredName = b"__hash_elements_stored"
+export let HashSeedDrawName = b"__hash_seed_draw"
 let HashRunName = b"__hash_run"
 let HashSoftwareName = b"__hash_software"
 let HashRefuseName = b"__hash_refuse"
+let HashGenerateName = b"__hash_generate"
 
 let HashSeedLabel = b"__mrt_hash_seed"
 let HashTierLabel = b"__mrt_hash_tier"
+let HashSecretLabel = b"__mrt_hash_secret"
+let HashPinnedLabel = b"__mrt_hash_pinned"
+let HashLibraryDrawsLabel = b"__mrt_hash_library_draws"
 
 export let HashTierEnvName = b"MAXON_HASH_TIER"
 export let HashSeedEnvName = b"MAXON_HASH_SEED"
@@ -50,6 +55,13 @@ let HashSoftwareStrideBytes = 48
 let HashSoftwareStrideSecondOffset = 16
 let HashSoftwareStrideThirdOffset = 32
 let HashSoftwareParams = 3
+let HashGenerateParams = 2
+let HashPinnedMark = 1
+let HashDrawIndexStep = 1
+
+enum HashSeedStream
+	library = 0
+end 'HashSeedStream'
 
 enum HashTier
 	software = 0
@@ -71,8 +83,16 @@ type HashHexNibble
 	end 'create'
 end 'HashHexNibble'
 
-export function isHashRuntimeCallee(callee ByteArray) returns bool
+export function isHashComputationCallee(callee ByteArray) returns bool
 	return callee.equals(HashSeedName) or callee.equals(HashElementsStoredName) or isHardwareHashRuntimeCallee(callee) or isManagedArrayHashCallee(callee)
+end 'isHashComputationCallee'
+
+export function isHashSeedDrawCallee(callee ByteArray) returns bool
+	return callee.equals(HashSeedDrawName)
+end 'isHashSeedDrawCallee'
+
+function isHashRuntimeCallee(callee ByteArray) returns bool
+	return isHashComputationCallee(callee) or isHashSeedDrawCallee(callee)
 end 'isHashRuntimeCallee'
 
 function recordHashUsage(usage RuntimeUsage)
@@ -87,6 +107,9 @@ export function hashRuntimeGlobals() returns DataSectionEntryArray
 
 	pushRuntimeGlobal(out, label: HashSeedLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: HashTierLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: HashSecretLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: HashPinnedLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: HashLibraryDrawsLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	return out
 end 'hashRuntimeGlobals'
@@ -113,6 +136,8 @@ export function installHashRuntime(module StdModule, usage RuntimeUsage, target 
 	buildHashBytes(module)
 	buildHashWord(module, target: target)
 	buildHashElementsStored(module)
+	buildHashGenerate(module)
+	buildHashSeedDraw(module)
 end 'installHashRuntime'
 
 function buildHashSeed(module StdModule)
@@ -126,19 +151,16 @@ function buildHashSeed(module StdModule)
 	module.functions.push(func)
 end 'buildHashSeed'
 
-function emitHashSeedDraw(module StdModule, func IrFunction, entry IrBlock, drawn IrBlock, ids ValueMinter)
-	let refused = module.addBlock(func, label: b"hiseedrefused", heat: BlockHeat.cold)
-	let seedAddr = ids.mint()
+function emitHashEntropyFill(module StdModule, func IrFunction, block IrBlock, into ValueId, filled IrBlock, ids ValueMinter)
+	let refused = module.addBlock(func, label: b"hentropyrefused", heat: BlockHeat.cold)
 
-	module.appendOp(entry, op: StdOp.globalAddr(seedAddr, label: HashSeedLabel))
-
-	let seedBytes = emitConst(module, block: entry, value: HashSeedBytes, ids: ids)
+	let seedBytes = emitConst(module, block: block, value: HashSeedBytes, ids: ids)
 	let status = ids.mint()
-	module.appendOp(entry, op: StdOp.osRandomFill(status, bufPtrId: seedAddr, lenId: seedBytes))
-	emitBranchOnCompare(module, block: entry, value: status, pred: StdCmpPred.ne, against: 0, whenTrue: refused, whenFalse: drawn, ids: ids)
+	module.appendOp(block, op: StdOp.osRandomFill(status, bufPtrId: into, lenId: seedBytes))
+	emitBranchOnCompare(module, block: block, value: status, pred: StdCmpPred.ne, against: 0, whenTrue: refused, whenFalse: filled, ids: ids)
 
 	emitRuntimeFatal(module, func: func, block: refused, fatal: RuntimeFatal.hashSeedUnavailable, ids: ids)
-end 'emitHashSeedDraw'
+end 'emitHashEntropyFill'
 
 function emitHashAesAvailable(module StdModule, block IrBlock, target Target, ids ValueMinter) returns ValueId
 	if hashHasAesTier(target) 'probed'
@@ -155,13 +177,13 @@ function emitHashTierSettled(module StdModule, block IrBlock, buffer ValueId, ti
 end 'emitHashTierSettled'
 
 function emitHashProcessState(module StdModule, block IrBlock, ids ValueMinter)
-	let seedAddr = ids.mint()
+	let secretAddr = ids.mint()
 
-	module.appendOp(block, op: StdOp.globalAddr(seedAddr, label: HashSeedLabel))
+	module.appendOp(block, op: StdOp.globalAddr(secretAddr, label: HashSecretLabel))
 
-	let drawn = emitLoadGlobalWord(module, block: block, label: HashSeedLabel, ids: ids)
+	let secret = emitLoadGlobalWord(module, block: block, label: HashSecretLabel, ids: ids)
 	let noBytes = emitConst(module, block: block, value: 0, ids: ids)
-	let empty = emitRuntimeCall(module, block: block, callee: HashRunName, args: threeArgs(seedAddr, second: noBytes, third: drawn), ids: ids)
+	let empty = emitRuntimeCall(module, block: block, callee: HashRunName, args: threeArgs(secretAddr, second: noBytes, third: secret), ids: ids)
 
 	emitStoreGlobalWord(module, block: block, label: HashSeedLabel, value: empty, ids: ids)
 	module.setTerminator(block, op: StdOp.retVoid)
@@ -186,7 +208,6 @@ function buildHashInit(module StdModule, target Target)
 	let ids = ValueMinter.create(0)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let drawn = module.addBlock(func, label: b"hidrawn", heat: BlockHeat.normal)
 	let tierStart = module.addBlock(func, label: b"hitier", heat: BlockHeat.normal)
 	let unset = module.addBlock(func, label: b"hiunset", heat: BlockHeat.normal)
 	let named = module.addBlock(func, label: b"hinamed", heat: BlockHeat.normal)
@@ -194,8 +215,7 @@ function buildHashInit(module StdModule, target Target)
 	let unknown = module.addBlock(func, label: b"hiunknown", heat: BlockHeat.cold)
 	let settled = module.addBlock(func, label: b"hisettled", heat: BlockHeat.normal)
 
-	emitHashSeedDraw(module, func: func, entry: entry, drawn: drawn, ids: ids)
-	emitHashSeedFromEnvironment(module, func: func, block: drawn, next: tierStart, ids: ids)
+	emitHashSeedFromEnvironment(module, func: func, block: entry, next: tierStart, ids: ids)
 
 	let aesFlag = emitHashAesAvailable(module, block: tierStart, target: target, ids: ids)
 	let hasAes = emitCompareWithConstant(module, block: tierStart, value: aesFlag, pred: StdCmpPred.ne, against: 0, ids: ids)
@@ -271,11 +291,14 @@ function emitHashSeedFromEnvironment(module StdModule, func IrFunction, block Ir
 	let pinned = module.addBlock(func, label: b"hseedpinned", heat: BlockHeat.normal)
 	let malformed = module.addBlock(func, label: b"hseedmalformed", heat: BlockHeat.cold)
 
+	let secretAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(secretAddr, label: HashSecretLabel))
+
 	let request = emitReadEnvValueWhole(module, func: func, block: block, name: HashSeedEnvName, firstBytes: HashEnvValueBufBytes, ids: ids)
 
 	emitBranchOnCompare(module, block: request.block, value: request.written, pred: StdCmpPred.eq, against: 0, whenTrue: unset, whenFalse: named, ids: ids)
 	emitSlabFree(module, block: unset, ptr: request.buffer, kind: SlabBufferKind.environmentValue, ids: ids)
-	module.setTerminator(unset, op: StdOp.branch(next.id))
+	emitHashEntropyFill(module, func: func, block: unset, into: secretAddr, filled: next, ids: ids)
 
 	var wellFormed = emitCompareWithConstant(module, block: named, value: request.written, pred: StdCmpPred.eq, against: HashSeedDigits, ids: ids)
 	let seedBytes = ValueIdArray.create(0)
@@ -293,13 +316,11 @@ function emitHashSeedFromEnvironment(module StdModule, func IrFunction, block Ir
 
 	emitBranchOnCompare(module, block: named, value: wellFormed, pred: StdCmpPred.ne, against: 0, whenTrue: pinned, whenFalse: malformed, ids: ids)
 
-	let seedAddr = ids.mint()
-	module.appendOp(pinned, op: StdOp.globalAddr(seedAddr, label: HashSeedLabel))
-
 	for (iter, seedByte) in seedBytes.withIterator() 'eachStoredByte'
-		module.appendOp(pinned, op: StdOp.storeIndirect(seedAddr, offset: iter.index() as ByteOffset, valueId: seedByte, valueType: StdType.u8))
+		module.appendOp(pinned, op: StdOp.storeIndirect(secretAddr, offset: iter.index() as ByteOffset, valueId: seedByte, valueType: StdType.u8))
 	end 'eachStoredByte'
 
+	emitStoreGlobalWord(module, block: pinned, label: HashPinnedLabel, value: emitConst(module, block: pinned, value: HashPinnedMark, ids: ids), ids: ids)
 	emitSlabFree(module, block: pinned, ptr: request.buffer, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.setTerminator(pinned, op: StdOp.branch(next.id))
 
@@ -426,6 +447,53 @@ function buildHashElementsStored(module StdModule)
 
 	module.functions.push(func)
 end 'buildHashElementsStored'
+
+// Keyed by the raw secret through the software mix on every tier: `HashSeedLabel` holds the tier's
+// empty fold, and keying from it would make a pin draw a different sequence on each tier.
+function buildHashGenerate(module StdModule)
+	let func = IrFunction.createFromStd(HashGenerateName, returnType: StdReturnType.value(StdType.i64), paramCount: HashGenerateParams, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(HashGenerateParams)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: HashGenerateParams)
+	let stream = 0
+	let index = 1
+
+	let secret = emitLoadGlobalWord(module, block: entry, label: HashSecretLabel, ids: ids)
+	let state = emitHashSoftwareState(module, block: entry, seed: secret, ids: ids)
+	emitHashFinish(module, block: entry, low: stream, high: index, state: state, count: emitConst(module, block: entry, value: HashSoftwarePairBytes, ids: ids), ids: ids)
+
+	module.functions.push(func)
+end 'buildHashGenerate'
+
+function buildHashSeedDraw(module StdModule)
+	let func = IrFunction.createFromStd(HashSeedDrawName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let pinned = module.addBlock(func, label: b"hdpinned", heat: BlockHeat.normal)
+	let fresh = module.addBlock(func, label: b"hdfresh", heat: BlockHeat.normal)
+	let drawn = module.addBlock(func, label: b"hddrawn", heat: BlockHeat.normal)
+
+	let pinnedMark = emitLoadGlobalWord(module, block: entry, label: HashPinnedLabel, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: pinnedMark, pred: StdCmpPred.ne, against: 0, whenTrue: pinned, whenFalse: fresh, ids: ids)
+
+	let step = emitConst(module, block: pinned, value: HashDrawIndexStep, ids: ids)
+	let index = emitGlobalAccumulate(module, block: pinned, label: HashLibraryDrawsLabel, delta: step, multiM: true, ids: ids)
+	let stream = emitConst(module, block: pinned, value: HashSeedStream.library.rawValue, ids: ids)
+	emitCallAndReturn(module, block: pinned, callee: HashGenerateName, args: twoArgs(stream, second: index), ids: ids)
+
+	let bufferBytes = emitConst(module, block: fresh, value: HashSeedBytes, ids: ids)
+	let buffer = emitSlabAlloc(module, block: fresh, bytes: bufferBytes, kind: SlabBufferKind.hashSeedEntropy, ids: ids)
+	emitHashEntropyFill(module, func: func, block: fresh, into: buffer, filled: drawn, ids: ids)
+
+	let word = emitLoadField(module, block: drawn, record: buffer, offset: 0, ids: ids)
+	emitSlabFree(module, block: drawn, ptr: buffer, kind: SlabBufferKind.hashSeedEntropy, ids: ids)
+	module.setTerminator(drawn, op: StdOp.ret(word))
+
+	module.functions.push(func)
+end 'buildHashSeedDraw'
 
 function buildHashBytes(module StdModule)
 	let func = IrFunction.createFromStd(HashBytesRuntimeName, returnType: StdReturnType.value(StdType.i64), paramCount: HashBytesParams, paramTypes: fourI64Params())

@@ -151,14 +151,16 @@ data {
   __mrt_cpu_sha_usable@616 = i64 0
   __mrt_hash_seed@624 = i64 0
   __mrt_hash_tier@632 = i64 0
-  __mrt_tls_next_key@640 = i64 0
-  __io_pipe_seq@648 = i64 0
-  __subp_table@656 = i64 0
-  __subp_last_error@664 = i64 0
-  __slab_arena_list@672 = i64 0
-  __slab_arena_map_l1@680 = i64 0
-  __slab_state@688 = i64 0
-  __mrt_program_started@696 = i8 0
+  __mrt_hash_secret@640 = i64 0
+  __mrt_hash_pinned@648 = i64 0
+  __mrt_tls_next_key@656 = i64 0
+  __io_pipe_seq@664 = i64 0
+  __subp_table@672 = i64 0
+  __subp_last_error@680 = i64 0
+  __slab_arena_list@688 = i64 0
+  __slab_arena_map_l1@696 = i64 0
+  __slab_state@704 = i64 0
+  __mrt_program_started@712 = i8 0
 }
 
 func @main {
@@ -936,13 +938,15 @@ data {
   __mrt_cpu_aes_usable@560 = i64 1
   __mrt_hash_seed@568 = i64 0
   __mrt_hash_tier@576 = i64 0
-  __io_pipe_seq@584 = i64 0
-  __subp_table@592 = i64 0
-  __subp_last_error@600 = i64 0
-  __slab_arena_list@608 = i64 0
-  __slab_arena_map_l1@616 = i64 0
-  __slab_state@624 = i64 0
-  __mrt_program_started@632 = i8 0
+  __mrt_hash_secret@584 = i64 0
+  __mrt_hash_pinned@592 = i64 0
+  __io_pipe_seq@600 = i64 0
+  __subp_table@608 = i64 0
+  __subp_last_error@616 = i64 0
+  __slab_arena_list@624 = i64 0
+  __slab_arena_map_l1@632 = i64 0
+  __slab_state@640 = i64 0
+  __mrt_program_started@648 = i8 0
 }
 
 func @main {
@@ -1756,14 +1760,16 @@ data {
   __mrt_cpu_sha_usable@624 = i64 0
   __mrt_hash_seed@632 = i64 0
   __mrt_hash_tier@640 = i64 0
-  __mrt_tls_next_key@648 = i64 0
-  __io_pipe_seq@656 = i64 0
-  __subp_table@664 = i64 0
-  __subp_last_error@672 = i64 0
-  __slab_arena_list@680 = i64 0
-  __slab_arena_map_l1@688 = i64 0
-  __slab_state@696 = i64 0
-  __mrt_program_started@704 = i8 0
+  __mrt_hash_secret@648 = i64 0
+  __mrt_hash_pinned@656 = i64 0
+  __mrt_tls_next_key@664 = i64 0
+  __io_pipe_seq@672 = i64 0
+  __subp_table@680 = i64 0
+  __subp_last_error@688 = i64 0
+  __slab_arena_list@696 = i64 0
+  __slab_arena_map_l1@704 = i64 0
+  __slab_state@712 = i64 0
+  __mrt_program_started@720 = i8 0
 }
 
 func @main {

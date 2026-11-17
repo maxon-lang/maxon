@@ -812,7 +812,8 @@ and mixing the seed into the table itself is
 The tier is chosen once, before `main`: `aes` (`AESENC` on x64, `AESE` and `AESMC` on arm64) when the CPU
 has AES, else `software`, which is one function on every target and the tier `wasm32-wasi` always runs.
 Each tier is a different hash. [`MAXON_HASH_TIER`](/docs/cli/#environment-variables) forces one, and
-[`MAXON_HASH_SEED`](/docs/cli/#environment-variables) pins the process seed.
+[`MAXON_HASH_SEED`](/docs/cli/#environment-variables) pins the process seed and the seeds
+[`HashSeed.random()`](#hashseed) draws.
 
 ```maxon
 function main() returns ExitCode
@@ -874,7 +875,7 @@ Every `KeyedHasher` fold starts from a `HashSeed`.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `HashSeed.random()` | `HashSeed` | — | 64 bits of fresh entropy from the operating system, whatever `MAXON_HASH_SEED` holds. |
+| `HashSeed.random()` | `HashSeed` | — | With `MAXON_HASH_SEED` unset or empty, 64 bits of fresh entropy from the operating system; when the operating system refuses it, the program ends with exit code 70 and `fatal error: the operating system refused to supply the entropy for a hash seed` on stderr. Under a pin, the next seed of the sequence the pin fixes: the n-th draw of a process, whichever thread makes it, is the same seed on every run and on every hash tier, each draw differs from the pinned seed, and two pins draw two different sequences. Every call is a draw that advances the sequence, a call whose result is discarded included. |
 | `toBytes()` | `ByteArray` | — | The seed as exactly 8 bytes. |
 | `HashSeed.fromBytes(bytes ByteArray)` | `HashSeed` | `HashSeedError` | The seed 8 bytes spell; any other count throws `HashSeedError.wrongByteCount`. |
 
