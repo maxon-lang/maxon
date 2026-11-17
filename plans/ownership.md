@@ -10,7 +10,7 @@ last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
-| [ ] | V1 | A value's source rows, hold and live-binding index are one record written at one door and read by one resolver (in progress as #235) |  |  |  |
+| [ ] | V1 | A value's source rows, hold and live-binding index are one record written at one door and read by one resolver (in progress under #235, whose first task this is: tick it when that commit is on `main`) |  |  |  |
 | [ ] | V2 | Every question of which live names bind a value asks the live-binding index, not a walk of the symbol table | V1 |  |  |
 | [ ] | V3 | A value's birth is the record's second rider, carried by every merge, rename, hand-back, literal and call result | V1 | E1 |  |
 | [ ] | E1 | One function settles a merge edge by the one move rule: a var arm moves, an outliving let is co-owned, a linear value moves | V1 | V3 |  |

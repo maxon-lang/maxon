@@ -28,8 +28,9 @@ each stage meets its own facts when it starts.
 
 Take the first stage whose "Done" cell is empty and whose "Waits on" is satisfied: every stage it names
 in this plan is ticked, every stage of another plan has landed on `main` with that plan, every issue is
-closed. A stage marked `deferred` is skipped. A stage marked "in progress as #n" is ticked once #n is
-closed and its change is on `main`. If no stage can start and some remain, tell the user what they wait on.
+closed. A stage marked `deferred` is skipped. A stage marked "in progress under #n" is being made
+outside the plan: tick it once that commit is on `main`, whether or not #n has closed, and start no stage
+that waits on it before then. If no stage can start and some remain, tell the user what they wait on.
 
 For each stage, in order:
 

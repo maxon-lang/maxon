@@ -10,7 +10,7 @@ last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
-| [ ] | 1 | Every generic instance is interned with its origin and judged once, at one door, whether written or inferred (in progress as #222) |  |  |  |
+| [ ] | 1 | Every generic instance is interned with its origin and judged once, at one door, whether written or inferred (in progress under #222: tick it when that commit is on `main`) |  |  |  |
 | [ ] | 2 | What `T` may be in a body is answered by the bounds in lexical scope alone, never by the program's instance rows | 1 |  |  |
 | [ ] | 3 | One value-kind classification, with an opaque arm and no default, answers every ownership and holding question | 2 | 4, 5 |  |
 | [ ] | 4 | A bare-base call infers once, after defaults, through one translation of a value's type into a type argument | 1 | 3, 5 | How does a `spawn` start a `sendable`-bounded generic service at an `immutable` record (#192)? Needs a ruling on #30 (recommended: inference takes the argument's capability). |
