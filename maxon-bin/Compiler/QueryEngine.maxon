@@ -605,7 +605,16 @@ function persistSharedEntries(project Project)
 		return
 	end 'nothingNew'
 
-	for contentHash in project.db.shareableTokenHashes 'eachToWrite'
+	// Path order, never `shareableTokenHashes`' own: that set's order follows the hash seed, and
+	// row order decides when the pack builder's buffer grows.
+	for entry in sourceFilesInPathOrder(project.db.sourcePaths) 'eachToWrite'
+		let path = try project.db.sourcePaths.get(entry.position) otherwise panic("persistSharedEntries: sourcePaths.get OOB at {entry.position} below count {project.db.sourcePaths.count()}")
+		let contentHash = (try sourceEntryOf(project, path: path) otherwise panic("persistSharedEntries: sourcePaths lists {path.toString()} and sourceFiles has no entry for it")).contentHash
+
+		if not project.db.shareableTokenHashes.contains(contentHash) 'notAdmitted'
+			continue
+		end 'notAdmitted'
+
 		let memo = try heldMemoFor(project, contentHash: contentHash) otherwise continue
 		let view = try memo.viewOf(buildKey) otherwise continue
 		let facts = try memo.rawStreamFactsHeld() otherwise panic("persistSharedEntries: a memo holds a view but not its raw stream's facts, and every view is added beside them")

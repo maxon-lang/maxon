@@ -6071,7 +6071,7 @@ export type FunctionTypeAlias
 		writer.bytes(self.returnAggregateName)
 		writer.unsigned(self.returnCapability.ordinal as CacheUnsigned)
 		cacheWriteFunctionAliasParamArray(writer, value: self.paramTypes)
-		writer.unsigned(self.paramSpelling as CacheUnsigned)
+		writer.digest(self.paramSpelling)
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
 		self.written.cacheWrite(writer)
@@ -6087,7 +6087,7 @@ export type FunctionTypeAlias
 		let f_returnAggregateName = freeze try reader.bytes()
 		let f_returnCapability = try cacheReadResultCapability(reader)
 		let f_paramTypes = try cacheReadFrozenFunctionAliasParamArray(reader)
-		let f_paramSpelling = (try reader.unsigned()) as HashDigest
+		let f_paramSpelling = try reader.digest()
 		let f_declFilePath = try reader.path()
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_written = try WrittenTypeNames.cacheRead(reader)

@@ -1352,6 +1352,148 @@ end 'main'
 [42] [42] [                       42] [2a]
 ```
 
+### Integer Format Specifier - A Width Is a Minimum in Every Base
+
+<!-- test: int-format-width-is-a-minimum-in-every-base -->
+```maxon
+function main() returns ExitCode
+	let n = 123456
+	let neg = -12345
+	let h = 11259375
+	let small = 255
+	print("[{n:3}] [{n:03}] [{neg:3}] [{neg:04}] [{h:2x}] [{h:02X}] [{small:3o}] [{small:3b}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[123456] [123456] [-12345] [-12345] [abcdef] [ABCDEF] [377] [11111111]
+```
+
+### Integer Format Specifier - Space Fill Goes in Front of the Sign
+
+<!-- test: int-format-space-fill-precedes-the-sign -->
+```maxon
+function main() returns ExitCode
+	let m = -42
+	print("[{m:8}] [{m:8d}] [{m:3}] [{m:2}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[     -42] [     -42] [-42] [-42]
+```
+
+### Integer Format Specifier - The Extremes in Every Base
+
+<!-- test: int-format-extremes-in-every-base -->
+```maxon
+typealias Wide = bits(64)
+
+function showUnsigned(u Wide)
+	print("[{u:d}] [{u:x}] [{u:X}] [{u:o}] [{u:b}]\n")
+end 'showUnsigned'
+
+function main() returns ExitCode
+	let low = i64.min
+	print("[{low:d}] [{low:25}] [{low:025}] [{low:x}] [{low:X}] [{low:o}] [{low:b}]\n")
+	let high = i64.max
+	print("[{high:d}] [{high:x}] [{high:b}]\n")
+	showUnsigned(u64.max)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[-9223372036854775808] [     -9223372036854775808] [-000009223372036854775808] [8000000000000000] [8000000000000000] [1000000000000000000000] [1000000000000000000000000000000000000000000000000000000000000000]
+[9223372036854775807] [7fffffffffffffff] [111111111111111111111111111111111111111111111111111111111111111]
+[18446744073709551615] [ffffffffffffffff] [FFFFFFFFFFFFFFFF] [1777777777777777777777] [1111111111111111111111111111111111111111111111111111111111111111]
+```
+
+### Integer Format Specifier - Zero in Every Base
+
+<!-- test: int-format-zero-in-every-base -->
+```maxon
+function main() returns ExitCode
+	let z = 0
+	print("[{z:d}] [{z:x}] [{z:X}] [{z:o}] [{z:b}] [{z:4}] [{z:04}] [{z:04b}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[0] [0] [0] [0] [0] [   0] [0000] [0000]
+```
+
+### Integer Format Specifier - A Zero-Filled Field Wider Than 64
+
+<!-- test: int-format-zero-filled-field-wider-than-64 -->
+```maxon
+typealias Wide = bits(64)
+
+function showWide(u Wide)
+	print("[{u:070b}]\n")
+	print("[{u:66d}]\n")
+end 'showWide'
+
+function main() returns ExitCode
+	let neg = -12345
+	let small = 255
+	let h = 11259375
+	print("[{neg:070}]\n")
+	print("[{small:070b}]\n")
+	print("[{h:066X}]\n")
+	showWide(u64.max)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[-000000000000000000000000000000000000000000000000000000000000000012345]
+[0000000000000000000000000000000000000000000000000000000000000011111111]
+[000000000000000000000000000000000000000000000000000000000000ABCDEF]
+[0000001111111111111111111111111111111111111111111111111111111111111111]
+[                                              18446744073709551615]
+```
+
+### Integer Format Specifier - A Program Whose `Byte` Is Wider Than One Byte
+
+<!-- test: int-format-in-a-program-whose-byte-is-wider-than-one-byte -->
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	let made = Bytes.create(0)
+	made.push(300)
+	let first = try made.get(0) otherwise 0
+	let n = 48879
+	let neg = -42
+	let control = "a\u001Fb"
+	print("[{n}] [{n:x}] [{n:X}] [{n:08d}] [{neg:6}] [{n:o}] [{first:b}] [{first}]\n")
+	print("{control:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[48879] [beef] [BEEF] [00048879] [   -42] [137357] [100101100] [300]
+"a\u001Fb"
+```
+
 ### Unsigned Decimal Interpolation - the specifier-free half
 
 This is the case above's specifier-free third. It is the rule that case states, asked of the plain
@@ -1619,6 +1761,27 @@ end 'main'
 "a\tb"
 "a\rb"
 "a\u0001b"
+```
+
+<!-- test: quote-format-control-escapes-spell-uppercase-hex-on-both-sides-of-9 -->
+```maxon
+function main() returns ExitCode
+	let low = "\u0000\u0001\u0008\u000B\u000C\u000F"
+	let high = "\u0010\u0019\u001A\u001F\u007F"
+	let escape = '\u001B'
+	print("{low:q}\n")
+	print("{high:q}\n")
+	print("{escape:q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+"\u0000\u0001\u0008\u000B\u000C\u000F"
+"\u0010\u0019\u001A\u001F\u007F"
+'\u001B'
 ```
 
 <!-- test: quote-format-string-passes-printable-text-through -->

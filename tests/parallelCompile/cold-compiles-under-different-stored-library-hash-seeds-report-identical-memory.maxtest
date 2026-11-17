@@ -1,0 +1,211 @@
+typealias StoredSeedCandidate = int(0 to 7)
+
+let SeedWriterCacheDirName = "run-cache-writer"
+let SeededCacheDirStem = "run-cache-"
+let StoredSeedStem = "libseed"
+let StoredSeedCandidates = 8
+let LibraryCacheDirNameInRoot = "library"
+let StoredHashSeedFileName = "hash-seed"
+let ParsesEntryPrefix = "parses-"
+let LibraryEntryExtensionOpener = "."
+let LibraryEntryPartSeparator = "-"
+let HexLetterDigits = ["a", "b", "c", "d", "e", "f"]
+
+typealias LibraryEntryArray = Array with LibraryEntry
+typealias LibraryEntrySizeArray = Array with FileSize
+
+type LibraryEntry
+	export let kind as String
+	export let size as FileSize
+
+	static function create(kind String, size FileSize) returns Self
+		return Self{kind: kind, size: size}
+	end 'create'
+end 'LibraryEntry'
+
+type SeededColdBuild
+	export let table as MetricsTable
+	export let letterDigits as Count
+	export let seed as String
+	export let entries as LibraryEntryArray
+
+	static function create(table MetricsTable, letterDigits Count, seed String, entries LibraryEntryArray) returns Self
+		return Self{table: table, letterDigits: letterDigits, seed: seed, entries: entries}
+	end 'create'
+end 'SeededColdBuild'
+
+test 'two cold compiles under different stored library hash seeds report identical memory'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "cold-compiles-under-different-stored-library-hash-seeds-report-identical-memory", fixture: "uneven-program")
+
+	_ = builtMetricsTable(staged, label: "output writer", runCacheDirName: SeedWriterCacheDirName)
+	let tier = libraryTierDirName(staged.join(SeedWriterCacheDirName))
+
+	let first = seededColdBuild(staged, tier: tier, candidate: 0)
+	let second = seededColdBuildRenderingOtherLetters(staged, tier: tier, than: first)
+
+	let differingSizes = differingEntrySizes(first.entries, second: second.entries)
+	Expect.isEmpty(differingSizes, message: "two cold compiles of one program under stored library hash seeds {first.seed} and {second.seed} wrote library cache entries of different sizes, by entry kind (first vs second). What an entry holds is a function of the program and the compiler, so its size must not depend on the library digest seed, and every buffer that holds or grows over an entry's bytes inherits a difference here as a difference in memory:{differingSizes}")
+
+	requireIdenticalMemory(first.table, second: second.table, kind: "differently seeded cold")
+
+	discardStagedDir(staged)
+end 'two cold compiles under different stored library hash seeds report identical memory'
+
+function libraryTierDirName(cacheRoot FilePath) returns String
+	let library = cacheRoot.join(CacheVendorDirName).join(LibraryCacheDirNameInRoot)
+	let tiers = StringArray.create(0)
+
+	for entry in listing(library) 'eachEntry'
+		if Directory.isDirectory(entry) 'aTier'
+			tiers.push(entry.filename())
+		end 'aTier'
+	end 'eachEntry'
+
+	if tiers.count() != 1 'notOneTier'
+		panic("parallel-compile.test: the gate could not run — the output writer's build left {tiers.count()} hash tier directories under {library.toString()}, where one build on one host keys its library cache by exactly one:{listedLines(tiers)}")
+	end 'notOneTier'
+
+	return try tiers.get(0) otherwise panic("parallel-compile.test: the count was checked to be one")
+end 'libraryTierDirName'
+
+function seededColdBuildRenderingOtherLetters(staged FilePath, tier String, than SeededColdBuild) returns SeededColdBuild throws TestFailure
+	for candidate in 1 upto StoredSeedCandidates 'eachCandidate'
+		let build = try seededColdBuild(staged, tier: tier, candidate: candidate as StoredSeedCandidate)
+
+		if build.letterDigits != than.letterDigits 'rendersOtherLetters'
+			return build
+		end 'rendersOtherLetters'
+	end 'eachCandidate'
+
+	panic("parallel-compile.test: the gate could not run — every stored seed from {StoredSeedStem}1 to {StoredSeedStem}{StoredSeedCandidates - 1} named its parse pack with {than.letterDigits} hex letter digits, as {than.seed} did, so no pair of builds here renders digests that differ in their letters and the comparison would agree whether or not a rendered digest's allocations follow its digits.")
+end 'seededColdBuildRenderingOtherLetters'
+
+function seededColdBuild(staged FilePath, tier String, candidate StoredSeedCandidate) returns SeededColdBuild throws TestFailure
+	let cacheDirName = "{SeededCacheDirStem}{candidate}"
+	let seed = "{StoredSeedStem}{candidate}"
+	let home = staged.join(cacheDirName).join(CacheVendorDirName).join(LibraryCacheDirNameInRoot).join(tier)
+
+	if not Directory.create(home) 'notCreated'
+		panic("parallel-compile.test: the gate could not run — could not create {home.toString()}, where the stored library hash seed goes.")
+	end 'notCreated'
+
+	let seedPath = home.join(StoredHashSeedFileName)
+	try File.writeBinary(seedPath, content: seed.toByteArray()) otherwise panic("parallel-compile.test: the gate could not run — could not write {seedPath.toString()}.")
+
+	let table = try builtMetricsTable(staged, label: "cold under stored seed {seed}", runCacheDirName: cacheDirName)
+
+	return SeededColdBuild.create(table, letterDigits: parsesEntryLetterDigits(staged.join(cacheDirName), seed: seed), seed: seed, entries: libraryEntries(home, seed: seed))
+end 'seededColdBuild'
+
+function libraryEntries(tierDir FilePath, seed String) returns LibraryEntryArray
+	let entries = LibraryEntryArray.create(0)
+
+	for file in filesUnder(tierDir) 'eachFile'
+		let name = file.filename()
+
+		if name.startsWith(StoredHashSeedFileName) 'theStoredSeed'
+			continue
+		end 'theStoredSeed'
+
+		let stem = try name.split(LibraryEntryExtensionOpener).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")
+		let kind = try stem.split(LibraryEntryPartSeparator).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")
+		let info = try File.info(file) otherwise panic("parallel-compile.test: the gate could not run — could not read the size of {file.toString()}.")
+		entries.push(LibraryEntry.create(kind, size: info.size))
+	end 'eachFile'
+
+	if entries.isEmpty() 'noEntry'
+		panic("parallel-compile.test: the gate could not run — the cold build under stored seed {seed} wrote no library cache entry under {tierDir.toString()}, so there are no entry sizes to compare.")
+	end 'noEntry'
+
+	return entries
+end 'libraryEntries'
+
+function differingEntrySizes(first LibraryEntryArray, second LibraryEntryArray) returns String
+	let differing = StringArray.create(0)
+
+	for kind in entryKinds(first, second: second) 'eachKind'
+		let firstSizes = sortedEntrySizes(first, kind: kind)
+		let secondSizes = sortedEntrySizes(second, kind: kind)
+
+		if firstSizes.count() != secondSizes.count() 'differentCounts'
+			differing.push("`{kind}` entries: {firstSizes.count()} vs {secondSizes.count()}")
+			continue
+		end 'differentCounts'
+
+		for (iter, firstSize) in firstSizes.withIterator() 'eachSize'
+			let secondSize = try secondSizes.get(iter.index()) otherwise panic("parallel-compile.test: the two kinds' entry counts were checked to be equal")
+
+			if firstSize != secondSize 'differentSizes'
+				differing.push("`{kind}` entry: {firstSize} bytes vs {secondSize} bytes")
+			end 'differentSizes'
+		end 'eachSize'
+	end 'eachKind'
+
+	return listedLines(differing)
+end 'differingEntrySizes'
+
+function entryKinds(first LibraryEntryArray, second LibraryEntryArray) returns StringArray
+	let kinds = StringArray.create(0)
+
+	for entries in [first, second] 'eachRoot'
+		for entry in entries 'eachEntry'
+			if not kinds.contains(entry.kind) 'unseen'
+				kinds.push(entry.kind)
+			end 'unseen'
+		end 'eachEntry'
+	end 'eachRoot'
+
+	kinds.sort()
+	return kinds
+end 'entryKinds'
+
+function sortedEntrySizes(entries LibraryEntryArray, kind String) returns LibraryEntrySizeArray
+	let sizes = LibraryEntrySizeArray.create(0)
+
+	for entry in entries 'eachEntry'
+		if entry.kind == kind 'ofTheKind'
+			sizes.push(entry.size)
+		end 'ofTheKind'
+	end 'eachEntry'
+
+	sizes.sort()
+	return sizes
+end 'sortedEntrySizes'
+
+function parsesEntryLetterDigits(cacheRoot FilePath, seed String) returns Count
+	var letters = 0 as Count
+	var entries = 0 as Count
+
+	for file in filesUnder(cacheRoot) 'eachFile'
+		let name = file.filename()
+
+		if not name.startsWith(ParsesEntryPrefix) 'notAParsePack'
+			continue
+		end 'notAParsePack'
+
+		entries = entries + 1
+		let stem = try name.split(LibraryEntryExtensionOpener).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")
+
+		for (iter, part) in stem.split(LibraryEntryPartSeparator).withIterator() 'eachPart'
+			if iter.index() > 0 'aDigest'
+				letters = letters + hexLetterDigitsIn(part)
+			end 'aDigest'
+		end 'eachPart'
+	end 'eachFile'
+
+	if entries == 0 'noParsePack'
+		panic("parallel-compile.test: the gate could not run — the cold build under stored seed {seed} wrote no `{ParsesEntryPrefix}` entry under {cacheRoot.toString()}, so which digest it rendered cannot be read.")
+	end 'noParsePack'
+
+	return letters
+end 'parsesEntryLetterDigits'
+
+function hexLetterDigitsIn(part String) returns Count
+	var letters = 0 as Count
+
+	for letter in HexLetterDigits 'eachLetter'
+		letters = letters + occurrences(part, needle: letter)
+	end 'eachLetter'
+
+	return letters
+end 'hexLetterDigitsIn'

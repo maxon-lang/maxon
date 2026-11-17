@@ -5,10 +5,9 @@ typealias CacheWord = bits(64)
 // The schema fingerprint hashes this file's text, so a wire-format constant declared outside it could
 // change the format without changing the fingerprint.
 let LibraryCacheMagic = "MXLC"
-let HeaderWordByteCount = 8
-let HeaderWordByteMask = 0xFF
-let HeaderWordCount = 2
-let ByteBitWidth = 8
+let DigestByteCount = 8
+let DigestByteOrder = ByteOrder.littleEndian
+let HeaderDigestCount = 2
 let VarintPayloadMask = 0x7F
 let VarintContinuationBit = 0x80
 let VarintPayloadBits = 7
@@ -95,6 +94,10 @@ export type LibraryCacheWriter
 		self.unsigned(value as CacheUnsigned)
 	end 'signed'
 
+	export function digest(value HashDigest)
+		appendDigest(self.buffer, digest: value)
+	end 'digest'
+
 	export function flag(value bool)
 		self.buffer.push(1 if value else 0)
 	end 'flag'
@@ -123,11 +126,11 @@ export type LibraryCacheWriter
 	export function sealed() returns immutable ByteArray
 		let image = LibraryCacheMagic.toByteArray() as isolated ByteArray
 		let body = swap self.buffer with ByteArray.create(0)
-		let bodyDigest = digestOfBytes(body) as CacheWord
+		let bodyDigest = digestOfBytes(body)
 
 		modify image 'fill'
-			image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
-			image.append(headerWordBytes(bodyDigest))
+			appendDigest(image, digest: CacheSchemaFingerprint)
+			appendDigest(image, digest: bodyDigest)
 			image.append(merge body)
 		end 'fill'
 
@@ -135,26 +138,19 @@ export type LibraryCacheWriter
 	end 'sealed'
 end 'LibraryCacheWriter'
 
-function headerWordBytes(word CacheWord) returns ByteArray
-	let bytes = ByteArray.create(HeaderWordByteCount, zeroed: false)
+function appendDigest(output ByteArray, digest HashDigest)
+	appendOrderedWord(output, word: digest as OrderedWord, width: DigestByteCount, order: DigestByteOrder)
+end 'appendDigest'
 
-	for position in 0 upto HeaderWordByteCount 'eachByte'
-		bytes.push(((word shr (position * ByteBitWidth)) and HeaderWordByteMask) as Byte)
-	end 'eachByte'
+function digestAt(image ByteArray, start ElementIndex, limit ElementIndex) returns HashDigest throws LibraryCacheDamage
+	let digestEnd = start + DigestByteCount
 
-	return bytes
-end 'headerWordBytes'
+	if limit < digestEnd or image.count() < digestEnd 'shortOfADigest'
+		throw LibraryCacheDamage.truncated
+	end 'shortOfADigest'
 
-function headerWordAt(image ByteArray, start ElementIndex) returns CacheWord throws LibraryCacheDamage
-	var word = 0 as CacheWord
-
-	for position in 0 upto HeaderWordByteCount 'eachByte'
-		let byte = try image.get(start + position) otherwise throw LibraryCacheDamage.truncated
-		word = word or ((byte as CacheWord) shl (position * ByteBitWidth))
-	end 'eachByte'
-
-	return word
-end 'headerWordAt'
+	return readOrderedWord(image, off: start, width: DigestByteCount, limit: limit, order: DigestByteOrder) as HashDigest
+end 'digestAt'
 
 typealias ReaderPathMap = Map with (ByteArray, FilePath)
 
@@ -166,7 +162,7 @@ export type LibraryCacheReader
 
 	export static function open(image immutable ByteArray) returns LibraryCacheReader throws LibraryCacheDamage
 		let magicCount = LibraryCacheMagic.byteLength()
-		let headerCount = magicCount + HeaderWordCount * HeaderWordByteCount
+		let headerCount = magicCount + HeaderDigestCount * DigestByteCount
 
 		if image.count() < headerCount 'tooShortForAHeader'
 			throw LibraryCacheDamage.truncated
@@ -178,14 +174,14 @@ export type LibraryCacheReader
 			throw LibraryCacheDamage.badMagic
 		end 'notOurs'
 
-		if (try headerWordAt(image, start: magicCount)) != (CacheSchemaFingerprint as CacheWord) 'anotherCodec'
+		if (try digestAt(image, start: magicCount, limit: headerCount)) != CacheSchemaFingerprint 'anotherCodec'
 			throw LibraryCacheDamage.anotherSchema
 		end 'anotherCodec'
 
-		let carried = try headerWordAt(image, start: magicCount + HeaderWordByteCount)
+		let carried = try digestAt(image, start: magicCount + DigestByteCount, limit: headerCount)
 		let payload = try image.slice(headerCount, endIndex: image.count()) otherwise throw LibraryCacheDamage.truncated
 
-		if (digestOfBytes(payload) as CacheWord) != carried 'corrupt'
+		if digestOfBytes(payload) != carried 'corrupt'
 			throw LibraryCacheDamage.checksumMismatch
 		end 'corrupt'
 
@@ -248,6 +244,13 @@ export type LibraryCacheReader
 
 		throw LibraryCacheDamage.unterminatedNumber
 	end 'unsigned'
+
+	export function digest() returns HashDigest throws LibraryCacheDamage
+		let word = try digestAt(self.image, start: self.position, limit: self.limit)
+		self.position = self.position + DigestByteCount
+
+		return word
+	end 'digest'
 
 	export function boundedUnsigned(low CacheUnsigned, high CacheUnsigned) returns CacheUnsigned throws LibraryCacheDamage
 		let value = try self.unsigned()
@@ -444,9 +447,9 @@ export type LibraryPackBuilder
 
 		for (iter, row) in self.rows.withIterator() 'eachRow'
 			let section = try self.sections.get(iter.index()) otherwise panic("LibraryPackBuilder.sealed: sections.get OOB at {iter.index()} below count {self.sections.count()}, which is index-parallel to the rows")
-			writer.unsigned(row.first as CacheUnsigned)
-			writer.unsigned(row.second as CacheUnsigned)
-			writer.unsigned(row.third as CacheUnsigned)
+			writer.digest(row.first)
+			writer.digest(row.second)
+			writer.digest(row.third)
 			writer.unsigned(section.count() as CacheUnsigned)
 		end 'eachRow'
 
@@ -485,9 +488,9 @@ export type LibraryPack
 		let lengths = PackOffsetArray.create(count, zeroed: false)
 
 		for _ in 0 upto count 'eachRow'
-			let first = (try reader.unsigned()) as HashDigest
-			let second = (try reader.unsigned()) as HashDigest
-			let third = (try reader.unsigned()) as HashDigest
+			let first = try reader.digest()
+			let second = try reader.digest()
+			let third = try reader.digest()
 			rows.push(PackRowKey.create(first, second: second, third: third))
 			lengths.push(try reader.count())
 		end 'eachRow'

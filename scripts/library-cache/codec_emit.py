@@ -61,6 +61,10 @@ def without_readonly(text):
     return re.sub(r"^" + READONLY_QUALIFIER + r"\s+", "", text.strip())
 
 
+def names_the_digest_itself(node):
+    return node.text == config.DIGEST_TYPE
+
+
 class Emitter:
     def __init__(self, tree):
         self.tree = tree
@@ -97,6 +101,11 @@ class Emitter:
 
         if text in self.tree.aliases:
             self.touched_aliases.add(text)
+
+            # Fixed width, never resolved through its alias to a varint: a seeded digest is
+            # uniform, so a varint's length would follow the hash seed, and every buffer with it.
+            if text == config.DIGEST_TYPE:
+                return Node("digest", text=text)
 
             return self.resolve_alias(text, depth)
 
@@ -178,6 +187,9 @@ class Emitter:
         if kind == "sint":
             return tabs + "writer.signed(%s as CacheSigned)" % value
 
+        if kind == "digest":
+            return tabs + "writer.digest(%s)" % (value if names_the_digest_itself(node) else "%s as %s" % (value, config.DIGEST_TYPE))
+
         if kind == "real":
             return tabs + "writer.real(%s as FullRangeFloat)" % value
 
@@ -213,6 +225,12 @@ class Emitter:
 
         if kind in ("uint", "sint", "real"):
             return tabs + "let %s = (try reader.%s) as %s" % (variable, self.read_call(node), node.text)
+
+        if kind == "digest":
+            if names_the_digest_itself(node):
+                return tabs + "let %s = try reader.digest()" % variable
+
+            return tabs + "let %s = (try reader.digest()) as %s" % (variable, node.text)
 
         frozen = "freeze " if getattr(node, "frozen", False) and kind in FROZEN_KINDS else ""
 

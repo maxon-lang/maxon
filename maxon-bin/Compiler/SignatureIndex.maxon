@@ -8723,12 +8723,12 @@ export type ProgramSignatures
 		writer.flag(self.freshReturnForwardsClosed)
 		writer.flag(self.nameEventsFolded)
 		writer.flag(self.forwardedStoresClosed)
-		writer.unsigned(self.hash as CacheUnsigned)
+		writer.digest(self.hash)
 		writer.unsigned(self.hashSource.ordinal as CacheUnsigned)
-		writer.unsigned(self.authorChainState as CacheUnsigned)
-		writer.unsigned(self.libraryChainState as CacheUnsigned)
-		writer.unsigned(self.wholeChainState as CacheUnsigned)
-		writer.unsigned(self.libraryHash as CacheUnsigned)
+		writer.digest(self.authorChainState)
+		writer.digest(self.libraryChainState)
+		writer.digest(self.wholeChainState)
+		writer.digest(self.libraryHash)
 		writer.unsigned(self.libraryParseSharing.ordinal as CacheUnsigned)
 		writer.flag(self.authorNameMeantByTheLibrary)
 		writer.unsigned(self.storedGlobalCount as CacheUnsigned)
@@ -8744,15 +8744,15 @@ export type ProgramSignatures
 		writer.flag(self.byRefMasksSettled)
 		cacheWriteBareNameSet(writer, value: self.functionValuedFieldNames)
 		cacheWriteWitnessByRefMaskMap(writer, value: self.witnessByRefMasks)
-		writer.unsigned(self.byRefConventionDigestAnswer as CacheUnsigned)
-		writer.unsigned(self.corpusByRefConventionDigestAnswer as CacheUnsigned)
+		writer.digest(self.byRefConventionDigestAnswer)
+		writer.digest(self.corpusByRefConventionDigestAnswer)
 		cacheWriteLiveNameSet(writer, value: self.liveDefaultKeyNames)
 		cacheWriteLiveNameSet(writer, value: self.liveSpawnedTypeNames)
 		writer.unsigned(self.liveKeyAdoptions as CacheUnsigned)
 		writer.flag(self.hasNonCorpusArrayConformer)
 		writer.flag(self.recordsTypeClaims)
 		writer.flag(self.holdsAMerge)
-		writer.unsigned(self.genericInstancesDigest as CacheUnsigned)
+		writer.digest(self.genericInstancesDigest)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
@@ -8795,12 +8795,12 @@ export type ProgramSignatures
 		let f_freshReturnForwardsClosed = try reader.flag()
 		let f_nameEventsFolded = try reader.flag()
 		let f_forwardedStoresClosed = try reader.flag()
-		let f_hash = (try reader.unsigned()) as HashDigest
+		let f_hash = try reader.digest()
 		let f_hashSource = try cacheReadHashEventSource(reader)
-		let f_authorChainState = (try reader.unsigned()) as HashDigest
-		let f_libraryChainState = (try reader.unsigned()) as HashDigest
-		let f_wholeChainState = (try reader.unsigned()) as HashDigest
-		let f_libraryHash = (try reader.unsigned()) as HashDigest
+		let f_authorChainState = try reader.digest()
+		let f_libraryChainState = try reader.digest()
+		let f_wholeChainState = try reader.digest()
+		let f_libraryHash = try reader.digest()
 		let f_libraryParseSharing = try cacheReadLibraryParseSharing(reader)
 		let f_authorNameMeantByTheLibrary = try reader.flag()
 		let f_storedGlobalCount = (try reader.unsigned()) as StoredGlobalCount
@@ -8816,15 +8816,15 @@ export type ProgramSignatures
 		let f_byRefMasksSettled = try reader.flag()
 		let f_functionValuedFieldNames = try cacheReadBareNameSet(reader)
 		let f_witnessByRefMasks = try cacheReadWitnessByRefMaskMap(reader)
-		let f_byRefConventionDigestAnswer = (try reader.unsigned()) as HashDigest
-		let f_corpusByRefConventionDigestAnswer = (try reader.unsigned()) as HashDigest
+		let f_byRefConventionDigestAnswer = try reader.digest()
+		let f_corpusByRefConventionDigestAnswer = try reader.digest()
 		let f_liveDefaultKeyNames = try cacheReadLiveNameSet(reader)
 		let f_liveSpawnedTypeNames = try cacheReadLiveNameSet(reader)
 		let f_liveKeyAdoptions = (try reader.unsigned()) as LiveKeysRevision
 		let f_hasNonCorpusArrayConformer = try reader.flag()
 		let f_recordsTypeClaims = try reader.flag()
 		let f_holdsAMerge = try reader.flag()
-		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
+		let f_genericInstancesDigest = try reader.digest()
 
 		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, growthMemo: GrowthMemo.create(), descriptorReads: DescriptorReads.create(), mintedTupleLayouts: SettledStructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: InFlightNames.create(), cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, replyFreeTypes: BareNameSet.create(), someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, nameEventsFolded: f_nameEventsFolded, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, contestedAliasesDigest: startDigest(), libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'

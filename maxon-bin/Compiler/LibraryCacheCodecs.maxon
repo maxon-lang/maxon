@@ -88,7 +88,7 @@ end 'cacheReadSourceParseError'
 
 function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns immutable ByteArray throws LibraryCacheDamage
 	let writer = LibraryCacheWriter.create()
-	writer.unsigned(key as CacheUnsigned)
+	writer.digest(key)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.deferred)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.streamed)
 	cacheWriteNameRoster(writer, value: declarations.manifest.templates)
@@ -155,7 +155,7 @@ end 'decodedStashedParse'
 
 function encodedAuditFindings(findings UnusedFindingArray, key HashDigest) returns immutable ByteArray
 	let writer = LibraryCacheWriter.create()
-	writer.unsigned(key as CacheUnsigned)
+	writer.digest(key)
 	writer.unsigned(findings.count() as CacheUnsigned)
 
 	for finding in findings 'eachFinding'
@@ -233,8 +233,8 @@ function cacheReadToken(reader LibraryCacheReader) returns Token throws LibraryC
 end 'cacheReadToken'
 
 function cacheWriteSharedLibraryParse(writer LibraryCacheWriter, value SharedLibraryParse)
-	writer.unsigned(value.variantOf() as CacheUnsigned)
-	writer.unsigned(value.keyOf() as CacheUnsigned)
+	writer.digest(value.variantOf())
+	writer.digest(value.keyOf())
 	value.footprint.cacheWrite(writer)
 	value.artifact.cacheWrite(writer)
 end 'cacheWriteSharedLibraryParse'
@@ -281,9 +281,7 @@ function cacheReadFixedElementCountColumn(reader LibraryCacheReader) returns Fix
 end 'cacheReadFixedElementCountColumn'
 
 function requireKey(reader LibraryCacheReader, expected HashDigest) throws LibraryCacheDamage
-	let carried = try reader.unsigned()
-
-	if carried != expected as CacheUnsigned 'aDifferentEntry'
+	if (try reader.digest()) != expected 'aDifferentEntry'
 		throw LibraryCacheDamage.anotherEntry
 	end 'aDifferentEntry'
 end 'requireKey'
