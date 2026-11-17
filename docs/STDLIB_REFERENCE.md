@@ -2115,6 +2115,7 @@ is true for `exited(0)`; `code()` returns the number either way.
 union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
+	busy
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
@@ -2130,6 +2131,10 @@ a `file` stream that cannot be opened and a `workingDirectory` that does not exi
 fails with a not-found code; its reason carries the OS error number (`os error 5`). A spawn whose pipe
 cannot be made throws it with the error of the call that failed, `os error 4` when the process has too many
 files open.
+
+`busy` is thrown when the operating system refuses to start an executable because it is open for writing.
+Windows and Linux refuse; macOS starts it. The refusal is a sharing violation (`os error 32`) on Windows and
+`ETXTBSY` on Linux. A `file` stream or `workingDirectory` that is busy stays `spawnFailed`, as it does for a missing one.
 
 A NUL byte in the program name or path, an argument, the working directory, an environment variable's name
 or value, or a `file` stream's path throws `spawnFailed` before any child starts, with a reason naming that
@@ -2175,7 +2180,7 @@ depends on whether the child finished dying before the process holding it, such 
 `match`.
 
 `SpawnPreparation` — `none`, `standardStream`, `workingDirectory` — names the step of a spawn the runtime
-records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`.
+records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`, and a sharing violation at `none` what makes it `busy`.
 
 ### RunProcessError
 

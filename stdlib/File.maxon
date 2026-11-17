@@ -149,39 +149,6 @@ public type FileSource implements ByteSource
 	end 'close'
 end 'FileSource'
 
-/// A file handle opened for writing.
-type FileWriter
-	let file as __ManagedFile
-
-	/// Open a file for writing with the given permission mode, throwing on failure
-	static function open(path __ManagedMemory, mode FilePermission) returns FileWriter throws FileWriteError
-		let fileHandle = try openForWriting(path, mode: mode) otherwise (e) 'openFailed'
-			throw writeFailureOf(e)
-		end 'openFailed'
-
-		return FileWriter{file: fileHandle}
-	end 'open'
-
-	static function openNew(path __ManagedMemory) returns FileWriter throws FileWriteError
-		let fileHandle = try __ManagedFile.openCreateNew(path) otherwise (e) 'createFailed'
-			throw writeFailureOf(e)
-		end 'createFailed'
-
-		return FileWriter{file: fileHandle}
-	end 'openNew'
-
-	/// Write managed memory content and close the file. Closes the file on both
-	/// success and error paths.
-	function writeAll(managed __ManagedMemory) throws FileWriteError
-		try file.write(managed) otherwise (e) 'err'
-			file.close()
-			throw writeFailureOf(e)
-		end 'err'
-
-		file.close()
-	end 'writeAll'
-end 'FileWriter'
-
 function openForWriting(path __ManagedMemory, mode FilePermission) returns __ManagedFile throws __ManagedFileError
 	return match mode 'perm'
 		executable gives try __ManagedFile.openWriteExecutable(path)
@@ -225,17 +192,17 @@ public type File
 
 	/// Write string content to a text file
 	public static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-		let writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
-		try writer.writeAll(content.addressableBytes())
+		let writer = try FileWriter.open(path, mode: mode)
+		try writer.writeAllText(content)
 	end 'writeText'
 
 	/// Create a new file holding `content`. Throws `alreadyExists` when the path is already there. A
 	/// failed write deletes the file it created and throws the write's error; `partialFileLeft` when
 	/// that delete fails too.
 	public static function createText(path FilePath, content String) throws FileWriteError
-		let writer = try FileWriter.openNew(path.path.addressableBytes())
+		let writer = try FileWriter.openNew(path)
 
-		try writer.writeAll(content.addressableBytes()) otherwise (e) 'unwritten'
+		try writer.writeAllText(content) otherwise (e) 'unwritten'
 			try File.delete(path) otherwise (cleanup) 'kept'
 				if cleanup == FileDeleteError.notFound 'nothingLeft'
 					throw e
@@ -250,8 +217,8 @@ public type File
 
 	/// Write binary content to a file
 	public static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-		let writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
-		try writer.writeAll(content.managed)
+		let writer = try FileWriter.open(path, mode: mode)
+		try writer.writeAll(content)
 	end 'writeBinary'
 
 	/// Check if a file exists at the given path

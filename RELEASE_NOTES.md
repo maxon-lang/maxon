@@ -140,12 +140,14 @@ release's version as its heading when the release is cut.
 - A cast to an alias that the arithmetic result already has, such as `(at - 1) as ElementIndex` over an
   `ElementIndex`, is E3010: the result of arithmetic on a full-width unsigned alias is already that alias.
   Fix: delete the `as`.
-- `SubprocessError` has three more cases and one fewer. `treeNotEnded(elapsedMs, stdout, stderr, osError)` is
+- `SubprocessError` has four more cases and one fewer. `treeNotEnded(elapsedMs, stdout, stderr, osError)` is
   thrown for a deadline whose kill could not fully end the child's process tree, which threw `ioFailed`;
   `detachRefused(osError)` for a `runDetached()` the enclosing Windows job refuses breakaway to, which threw
-  `spawnFailed`; and `statusLost(stdout, stderr)`, by `Subprocess.run` and `StreamingSubprocess.wait`, for a
-  child that ended while another process took its exit status (on macOS, a program killed while a debugger's
-  stub held it; on Linux, a child reaped by another process). `endOfStream` is removed, with the readers that
+  `spawnFailed`; `busy`, for a spawn of an executable that is open for writing
+  (a sharing violation on Windows, `ETXTBSY` on Linux; macOS starts it), which threw `spawnFailed`; and
+  `statusLost(stdout, stderr)`, by `Subprocess.run` and `StreamingSubprocess.wait`, for a child that ended while
+  another process took its exit status (on macOS, a program killed while a debugger's stub held it; on Linux,
+  a child reaped by another process). `endOfStream` is removed, with the readers that
   threw it: a child's output is read through a `StreamReader`, and `StreamingSubprocess.readStdoutLine`,
   `readStdoutLineCapped`, `readStdoutBytes`, `readStderrLine`, `readStderrLineCapped`, `tryReadStdoutLine`,
   `tryReadStderrLine`, `LinePoll` and `endedTheStream()` are removed. `takeStdout()` and `takeStderr()` each
@@ -153,7 +155,7 @@ release's version as its heading when the release is cut.
   (`line(text)`, `ended`) and throws `StreamError`, and whose `readBytes(n)` answers a `ByteArray`. A `match`
   over `SubprocessError` that lists every case is no longer exhaustive (E2026), and an `endOfStream` arm is
   E3034.
-  Fix: add arms for `treeNotEnded`, `detachRefused` and `statusLost`, or give the `match` a `default throws`,
+  Fix: add arms for `treeNotEnded`, `detachRefused`, `busy` and `statusLost`, or give the `match` a `default throws`,
   and delete `endOfStream` arms; code that told the first two failures apart by the reason text of `ioFailed`
   or `spawnFailed` matches the cases. Take the reader once (`let out = try child.takeStdout()`) and read from
   it: match `try out.readLine()` for `line(text)`, and treat `ended` where `endOfStream` was caught;

@@ -1,0 +1,50 @@
+public type FileWriter
+	let file as __ManagedFile
+
+	public static function open(path FilePath, mode FilePermission = FilePermission.normal) returns FileWriter throws FileWriteError
+		let fileHandle = try openForWriting(path.path.addressableBytes(), mode: mode) otherwise (e) 'openFailed'
+			throw writeFailureOf(e)
+		end 'openFailed'
+
+		return FileWriter{file: fileHandle}
+	end 'open'
+
+	public static function openNew(path FilePath) returns FileWriter throws FileWriteError
+		let fileHandle = try __ManagedFile.openCreateNew(path.path.addressableBytes()) otherwise (e) 'createFailed'
+			throw writeFailureOf(e)
+		end 'createFailed'
+
+		return FileWriter{file: fileHandle}
+	end 'openNew'
+
+	public function write(content ByteArray) throws FileWriteError
+		try writeManaged(content.managed)
+	end 'write'
+
+	function writeManaged(managed __ManagedMemory) throws FileWriteError
+		try file.write(managed) otherwise (e) 'err'
+			throw writeFailureOf(e)
+		end 'err'
+	end 'writeManaged'
+
+	public function close()
+		file.close()
+	end 'close'
+
+	public function writeAll(content ByteArray) throws FileWriteError
+		try writeAllManaged(content.managed)
+	end 'writeAll'
+
+	public function writeAllText(content String) throws FileWriteError
+		try writeAllManaged(content.addressableBytes())
+	end 'writeAllText'
+
+	function writeAllManaged(managed __ManagedMemory) throws FileWriteError
+		try writeManaged(managed) otherwise (e) 'unwritten'
+			close()
+			throw e
+		end 'unwritten'
+
+		close()
+	end 'writeAllManaged'
+end 'FileWriter'

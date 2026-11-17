@@ -8,6 +8,8 @@ typealias LspChildLinkArray = Array with LspChildLink
 
 typealias LspRelayDocumentMap = Map with (String, LspRelayDocument)
 
+typealias RelayBusyPauseMs = int(1 to 1000)
+
 let RelayWatchRequestId = "maxon-relay-watch"
 let RelayWatchRegistrationId = "maxon-relay-slot"
 let RelayRegisterCapabilityMethod = "client/registerCapability"
@@ -32,6 +34,9 @@ let RelayGlobOpenByte = 0x5B
 let RelayGlobCloseByte = 0x5D
 let RelayChildExitDeadlineMs = 2000
 let RelayReapDeadlineMs = 3000
+let RelayFirstBusyPauseMs = 10
+let RelayLongestBusyPauseMs = 1000
+let RelayLongBusyReportMs = 30000
 let RelayStderrPendingCapBytes = 16384
 let RelayLanguageId = "maxon"
 let RelayLanguageIdKey = "languageId"
@@ -50,8 +55,35 @@ end 'LspRelayRoute'
 union LspAttachOutcome
 	attached
 	detached
+	beingWritten
 	failed(reason String)
 end 'LspAttachOutcome'
+
+union LspSlotWrite
+	settled
+	awaited(wait LspSlotWriteWait)
+end 'LspSlotWrite'
+
+type LspSlotWriteWait
+	let since as InstantMs
+	var pauseMs as RelayBusyPauseMs
+	var toldLong as bool
+
+	static function begin() returns LspSlotWriteWait
+		return Self{since: Clock.nowMs(), pauseMs: RelayFirstBusyPauseMs as RelayBusyPauseMs, toldLong: false}
+	end 'begin'
+
+	function nextPause() returns RelayBusyPauseMs
+		let thisPauseMs = self.pauseMs
+		self.pauseMs = thisPauseMs * 2 if thisPauseMs < RelayLongestBusyPauseMs / 2 else RelayLongestBusyPauseMs
+
+		return thisPauseMs
+	end 'nextPause'
+
+	function overstays() returns bool
+		return not self.toldLong and Clock.elapsedMs(self.since) >= RelayLongBusyReportMs
+	end 'overstays'
+end 'LspSlotWriteWait'
 
 union LspRelayChild
 	none
@@ -146,6 +178,20 @@ function lspMessageIsResponse(doc JsonDoc) returns bool
 		text gives not lspMessageNamesMethod(doc)
 	end 'addressee'
 end 'lspMessageIsResponse'
+
+function spawnFoundTheSlotBusy(failure SubprocessError) returns bool
+	return match failure 'cause'
+		busy gives true
+		executableNotFound or
+		spawnFailed or
+		ioFailed or
+		timeout or
+		treeNotEnded or
+		detachRefused or
+		inputTooLarge or
+		statusLost gives false
+	end 'cause'
+end 'spawnFoundTheSlotBusy'
 
 function relayDidOpenText(uri String, document LspRelayDocument) returns String
 	let doc = JsonDoc.create()
@@ -290,10 +336,12 @@ type LspRelay
 	var attached as LspSlotStamp
 	var spawnFailed as LspSlotStamp
 	var unreadableTold as StatedText
+	var slotWrite as LspSlotWrite
+	var recheckArmed as bool
 	let watch as RelayWatchSupport
 
 	static function create(slot FilePath, initializeBody String, initializeId LspRequestId, watch RelayWatchSupport) returns LspRelay
-		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), processes: LspChildProcessList.create(), nextGeneration: 0, attached: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated, watch: watch}
+		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), processes: LspChildProcessList.create(), nextGeneration: 0, attached: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated, slotWrite: LspSlotWrite.settled, recheckArmed: false, watch: watch}
 	end 'create'
 
 	function report(reason String, workspace LspWorkspaceState)
@@ -423,6 +471,7 @@ type LspRelay
 
 	function slotChanged(workspace LspWorkspaceState)
 		let stamp = try LspSlotStamp.of(self.slot) otherwise (failure) 'unreadable'
+			self.endTheWriteWait()
 			self.tellUnreadable(failure, workspace: workspace)
 			return
 		end 'unreadable'
@@ -431,12 +480,52 @@ type LspRelay
 
 		if stamp.exists and not stamp.agrees(self.attached) and not stamp.agrees(self.spawnFailed) 'replaced'
 			match self.attach(stamp, initial: false, workspace: workspace) 'attachment'
+				beingWritten then return
 				attached or
 				detached then break
 				failed(reason) then self.report(reason, workspace: workspace)
 			end 'attachment'
 		end 'replaced'
+
+		self.endTheWriteWait()
 	end 'slotChanged'
+
+	function slotRecheckDue(workspace LspWorkspaceState)
+		self.recheckArmed = false
+		self.slotChanged(workspace)
+	end 'slotRecheckDue'
+
+	function awaitTheWrite(workspace LspWorkspaceState)
+		let wait = self.writeWait()
+
+		if wait.overstays() 'overstayed'
+			wait.toldLong = true
+			self.report("the compiler at {self.slot.path} is still open for writing; it will be started when the write finishes.", workspace: workspace)
+		end 'overstayed'
+
+		if self.recheckArmed 'armed'
+			return
+		end 'armed'
+
+		self.recheckArmed = true
+		workspace.arrivals.push(async arrivalAfter(wait.nextPause() as Milliseconds, arrival: LspArrival.slotRecheck))
+	end 'awaitTheWrite'
+
+	function writeWait() returns LspSlotWriteWait
+		match self.slotWrite 'write'
+			awaited(wait) then return wait
+			settled then break
+		end 'write'
+
+		let wait = LspSlotWriteWait.begin()
+		self.slotWrite = LspSlotWrite.awaited(wait)
+
+		return wait
+	end 'writeWait'
+
+	function endTheWriteWait()
+		self.slotWrite = LspSlotWrite.settled
+	end 'endTheWriteWait'
 
 	function shutDown(workspace LspWorkspaceState)
 		match self.current 'child'
@@ -448,7 +537,7 @@ type LspRelay
 		self.current = LspRelayChild.none
 
 		let started = Clock.nowMs()
-		workspace.arrivals.push(async reapDeadlineAfter(RelayReapDeadlineMs))
+		workspace.arrivals.push(async arrivalAfter(RelayReapDeadlineMs, arrival: LspArrival.reapDeadline))
 
 		while self.retired.count() > 0 and workspace.arrivals.count() > 0 and Clock.elapsedMs(started) < RelayReapDeadlineMs 'reaping'
 			let arrival = workspace.nextPendingArrival()
@@ -460,6 +549,7 @@ type LspRelay
 				childStderrEnded or
 				childStderrFailed then self.childArrived(arrival, workspace: workspace)
 				reapDeadline or
+				slotRecheck or
 				framed or
 				endOfStream or
 				framingError or
@@ -586,6 +676,12 @@ type LspRelay
 		end 'noSlot'
 
 		let process = try StreamingSubprocess.spawn(Executable.path(self.slot), arguments: [LspServerCommandName, RelayedFlag]) otherwise (e) 'spawnFailed'
+			if spawnFoundTheSlotBusy(e) 'beingWritten'
+				self.awaitTheWrite(workspace)
+
+				return LspAttachOutcome.beingWritten
+			end 'beingWritten'
+
 			self.spawnFailed = stamp
 
 			return LspAttachOutcome.failed("could not start the compiler at {self.slot.path}: {e.displayReason()}")
@@ -828,8 +924,15 @@ type LspRelay
 			return
 		end 'shutdown'
 
-		writeLspError(workspace.writer, id: id, code: LspJsonRpcErrorCode.contentModified, message: RelayDetachedText)
+		writeLspError(workspace.writer, id: id, code: LspJsonRpcErrorCode.contentModified, message: self.detachedText())
 	end 'refuseWhileDetached'
+
+	function detachedText() returns String
+		return match self.slotWrite 'write'
+			awaited gives "the compiler at {self.slot.path} is still being written; ask again once it is"
+			settled gives RelayDetachedText
+		end 'write'
+	end 'detachedText'
 
 	function remember(method String, doc JsonDoc, body String, workspace LspWorkspaceState)
 		if method == MethodDidOpen 'opened'

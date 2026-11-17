@@ -570,6 +570,7 @@ function main() returns ExitCode
 			timeout then sawTimeout = true
 			executableNotFound then sawTimeout = false
 			spawnFailed then sawTimeout = false
+			busy then sawTimeout = false
 			ioFailed then sawTimeout = false
 			inputTooLarge then sawTimeout = false
 			statusLost then sawTimeout = false
@@ -624,6 +625,7 @@ function main() returns ExitCode
 			timeout(_, out, _) gives out
 			executableNotFound or
 				spawnFailed or
+				busy or
 				ioFailed or
 				inputTooLarge or
 				statusLost or
@@ -721,6 +723,7 @@ function collectedVerdict(me Executable) returns String
 			timeout(_, out, _) gives out
 			executableNotFound or
 				spawnFailed or
+				busy or
 				ioFailed or
 				inputTooLarge or
 				statusLost or
@@ -1251,6 +1254,7 @@ function main() returns ExitCode
 			timeout(_, out, _) gives out
 			executableNotFound or
 				spawnFailed or
+				busy or
 				ioFailed or
 				inputTooLarge or
 				statusLost or
@@ -1314,6 +1318,7 @@ function main() returns ExitCode
 		treeNotEnded(timeoutMs, stdout, stderr, osError) gives "timeoutMs {timeoutMs}, stdout [{stdout}], stderr [{stderr}], osError {osError}"
 		executableNotFound or
 		spawnFailed or
+		busy or
 		ioFailed or
 		timeout or
 		inputTooLarge or
@@ -1350,6 +1355,7 @@ function main() returns ExitCode
 		detachRefused(osError) gives "osError {osError}"
 		executableNotFound or
 		spawnFailed or
+		busy or
 		ioFailed or
 		timeout or
 		inputTooLarge or
@@ -1421,6 +1427,7 @@ function main() returns ExitCode
 		match e 'kind'
 			executableNotFound then refused = true
 			spawnFailed or
+			busy or
 				timeout or
 				ioFailed or
 				inputTooLarge or
@@ -1768,6 +1775,7 @@ function main() returns ExitCode
 		match e 'kind'
 			executableNotFound then sawNotFound = true
 			spawnFailed or
+			busy or
 				timeout or
 				ioFailed or
 				inputTooLarge or
@@ -1804,6 +1812,7 @@ function main() returns ExitCode
 		match e 'kind'
 			executableNotFound then sawNotFound = true
 			spawnFailed or
+			busy or
 				timeout or
 				ioFailed or
 				inputTooLarge or
@@ -1822,6 +1831,82 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-a-spawn-of-an-executable-open-for-writing-follows-the-operating-systems-answer -->
+<!-- unsupported-targets: wasm32-wasi -->
+A spawn reports what the operating system answers for an executable that is still open for writing. Windows
+and Linux refuse to start it, and the spawn throws `busy`; macOS starts it, and the spawn runs the child. The
+program prints `as the operating system answers` when the spawn did what its OS does, and the outcome it
+saw otherwise.
+```maxon
+function verdictOf(config Configuration) returns String
+	var verdict = "ran"
+	try config.run() otherwise (e) 'handler'
+		match e 'kind'
+			busy then verdict = "busy"
+			spawnFailed(reason) then verdict = "spawnFailed: {reason}"
+			executableNotFound or
+				timeout or
+				ioFailed or
+				inputTooLarge or
+				statusLost or
+				treeNotEnded or
+				detachRefused then verdict = "other"
+		end 'kind'
+	end 'handler'
+	return verdict
+end 'verdictOf'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let mode = try args.get(1) otherwise ""
+
+	if mode == "child" 'child'
+		return 0
+	end 'child'
+
+	let own = try Process.executablePath() otherwise panic("the running program has a path")
+	let image = try File.readBinary(own) otherwise panic("the running program's image is readable")
+
+	#if os(Windows)
+	let copy = Directory.currentPath().join("maxon-spec-busy-image.exe")
+	#else
+	let copy = Directory.currentPath().join("maxon-spec-busy-image")
+	#endif
+
+	let writer = try FileWriter.open(copy, mode: FilePermission.executable) otherwise panic("the scratch image can be opened for writing")
+	try writer.write(image) otherwise panic("the scratch image can be written")
+
+	let config = Configuration.create(Executable.path(copy))
+	config.arguments.push("child")
+	config.standardOutput = OutputDestination.discard
+
+	let verdict = verdictOf(config)
+
+	writer.close()
+	try File.delete(copy) otherwise panic("the scratch image can be removed")
+
+	#if os(Macos)
+		let expectedVerdict = "ran"
+	#else
+		let expectedVerdict = "busy"
+	#endif
+
+	if verdict == expectedVerdict 'agrees'
+		print("as the operating system answers\n")
+	end 'agrees' else 'differs'
+		print("{verdict}\n")
+	end 'differs'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+as the operating system answers
+```
+
 <!-- test: subprocess-a-missing-redirect-file-is-spawn-failed -->
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐ **A STANDARD STREAM THAT CANNOT BE OPENED IS `spawnFailed`, NOT `executableNotFound`, ON EVERY OS.** The
@@ -1838,6 +1923,7 @@ function verdictOf(config Configuration) returns String
 			executableNotFound then verdict = "executableNotFound"
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
+				busy or
 				ioFailed or
 				inputTooLarge or
 				statusLost or
@@ -1905,6 +1991,7 @@ function verdictOf(executable Executable, workingDirectory FilePath) returns Str
 			executableNotFound then verdict = "executableNotFound"
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
+				busy or
 				ioFailed or
 				inputTooLarge or
 				statusLost or
@@ -1997,6 +2084,7 @@ function main() returns ExitCode
 			executableNotFound then verdict = "executableNotFound"
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
+				busy or
 				ioFailed or
 				inputTooLarge or
 				statusLost or
@@ -3362,6 +3450,7 @@ function secondTakeIsRefused(child StreamingSubprocess) returns bool
 			ioFailed gives true
 			executableNotFound or
 			spawnFailed or
+			busy or
 			timeout or
 			treeNotEnded or
 			detachRefused or

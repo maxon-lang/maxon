@@ -365,6 +365,7 @@ end 'RunProcessError'
 public union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
+	busy
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
@@ -379,6 +380,7 @@ public union SubprocessError implements Error
 		return match self 'e'
 			executableNotFound(name) gives "executable not found: {name}"
 			spawnFailed(reason) gives "spawn failed: {reason}"
+			busy gives "the executable is open for writing by another process or handle, so the operating system will not run it"
 			ioFailed(reason) gives "I/O failed: {reason}"
 			timeout(elapsedMs, _, _) gives "timed out after {elapsedMs}ms, and the kill was sent to the child's whole process tree"
 			treeNotEnded(elapsedMs, _, _, osError) gives "timed out after {elapsedMs}ms, but the child's process tree could not be fully ended: os error {osError}"
@@ -394,6 +396,7 @@ public union SubprocessError implements Error
 			timeout gives true
 			executableNotFound or
 			spawnFailed or
+			busy or
 			ioFailed or
 			treeNotEnded or
 			detachRefused or
@@ -410,6 +413,7 @@ public union SubprocessError implements Error
 			treeNotEnded gives true
 			executableNotFound or
 			spawnFailed or
+			busy or
 			ioFailed or
 			detachRefused or
 			inputTooLarge or
@@ -944,11 +948,6 @@ function attachedFlagsFor(opts PlatformOptions) returns SpawnFlagsValue
 	return flags
 end 'attachedFlagsFor'
 
-// The codes a file that is not there fails with, on every lane: Windows' own `ERROR_FILE_NOT_FOUND` /
-// `ERROR_PATH_NOT_FOUND`, and the POSIX lanes' `ENOENT` / `ENOTDIR` mapped onto them.
-let spawnErrorFileNotFound = 2
-let spawnErrorPathNotFound = 3
-
 // Which step of a spawn failed, as the runtime records it above the OS code in the word
 // `__Builtins.subprocessLastErrorCode` answers; `GtRuntime` stores them from this enum.
 // A spawn opens its standard streams, and on POSIX its working directory, before it launches anything, and
@@ -967,11 +966,15 @@ function spawnFailure(launchPath String) returns SubprocessError
 	let word = __Builtins.subprocessLastErrorCode()
 	let preparation = try SpawnPreparation.fromRawValue(word shr spawnPreparationShift) otherwise panic("Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know")
 	let code = lastOsErrorCode()
-	let fileMissing = code == spawnErrorFileNotFound or code == spawnErrorPathNotFound
+	let fileMissing = code == OsErrorFileNotFound or code == OsErrorPathNotFound
 
 	if fileMissing and preparation == SpawnPreparation.none 'executableAbsent'
 		return SubprocessError.executableNotFound(launchPath)
 	end 'executableAbsent'
+
+	if code == OsErrorSharingViolation and preparation == SpawnPreparation.none 'executableBusy'
+		return SubprocessError.busy
+	end 'executableBusy'
 
 	return SubprocessError.spawnFailed(lastErrorMessage())
 end 'spawnFailure'

@@ -188,6 +188,15 @@ public function installPartialRelaySlot(caseDir FilePath, generation RelayGenera
 	writeRelayImage(relaySlotPath(caseDir), image: partial)
 end 'installPartialRelaySlot'
 
+public function holdRelaySlotOpen(caseDir FilePath, generation RelayGeneration) returns FileWriter
+	writeRelayGeneration(caseDir, generation: generation)
+
+	let writer = try FileWriter.open(relaySlotPath(caseDir), mode: FilePermission.executable) otherwise panic("the gate could not run — could not open the slot compiler for writing.")
+	try writer.write(relayFakeImage(caseDir)) otherwise panic("the gate could not run — could not write the compiler image into the slot.")
+
+	return writer
+end 'holdRelaySlotOpen'
+
 public function completeRelaySlotInPlace(caseDir FilePath)
 	writeRelayImage(relaySlotPath(caseDir), image: relayFakeImage(caseDir))
 end 'completeRelaySlotInPlace'
@@ -286,6 +295,11 @@ public function relayHoverRefusal(client LspClient, uri String) returns String t
 
 	return RelayAnsweredText
 end 'relayHoverRefusal'
+
+public function relayWatchSettled(client LspClient, uri String) throws LspClientError
+	_ = try relayHoverRefusal(client, uri: uri)
+	_ = try relayHoverRefusal(client, uri: uri)
+end 'relayWatchSettled'
 
 public function relayRefusalOf(client LspClient, id LspRequestIdNumber) returns String throws LspClientError
 	try client.awaitReplyTo(id) otherwise (e) 'refused'

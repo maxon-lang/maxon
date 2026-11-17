@@ -2590,7 +2590,13 @@ waiting for an answer is answered with error `-32801` (ContentModified), so the 
 and the server answers `initialize` itself, as it does when the compiler ends before it has answered
 `initialize`. A client that does not declare dynamic registration of file
 watchers gets no hot reload: the server says so once, in a `window/logMessage`, and a compiler built after
-the session began is picked up when the session restarts. A compiler that cannot be started is reported
+the session began is picked up when the session restarts. A compiler still open for writing when the server
+starts it (Windows and Linux refuse to start such a file) is awaited, not reported as unstartable: the
+server checks the binary again on a timer that doubles from about 10 ms to about 1 s and keeps that pace
+until the write ends, and a check handles the binary as a change event does. While it waits, `initialize` is
+answered by the server itself, and each request is answered `-32801` with a message saying the compiler is
+still being written. A wait that lasts about 30 s is reported once, in a `window/logMessage`, and the checks
+go on. A compiler that cannot be started is reported
 once, in a `window/logMessage`, and started again when the binary's size or modification time changes, the
 two things the server compares; what the relayed compiler writes to its stderr is passed on with the next
 message either side sends. A message from it longer than 64 MiB ends it.

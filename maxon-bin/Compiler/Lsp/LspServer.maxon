@@ -133,6 +133,7 @@ type LspSession
 			childStderr or
 			childStderrEnded or
 			childStderrFailed then self.relayOrPanic().childArrived(arrival, workspace: self.workspace)
+			slotRecheck then self.relayOrPanic().slotRecheckDue(self.workspace)
 			reapDeadline then panic("LspSession.dispatch: the reap deadline is armed and consumed inside `LspRelay.shutDown`, so no session loop turn receives it")
 		end 'arrival'
 	end 'dispatch'
@@ -206,7 +207,8 @@ type LspSession
 
 		match relay.attachInitial(self.workspace) 'attachment'
 			attached then break
-			detached then respondInitialize(self.workspace, id: readRequestId(doc), doc: doc)
+			detached or
+			beingWritten then respondInitialize(self.workspace, id: readRequestId(doc), doc: doc)
 			failed(reason) then self.answerInitializeThenReport(relay, reason: reason, doc: doc)
 		end 'attachment'
 

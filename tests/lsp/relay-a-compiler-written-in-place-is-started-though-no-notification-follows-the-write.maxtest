@@ -1,0 +1,52 @@
+let UnnotifiedCaseDirName = "relay-unnotified-write"
+let UnnotifiedDocumentName = "one.maxon"
+let UnnotifiedDocumentText = "unnotified"
+
+test 'relay: a compiler written in place is started though no notification follows the write'
+	let caseDir = stagedRelayCase(UnnotifiedCaseDirName)
+	let writer = holdRelaySlotOpen(caseDir, generation: 1)
+
+	let client = LspClient.start()
+
+	if let observed = try startedAfterTheWriterCloses(client, caseDir: caseDir, writer: writer) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		#if os(Macos)
+			try Expect.equal(observed.0, expected: RelayFakeServerName, message: "the compiler open for writing did not answer initialize on an operating system that starts it.")
+		#else
+			try Expect.notEqual(observed.0, expected: RelayFakeServerName, message: "a compiler open for writing answered initialize.")
+		#endif
+
+		try Expect.equal(observed.1, expected: "generation 1 saw: {UnnotifiedDocumentText}", message: "the compiler whose writer closed with no notice after it did not take over the open document.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a compiler written in place is started though no notification follows the write'
+
+function openedWhileTheSlotIsHeld(client LspClient, caseDir FilePath, uri String) returns String throws LspClientError
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+
+	try client.initialized()
+	try client.openDocument(uri, content: UnnotifiedDocumentText)
+
+	try relayWatchSettled(client, uri: uri)
+
+	return served
+end 'openedWhileTheSlotIsHeld'
+
+function startedAfterTheWriterCloses(client LspClient, caseDir FilePath, writer FileWriter) returns (String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(UnnotifiedDocumentName))
+
+	let served = try openedWhileTheSlotIsHeld(client, caseDir: caseDir, uri: uri) otherwise (e) 'refused'
+		writer.close()
+		throw e
+	end 'refused'
+
+	writer.close()
+
+	let published = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 1, text: UnnotifiedDocumentText))
+
+	return (served, published)
+end 'startedAfterTheWriterCloses'

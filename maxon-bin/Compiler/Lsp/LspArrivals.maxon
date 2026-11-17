@@ -10,6 +10,7 @@ union LspArrival
 	childStderrEnded(generation LspChildGeneration)
 	childStderrFailed(generation LspChildGeneration, reason String)
 	reapDeadline
+	slotRecheck
 end 'LspArrival'
 
 typealias LspArrivalPromise = Promise with LspArrival
@@ -71,11 +72,11 @@ function nextChildStderrArrival(reader ChildLineReader.handle, generation LspChi
 	end 'event'
 end 'nextChildStderrArrival'
 
-function reapDeadlineAfter(deadlineMs Milliseconds) returns LspArrival
-	sleep(deadlineMs)
+function arrivalAfter(pauseMs Milliseconds, arrival LspArrival) returns LspArrival
+	sleep(pauseMs)
 
-	return LspArrival.reapDeadline
-end 'reapDeadlineAfter'
+	return arrival
+end 'arrivalAfter'
 
 // Runs a `.maxproj` off the session loop, which answers every other request while a manifest
 // compiles and runs. ⚠ Each held project runs one at a time (`HeldRoot.resolution`), so a slow

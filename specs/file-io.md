@@ -631,6 +631,67 @@ end 'main'
 Binary read/write OK
 ```
 
+<!-- test: bytes-written-before-close-are-the-files-content-after -->
+```maxon
+function main() returns ExitCode
+	let path = FilePath from "test_file_writer.bin"
+	let first = ByteArray.create(0)
+	first.push(65 as Byte)
+	first.push(66 as Byte)
+	let second = ByteArray.create(0)
+	second.push(67 as Byte)
+
+	let writer = try FileWriter.open(path) otherwise 'open_err'
+		print("Open failed")
+		return 1
+	end 'open_err'
+
+	try writer.write(first) otherwise 'first_err'
+		print("First write failed")
+		return 2
+	end 'first_err'
+
+	try writer.write(second) otherwise 'second_err'
+		print("Second write failed")
+		return 3
+	end 'second_err'
+
+	writer.close()
+
+	let content = try File.readBinary(path) otherwise 'read_err'
+		print("Read failed")
+		return 4
+	end 'read_err'
+
+	try File.delete(path) otherwise 'del_err'
+		print("Delete failed")
+	end 'del_err'
+
+	if content.count() != 3 'count_check'
+		print("Wrong count: {content.count()}")
+		return 5
+	end 'count_check'
+
+	let last = try content.get(2) otherwise 'e2'
+		return 10
+	end 'e2'
+
+	if last != 67 as Byte 'check_last'
+		print("Wrong value")
+		return 20
+	end 'check_last'
+
+	print("Written bytes survive close")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+Written bytes survive close
+```
+
 ### File.rename
 
 Atomically rename (move) a file, replacing the destination if it already
