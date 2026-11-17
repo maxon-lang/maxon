@@ -17,11 +17,10 @@ public type HashSeed
 	let word as HashDigest
 	let empty as HashDigest
 
-	/// A fresh seed from the operating system's entropy.
+	/// A fresh seed from the operating system's entropy, or, under a `MAXON_HASH_SEED` pin, the next
+	/// seed of the sequence that pin fixes.
 	public static function random() returns HashSeed
-		let bytes = try Random.bytes(HashSeedBytes) otherwise panic("HashSeed.random: the operating system refused to supply {HashSeedBytes} bytes of entropy")
-
-		return try Self.fromBytes(bytes) otherwise panic("HashSeed.random: {HashSeedBytes} fresh bytes are a seed")
+		return Self.ofWord(__Builtins.drawHashSeed())
 	end 'random'
 
 	/// The seed as exactly 8 bytes, which `fromBytes` reads back as the same seed.
@@ -41,8 +40,12 @@ public type HashSeed
 
 		let word = readOrderedWord(bytes, off: 0, width: HashSeedBytes, limit: bytes.count(), order: ByteOrder.littleEndian) as HashDigest
 
-		return Self{word: word, empty: __Builtins.hashBytes(b"", 0, 0, word)}
+		return Self.ofWord(word)
 	end 'fromBytes'
+
+	static function ofWord(word HashDigest) returns HashSeed
+		return Self{word: word, empty: __Builtins.hashBytes(b"", 0, 0, word)}
+	end 'ofWord'
 end 'HashSeed'
 
 function processFoldStart() returns HashDigest

@@ -1,0 +1,52 @@
+let ColdCompilesUnderOnePinCaseDirName = "library-cache-cold-compiles-under-one-pin"
+let ColdCompilesPinnedSeed = "0123456789abcdef"
+let ColdCompilesOtherSeed = "fedcba9876543210"
+let ColdCompilesStoredSeedBytes = 8
+let ColdCompilesFewestWorkers = 2
+
+test 'two cold compiles under one hash seed pin store one library hash seed, and another pin stores another'
+	requireHeldOutsideCheckout(ColdCompilesUnderOnePinCaseDirName, check: ColdCompilesUnderOnePin.create())
+end 'two cold compiles under one hash seed pin store one library hash seed, and another pin stores another'
+
+type ColdCompilesUnderOnePin implements OutsideCheckoutCase
+	static function create() returns ColdCompilesUnderOnePin
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let first = try storedSeedOfAColdCompile(dir, cacheDirName: "first-cold-root", seed: ColdCompilesPinnedSeed)
+		let second = try storedSeedOfAColdCompile(dir, cacheDirName: "second-cold-root", seed: ColdCompilesPinnedSeed)
+		let other = try storedSeedOfAColdCompile(dir, cacheDirName: "other-cold-root", seed: ColdCompilesOtherSeed)
+
+		try Expect.isTrue(first.equals(second), message: "two cold compiles under {HashSeedVariable}={ColdCompilesPinnedSeed}, each on a fresh cache root, stored two different library hash seeds, so a run's seed and tier do not reproduce the library cache it wrote.")
+		try Expect.isFalse(first.equals(other), message: "a cold compile under {HashSeedVariable}={ColdCompilesOtherSeed} stored the library hash seed a compile under {ColdCompilesPinnedSeed} stored, so the stored seed does not follow the pin.")
+	end 'requireHeldIn'
+end 'ColdCompilesUnderOnePin'
+
+function storedSeedOfAColdCompile(dir FilePath, cacheDirName String, seed String) returns ByteArray throws TestFailure
+	let cacheRoot = stagingDir(dir.join(cacheDirName).toString())
+	let naming = EnvMap.create()
+	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
+	naming.upsert(HashSeedVariable, value: seed)
+
+	if Scheduler.machineCpuCount() < ColdCompilesFewestWorkers 'oneProcessor'
+		naming.upsert(MaxProcsVariableName, value: "{ColdCompilesFewestWorkers}")
+	end 'oneProcessor'
+
+	let which = "the cold compile on {cacheDirName} under {HashSeedVariable}={seed}"
+	let arguments = [BuildCommandWord, ProgramDirName, "{OutputOptionPrefix}{dir.join(OutputName).toString()}", CompilerDebugLogFlag].clone()
+	let cold = try libraryCacheReportOf(runWithCacheRoots(arguments, naming: naming, workingDirectory: dir), which: which)
+	try Expect.greaterThan(cold.written, than: 0, message: "{which} wrote nothing to the library cache, so it was not cold. It wrote: {cold.line}")
+
+	let library = cacheRoot.join(CacheVendorDirName).join(LibraryCacheDirName)
+	let seeds = seedFilesIn(library)
+	try Expect.equal(seeds.count(), expected: 1, message: "{which} left {seeds.count()} '{HashSeedFileName}' files under {library.toString()}, where the cache's digests need exactly one seed.")
+
+	let stored = try seeds.get(0) otherwise panic("the count was checked to be one")
+	let bytes = fileBytes(stored)
+	try Expect.equal(bytes.count(), expected: ColdCompilesStoredSeedBytes, message: "the hash seed {stored.toString()} holds {bytes.count()} bytes, and a seed is {ColdCompilesStoredSeedBytes}.")
+
+	return bytes
+end 'storedSeedOfAColdCompile'

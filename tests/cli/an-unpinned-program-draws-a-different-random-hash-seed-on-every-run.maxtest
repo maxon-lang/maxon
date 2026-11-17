@@ -1,0 +1,62 @@
+let UnpinnedDrawCaseDirName = "an-unpinned-program-draws-a-different-random-hash-seed"
+let UnpinnedDrawProgramSource = "function main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"MAXON_HASH_SEED\") otherwise \"absent\"\n\tprint(\"seed variable: \{spelled}\\n\")\n\n\tfor byte in HashSeed.random().toBytes() 'eachByte'\n\t\tprint(\"\{byte:02x}\")\n\tend 'eachByte'\n\n\tprint(\"\\n\")\n\treturn 0\nend 'main'\n"
+let UnpinnedDrawAbsentLine = "seed variable: absent"
+let UnpinnedDrawSpelledLength = 16
+
+test 'a program run twice with no hash seed variable draws two different random hash seeds'
+	requireHeldOutsideCheckout(UnpinnedDrawCaseDirName, check: UnpinnedDraw.create())
+end 'a program run twice with no hash seed variable draws two different random hash seeds'
+
+type UnpinnedDraw implements OutsideCheckoutCase
+	static function create() returns UnpinnedDraw
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: UnpinnedDrawProgramSource)
+
+		let naming = EnvMap.create()
+		naming.upsert(CacheRootVariable, value: cacheRootIn(dir).toString())
+
+		let build = runWithCacheRoots([BuildCommandWord, ProgramDirName, "{OutputOptionPrefix}{dir.join(OutputName).toString()}"], naming: naming, workingDirectory: dir)
+		try requireBuilt(build, which: "the build of the drawing program")
+
+		let program = Executable.path(dir.join("{OutputName}{executableSuffix()}"))
+		let first = try unpinnedDrawOf(program, dir: dir, which: "the first unpinned run")
+		let second = try unpinnedDrawOf(program, dir: dir, which: "the second unpinned run")
+
+		try Expect.notEqual(first, expected: second, message: "two runs with no {HashSeedVariable} in their environment drew the same random hash seed {first}, so an unpinned HashSeed.random() is not fresh entropy.")
+	end 'requireHeldIn'
+end 'UnpinnedDraw'
+
+function unpinnedDrawOf(program Executable, dir FilePath, which String) returns String throws TestFailure
+	let ran = spawnIn(program, arguments: StringArray.create(0), staged: dir, what: which, environment: environmentWithoutTheHashSeed())
+	let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+	try Expect.equal(ran.exitCode(), expected: 0, message: "{which} did not exit 0. {said}")
+
+	let lines = ran.stdout.split("\n")
+	let seen = try lines.get(0) otherwise ""
+	try Expect.equal(seen, expected: UnpinnedDrawAbsentLine, message: "{which} saw {HashSeedVariable} in its environment, so it did not run unpinned. {said}")
+
+	let drawn = try lines.get(1) otherwise ""
+	try Expect.equal(drawn.count(), expected: UnpinnedDrawSpelledLength, message: "{which} did not print one 8-byte seed. {said}")
+
+	return drawn
+end 'unpinnedDrawOf'
+
+function environmentWithoutTheHashSeed() returns Environment
+	let inherited = try Process.currentEnvironmentEntries() otherwise panic("the gate could not run - this process's environment could not be read.")
+	let vars = EnvMap.create()
+
+	for entry in inherited 'eachEntry'
+		let name = Process.envEntryName(entry)
+
+		if name.toUpper() == HashSeedVariable 'theSeedVariable'
+			continue
+		end 'theSeedVariable'
+
+		vars.upsert(name, value: Process.envEntryValue(entry))
+	end 'eachEntry'
+
+	return Environment.custom(vars)
+end 'environmentWithoutTheHashSeed'

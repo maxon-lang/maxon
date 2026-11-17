@@ -45,7 +45,7 @@ The result type of the keyed fold is `HashDigest`, not `HashValue`, the 32-bit s
 
 | Call | Meaning |
 |---|---|
-| `HashSeed.random()` | 64 bits of fresh OS entropy, whatever `MAXON_HASH_SEED` says |
+| `HashSeed.random()` | the process's next seed: 64 bits of fresh OS entropy, or under a pinned `MAXON_HASH_SEED` the next seed of the sequence the pin fixes |
 | `seed.toBytes()` | the seed as exactly 8 bytes |
 | `HashSeed.fromBytes(bytes)` | the seed those 8 bytes spell; any other count throws `HashSeedError` |
 
@@ -57,8 +57,14 @@ There is no `HashSeed.process()`. The process seed is not readable: no public AP
 with no steps is not the seed it started from. `KeyedHasher.empty(seed)` and
 `KeyedHasher.create(seed).finalize()` are different words from the little-endian word `seed.toBytes()` spells,
 and `Hasher.create().finalize()` is not part of the process seed either. A program that must store a seed beside
-its digests draws its own with `HashSeed.random()`, which never returns the process seed: two processes whose
-`MAXON_HASH_SEED` pins the same process seed draw different `random()` seeds.
+its digests draws its own with `HashSeed.random()`.
+
+Unpinned, with `MAXON_HASH_SEED` unset or empty, every `HashSeed.random()` is fresh entropy from the operating
+system. Under a pinned `MAXON_HASH_SEED`, the n-th `HashSeed.random()` of a process, whichever thread makes it, is
+the same seed on every run and on every tier, no draw is the pinned seed itself, and two pins fix two different
+sequences. How a pin maps to its seeds is unspecified, so the cases below compare
+draws and never pin one. Every call is a draw that advances the sequence: two calls in one expression are two
+draws, and so is a call whose result is discarded.
 
 ### Two faces of the keyed fold
 
@@ -140,7 +146,7 @@ the pure face agrees: true
 
 <!-- test: two-seeds-give-two-digests -->
 Two seeds drawn with `HashSeed.random()` give two different empty states and two different digests of every
-message, the empty one included. 64 bits of entropy make an equal pair a chance of about 2^-64, so an equal
+message, the empty one included. Two 64-bit draws make an equal pair a chance of about 2^-64, so an equal
 pair is a seed that did not reach the fold.
 ```maxon
 typealias MessageList = Array with String
@@ -1550,25 +1556,57 @@ end 'main'
 error E3036: <fragment>:3:26: 'KeyedHasher.empty' expects 1 argument(s) but 0 were provided
 ```
 
-<!-- test: a-random-seed-ignores-the-pinned-process-seed -->
-<!-- env: MAXON_HASH_SEED=0123456789abcdef -->
-<!-- env: MAXON_HASH_TIER=software -->
-`MAXON_HASH_SEED` pins the process seed, and `HashSeed.random()` is not the process seed: under the pin, whose
-8 bytes are `01 23 45 67 89 AB CD EF`, two draws differ from each other and from the pinned bytes, and they key
-folds different from each other and from the fold the pinned seed keys. Two draws that agree, or one that
-spells the pin, are a chance of about 2^-64, so either is a draw that read the environment.
+<!-- test: a-pinned-process-draws-the-same-random-seeds-on-every-run -->
+<!-- unsupported-targets: wasm32-wasi -->
+Under a pinned `MAXON_HASH_SEED`, the n-th `HashSeed.random()` of a process is the same on every run: the pin
+fixes the whole sequence a process draws, not one value. The program re-executes itself twice with one pin,
+and each child prints the 8 bytes of four successive draws. The two children print the same four lines. A
+draw that ignored the pin would make the two runs agree with a chance of about 2^-256. Not on `wasm32-wasi`,
+where the subprocess band is refused at compile time.
 ```maxon
-function main() returns ExitCode
-	let spelled = ByteArray from [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
-	let pinned = try HashSeed.fromBytes(spelled) otherwise panic("8 bytes are a seed")
-	let first = HashSeed.random()
-	let second = HashSeed.random()
+let DrawsPerChild = 4
+let SpelledSeedLength = 17
 
-	print("the draws differ: {not first.toBytes().equals(second.toBytes())}\n")
-	print("the first is not the pin: {not first.toBytes().equals(spelled)}\n")
-	print("the second is not the pin: {not second.toBytes().equals(spelled)}\n")
-	print("the draws key different folds: {KeyedHasher.empty(first) != KeyedHasher.empty(second)}\n")
-	print("a draw does not key the pinned fold: {KeyedHasher.empty(first) != KeyedHasher.empty(pinned)}\n")
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function child() returns ExitCode
+	for _ in 0 upto DrawsPerChild 'eachDraw'
+		print("{toHex(HashSeed.random().toBytes())}\n")
+	end 'eachDraw'
+
+	return 0
+end 'child'
+
+function spawnPinned(me FilePath) returns CollectedOutput
+	let argv = StringArray.create(0)
+	argv.push("child")
+
+	let config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_HASH_SEED": "0123456789abcdef"])
+	return try Subprocess.runConfiguration(config) otherwise panic("the child could not be spawned")
+end 'spawnPinned'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	let first = spawnPinned(me)
+	let second = spawnPinned(me)
+
+	print("children exit={first.exitCode()} {second.exitCode()}\n")
+	print("each child printed four seeds: {first.stdout.count() == DrawsPerChild * SpelledSeedLength and second.stdout.count() == DrawsPerChild * SpelledSeedLength}\n")
+	print("the two runs drew one sequence: {first.stdout == second.stdout}\n")
 	return 0
 end 'main'
 ```
@@ -1576,25 +1614,167 @@ end 'main'
 0
 ```
 ```stdout
-the draws differ: true
-the first is not the pin: true
-the second is not the pin: true
-the draws key different folds: true
-a draw does not key the pinned fold: true
+children exit=0 0
+each child printed four seeds: true
+the two runs drew one sequence: true
 ```
 
-<!-- test: two-processes-pinned-to-one-seed-draw-different-random-seeds -->
+<!-- test: one-pin-draws-the-same-random-seeds-on-every-tier -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
-Two processes launched with the same `MAXON_HASH_SEED` share a process seed, and `HashSeed.random()` is not that
-seed: the program re-executes itself four times with the one pin. Two children print their `Hasher` fold of a
-fixed message, which agrees because the pin took effect, and two print the 8 bytes of a `HashSeed.random()`,
-which differ. The first pair is the control that gives the second its meaning: a pin that reached no child
-would let the fold differ and prove nothing. Not on `wasm32-wasi`, where the subprocess band is refused at
-compile time.
+The sequence a pin fixes does not depend on the hash tier: one pin draws the same `HashSeed.random()` seeds under
+`MAXON_HASH_TIER=aes` and `MAXON_HASH_TIER=software`, though the two tiers are different hashes. The program
+re-executes itself under one pin once per tier, and each child prints the 8 bytes of four successive draws. On a
+host that runs `aes` the two children print the same four lines; on a host that does not, the `aes` child is
+refused before `main` naming the host's best tier, and there is nothing to compare. The answers are written so
+they are the same on every host. Not on `wasm32-wasi`, where the subprocess band is refused at compile time and
+the tier is always `software`.
 ```maxon
-function spelled(hash HashValue) returns String
-	return "{hash:08x}"
-end 'spelled'
+let DrawsPerChild = 4
+let SpelledSeedLength = 17
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function child() returns ExitCode
+	for _ in 0 upto DrawsPerChild 'eachDraw'
+		print("{toHex(HashSeed.random().toBytes())}\n")
+	end 'eachDraw'
+
+	return 0
+end 'child'
+
+function hostRunsAes() returns bool
+	return __Builtins.cpuHasAes()
+end 'hostRunsAes'
+
+function runUnder(me FilePath, tier String) returns CollectedOutput
+	let argv = StringArray.create(0)
+	argv.push("child")
+
+	let config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_HASH_SEED": "0123456789abcdef", "MAXON_HASH_TIER": tier])
+	return try Subprocess.runConfiguration(config) otherwise panic("the child could not be spawned")
+end 'runUnder'
+
+function drewFourSeeds(run CollectedOutput) returns bool
+	return run.exitCode() == 0 and run.stderr == "" and run.stdout.count() == DrawsPerChild * SpelledSeedLength
+end 'drewFourSeeds'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	let aes = runUnder(me, tier: "aes")
+	let software = runUnder(me, tier: "software")
+
+	let aesAsTheHostAllows = drewFourSeeds(aes) if hostRunsAes() else aes.exitCode() == 1 and aes.stdout == "" and aes.stderr == "MAXON_HASH_TIER=aes is not available on this host: its best hash tier is software\n"
+
+	print("aes answers as the host allows: {aesAsTheHostAllows}\n")
+	print("software drew four seeds: {drewFourSeeds(software)}\n")
+	print("the tiers drew one sequence: {not hostRunsAes() or aes.stdout == software.stdout}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+aes answers as the host allows: true
+software drew four seeds: true
+the tiers drew one sequence: true
+```
+
+<!-- test: two-pins-draw-different-random-seeds -->
+<!-- unsupported-targets: wasm32-wasi -->
+Two pins fix two sequences: a process pinned to `0123456789abcdef` and one pinned to `fedcba9876543210` draw
+different `HashSeed.random()` seeds, the first draw already. The program re-executes itself once per pin, and
+each child prints the 8 bytes of four successive draws. How a pin maps to its seeds is unspecified, so only
+the difference is asserted. Not on `wasm32-wasi`, where the subprocess band is refused at compile time.
+```maxon
+let DrawsPerChild = 4
+let SpelledSeedLength = 17
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+function child() returns ExitCode
+	for _ in 0 upto DrawsPerChild 'eachDraw'
+		print("{toHex(HashSeed.random().toBytes())}\n")
+	end 'eachDraw'
+
+	return 0
+end 'child'
+
+function spawnPinned(me FilePath, seed String) returns CollectedOutput
+	let argv = StringArray.create(0)
+	argv.push("child")
+
+	let config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_HASH_SEED": seed])
+	return try Subprocess.runConfiguration(config) otherwise panic("the child could not be spawned")
+end 'spawnPinned'
+
+function firstDraw(run CollectedOutput) returns String
+	return try run.stdout.split("\n").get(0) otherwise panic("a split has a first piece")
+end 'firstDraw'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	let one = spawnPinned(me, seed: "0123456789abcdef")
+	let other = spawnPinned(me, seed: "fedcba9876543210")
+
+	print("children exit={one.exitCode()} {other.exitCode()}\n")
+	print("each child printed four seeds: {one.stdout.count() == DrawsPerChild * SpelledSeedLength and other.stdout.count() == DrawsPerChild * SpelledSeedLength}\n")
+	print("the first draws differ: {firstDraw(one) != firstDraw(other)}\n")
+	print("the sequences differ: {one.stdout != other.stdout}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+children exit=0 0
+each child printed four seeds: true
+the first draws differ: true
+the sequences differ: true
+```
+
+<!-- test: every-random-seed-call-is-a-draw -->
+<!-- unsupported-targets: wasm32-wasi -->
+Every `HashSeed.random()` call is a draw, so the compiler neither merges two calls nor drops one whose result
+is discarded. The program re-executes itself three times. Two children run under one pin: the first prints
+draws 1, 2 and 3, then whether draws 4 and 5, written in one expression, are equal; the second makes the same
+draws with the second one discarded through `_ =`, and prints draws 1 and 3. A third child runs unpinned, its
+`MAXON_HASH_SEED` set empty, and makes the first child's draws. In each run of the first kind the three draws
+differ and so do the two of the one expression, and the discarding child's two lines are the pinned first
+child's draws 1 and 3, where a dropped draw would make them its draws 1 and 2. A discard through `_ =` is not
+refused: a draw is an effect. Not on `wasm32-wasi`, where the subprocess band is refused at compile time.
+```maxon
+let SpelledDrawLength = 16
 
 function toHex(bytes ByteArray) returns String
 	var text = ""
@@ -1607,29 +1787,45 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function child(mode String) returns ExitCode
-	if mode == "fold" 'fold'
-		let hasher = Hasher.create()
-		hasher.combineBytes("one message".toByteArray())
-		print("{spelled(hasher.finalize())}\n")
+	if mode == "every" 'every'
+		print("{toHex(HashSeed.random().toBytes())}\n")
+		print("{toHex(HashSeed.random().toBytes())}\n")
+		print("{toHex(HashSeed.random().toBytes())}\n")
+		print("{HashSeed.random().toBytes().equals(HashSeed.random().toBytes())}\n")
 		return 0
-	end 'fold' else if mode == "random" 'random'
+	end 'every' else if mode == "discarding" 'discarding'
+		print("{toHex(HashSeed.random().toBytes())}\n")
+		_ = HashSeed.random()
 		print("{toHex(HashSeed.random().toBytes())}\n")
 		return 0
-	end 'random'
+	end 'discarding'
 
 	return 3
 end 'child'
 
-function spawnPinned(me FilePath, mode String) returns CollectedOutput
+function spawnUnder(me FilePath, mode String, seed String) returns CollectedOutput
 	let argv = StringArray.create(0)
 	argv.push("child")
 	argv.push(mode)
 
 	let config = Configuration.create(Executable.path(me))
 	config.arguments = argv
-	config.environment = Environment.inheritUpdating(["MAXON_HASH_SEED": "0123456789abcdef"])
+	config.environment = Environment.inheritUpdating(["MAXON_HASH_SEED": seed])
 	return try Subprocess.runConfiguration(config) otherwise panic("the child could not be spawned")
-end 'spawnPinned'
+end 'spawnUnder'
+
+function line(run CollectedOutput, at Count) returns String
+	return try run.stdout.split("\n").get(at) otherwise "<no line {at}>"
+end 'line'
+
+function drawsDiffer(run CollectedOutput) returns bool
+	let first = line(run, at: 0)
+	let second = line(run, at: 1)
+	let third = line(run, at: 2)
+	let spelled = first.count() == SpelledDrawLength and second.count() == SpelledDrawLength and third.count() == SpelledDrawLength
+
+	return spelled and first != second and second != third and first != third and line(run, at: 3) == "false"
+end 'drawsDiffer'
 
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'iAmTheChild'
@@ -1638,15 +1834,14 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	let foldOne = spawnPinned(me, mode: "fold")
-	let foldTwo = spawnPinned(me, mode: "fold")
-	let drawOne = spawnPinned(me, mode: "random")
-	let drawTwo = spawnPinned(me, mode: "random")
+	let pinned = spawnUnder(me, mode: "every", seed: "0123456789abcdef")
+	let discarding = spawnUnder(me, mode: "discarding", seed: "0123456789abcdef")
+	let unpinned = spawnUnder(me, mode: "every", seed: "")
 
-	print("children exit={foldOne.exitCode()} {foldTwo.exitCode()} {drawOne.exitCode()} {drawTwo.exitCode()}\n")
-	print("the pin reached the children, whose folds agree: {foldOne.stdout.count() == 9 and foldOne.stdout == foldTwo.stdout}\n")
-	print("each draw is 8 bytes: {drawOne.stdout.count() == 17 and drawTwo.stdout.count() == 17}\n")
-	print("the draws differ: {drawOne.stdout != drawTwo.stdout}\n")
+	print("children exit={pinned.exitCode()} {discarding.exitCode()} {unpinned.exitCode()}\n")
+	print("pinned, every draw differs: {drawsDiffer(pinned)}\n")
+	print("unpinned, every draw differs: {drawsDiffer(unpinned)}\n")
+	print("the discarded draw advanced the sequence: {line(discarding, at: 0) == line(pinned, at: 0) and line(discarding, at: 1) == line(pinned, at: 2)}\n")
 	return 0
 end 'main'
 ```
@@ -1654,8 +1849,187 @@ end 'main'
 0
 ```
 ```stdout
-children exit=0 0 0 0
-the pin reached the children, whose folds agree: true
-each draw is 8 bytes: true
+children exit=0 0 0
+pinned, every draw differs: true
+unpinned, every draw differs: true
+the discarded draw advanced the sequence: true
+```
+
+<!-- test: an-unpinned-process-draws-fresh-random-seeds-on-every-lane -->
+<!-- env: MAXON_HASH_SEED= -->
+An empty `MAXON_HASH_SEED` is no pin, on every lane, `wasm32-wasi` included: the program runs, and each
+`HashSeed.random()` is fresh entropy. Three draws in one process differ from each other, key three different
+empty states, and give three different digests of one message; none of them keys the process fold, so the
+32-bit hash of `"abc"` under a draw is not `"abc".hash()`. The process runs where `every-random-seed-call-is-a-draw`
+needs a subprocess, so this is the case that reaches the unpinned arm on `wasm32-wasi`. Two of three 64-bit
+draws that agree are a chance of about 2^-62, so an equal pair is a draw that repeated itself.
+```maxon
+function digestUnder(seed HashSeed) returns HashDigest
+	return KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: "an unpinned draw".toByteArray())
+end 'digestUnder'
+
+function keysTheProcessFold(seed HashSeed) returns bool
+	return hashValueOfDigest(KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: "abc".toByteArray())) == "abc".hash()
+end 'keysTheProcessFold'
+
+function main() returns ExitCode
+	let first = HashSeed.random()
+	let second = HashSeed.random()
+	let third = HashSeed.random()
+
+	let bytesDiffer = not first.toBytes().equals(second.toBytes()) and not second.toBytes().equals(third.toBytes()) and not first.toBytes().equals(third.toBytes())
+	let emptiesDiffer = KeyedHasher.empty(first) != KeyedHasher.empty(second) and KeyedHasher.empty(second) != KeyedHasher.empty(third) and KeyedHasher.empty(first) != KeyedHasher.empty(third)
+	let digestsDiffer = digestUnder(first) != digestUnder(second) and digestUnder(second) != digestUnder(third) and digestUnder(first) != digestUnder(third)
+
+	print("the draws differ: {bytesDiffer}\n")
+	print("the draws key different empty states: {emptiesDiffer}\n")
+	print("the draws give different digests: {digestsDiffer}\n")
+	print("no draw keys the process fold: {not keysTheProcessFold(first) and not keysTheProcessFold(second) and not keysTheProcessFold(third)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
 the draws differ: true
+the draws key different empty states: true
+the draws give different digests: true
+no draw keys the process fold: true
+```
+
+<!-- test: concurrent-pinned-draws-never-repeat-an-index -->
+<!-- procs: 4 -->
+<!-- env: MAXON_HASH_SEED=0123456789abcdef -->
+Under a pin the n-th draw of a process is the n-th seed of the pin's sequence, and the n is one counter the whole
+process shares, so draws made at once on several processors still each take an index of their own. Four services,
+on a scheduler of four processors, are each sent one request before any reply is awaited, and each makes 2000
+draws and replies with their 8 bytes, one line per draw. The 8000 lines are 8000 different seeds. Two draws that
+read the counter before either advanced it would take one index and draw one seed, which the pin makes the same
+bytes, so a counter that is not advanced atomically shows as a repeated line. A set of every line counts them.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias DrawerHandleArray = Array with Drawer.handle
+typealias DrawsPromise = Promise with String
+typealias DrawsPromiseArray = Array with DrawsPromise
+typealias DrawnSet = Set with String
+
+let drawers = 4
+let drawsEach = 2000
+let SpelledSeedLength = 16
+
+function toHex(bytes ByteArray) returns String
+	var text = ""
+
+	for byte in bytes 'eachByte'
+		text.append("{byte:02x}")
+	end 'eachByte'
+
+	return text
+end 'toHex'
+
+type Drawer
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function draw(count Tally) returns String
+		var lines = ""
+
+		for _ in 0 upto count 'eachDraw'
+			lines.append("{toHex(HashSeed.random().toBytes())}\n")
+			self.made = self.made + 1
+		end 'eachDraw'
+
+		return lines
+	end 'draw'
+end 'Drawer'
+
+function main() returns ExitCode
+	let handles = DrawerHandleArray.create(0)
+
+	for _ in 0 upto drawers 'spawnEach'
+		handles.push(spawn Drawer.create())
+	end 'spawnEach'
+
+	let replies = DrawsPromiseArray.create(0)
+
+	for handle in handles 'sendEach'
+		replies.push(try handle.draw(drawsEach) otherwise panic("an open mailbox with room takes the send"))
+	end 'sendEach'
+
+	let seen = DrawnSet.create()
+	var lines = 0 as Tally
+	var spelled = true
+
+	for reply in replies 'collect'
+		let text = await reply
+
+		for line in text.split("\n") 'eachLine'
+			if line != "" 'aDraw'
+				spelled = spelled and line.count() == SpelledSeedLength
+				seen.insert(line)
+				lines = lines + 1
+			end 'aDraw'
+		end 'eachLine'
+	end 'collect'
+
+	print("every service drew its share: {lines == drawers * drawsEach}\n")
+	print("every line spells a seed: {spelled}\n")
+	print("no two draws repeat a seed: {(seen.count() as Tally) == lines}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+every service drew its share: true
+every line spells a seed: true
+no two draws repeat a seed: true
+```
+
+<!-- test: a-pinned-draw-is-not-the-pin -->
+<!-- env: MAXON_HASH_SEED=0123456789abcdef -->
+A pin fixes the sequence of draws, and no draw is the pin itself, on every lane, `wasm32-wasi` included. Under the
+pin `0123456789abcdef`, whose 8 bytes `01 23 45 67 89 AB CD EF` are the process seed, two draws differ from each
+other and from the pin's bytes, and key empty states different from each other and from the one the pin's own
+seed keys. The pin's own seed keys the process fold: the 32-bit hash of `"abc"` under it is `"abc".hash()`. That
+control is what lets the next line fail: neither draw keys the process fold. The pin's bytes are spelled because
+the case sets them; no draw's bytes are, since how a pin maps to its seeds is unspecified. Under a pin every line
+is the same on every run, so an answer that is wrong is wrong on every run.
+```maxon
+function keysTheProcessFold(seed HashSeed) returns bool
+	return hashValueOfDigest(KeyedHasher.combinedBytes(KeyedHasher.empty(seed), bytes: "abc".toByteArray())) == "abc".hash()
+end 'keysTheProcessFold'
+
+function main() returns ExitCode
+	let spelled = ByteArray from [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
+	let pinned = try HashSeed.fromBytes(spelled) otherwise panic("8 bytes are a seed")
+	let first = HashSeed.random()
+	let second = HashSeed.random()
+
+	print("the draws differ: {not first.toBytes().equals(second.toBytes())}\n")
+	print("the first is not the pin: {not first.toBytes().equals(spelled)}\n")
+	print("the second is not the pin: {not second.toBytes().equals(spelled)}\n")
+	print("the draws key different folds: {KeyedHasher.empty(first) != KeyedHasher.empty(second)}\n")
+	print("no draw keys the pinned fold: {KeyedHasher.empty(first) != KeyedHasher.empty(pinned) and KeyedHasher.empty(second) != KeyedHasher.empty(pinned)}\n")
+	print("the pin keys the process fold: {keysTheProcessFold(pinned)}\n")
+	print("no draw keys the process fold: {not keysTheProcessFold(first) and not keysTheProcessFold(second)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the draws differ: true
+the first is not the pin: true
+the second is not the pin: true
+the draws key different folds: true
+no draw keys the pinned fold: true
+the pin keys the process fold: true
+no draw keys the process fold: true
 ```
