@@ -2014,7 +2014,7 @@ function drain(rounds Tally) returns Tally
 	while i < rounds 'again'
 		sum = sum + size(merge e)
 		let fresh = Box.create(i)
-		fresh.n = i + 1
+		print("{fresh.n}\n")
 		e = fresh
 		i = i + 1
 	end 'again'
@@ -2057,7 +2057,7 @@ function drain(rounds Tally) returns Tally
 	while i < rounds 'again'
 		sum = sum + read(freeze e)
 		let fresh = Box.create(i)
-		fresh.n = i + 1
+		print("{fresh.n}\n")
 		e = fresh
 		i = i + 1
 	end 'again'
@@ -2098,7 +2098,7 @@ function drain(rounds Tally) returns Tally
 		end 'edit'
 
 		let fresh = Box.create(i)
-		fresh.n = i + 1
+		print("{fresh.n}\n")
 		e = fresh
 		i = i + 1
 	end 'again'
@@ -2132,7 +2132,7 @@ end 'Box'
 function pick(flag bool) returns Tally
 	let a = Box.create(1) as isolated Box
 	let spare = Box.create(5)
-	spare.n = 6
+	print("{spare.n}\n")
 	var e = a
 
 	if flag 'swap'

@@ -493,6 +493,11 @@ either side could write, because the two green threads may run at the same time 
   it is not `isolated` (**E3200**); send a `.clone()`. An `isolated` local that an enclosing `for` iterates
   (`for x in items` or `for (it, x) in items.withIterator()`) is held by the loop until it ends, so a message
   or factory argument of it inside the loop is **E3200** as well; send it after the loop.
+- **A variable an enclosing `match` holds does not cross inside it, in any arm.** While a `match` lends its
+  subject, each variable the subject comes from is not a send argument, a `spawn` factory argument, a reply or an
+  argument at an `isolated` parameter, and a binding it is moved into inside the arm takes the hold with it until
+  the `match` ends (**E3214**). A call that may hand the variable back is **E3200** where its result crosses.
+  Send it before or after the `match`, or compute the route in the `match` and send after it.
 - **A value crosses a thread only as the whole of its region.** The rule holds for a send argument, a `spawn`
   factory argument, a reply and the arguments a failed send hands back. The value is a fresh expression, a variable
   declared `isolated`, or an owned `unique` or linear value of a closed type: one whose closure holds no plain part

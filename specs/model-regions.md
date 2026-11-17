@@ -3746,6 +3746,162 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ao-o1-onecall-open-cond-field-plus-holder -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o1-onecall-open-cond-field-plus-holder` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(a Tk, b Ht)
+	b.t = Tk.create(9)
+	a.n = 3
+end 'two'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let g = Ht.create(Tk.create(2))
+	two((h if 1 != 0 else g).t, b: h)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:33: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: model-hand-ao-o1c-onecall-open-field-plus-holder-control -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o1c-onecall-open-field-plus-holder-control` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(a Tk, b Ht)
+	b.t = Tk.create(9)
+	a.n = 3
+end 'two'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let _ = Ht.create(Tk.create(2))
+	two(h.t, b: h)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:14: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: model-hand-ao-o1e-onecall-open-cond-field-else-arm -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o1e-onecall-open-cond-field-else-arm` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(a Tk, b Ht)
+	b.t = Tk.create(9)
+	a.n = 3
+end 'two'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let g = Ht.create(Tk.create(2))
+	two((h if lg(0) != 0 else g).t, b: g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:32:37: 'g' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: model-hand-ao-o1r-onecall-open-cond-field-holder-first -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o1r-onecall-open-cond-field-holder-first` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(b Ht, a Tk)
+	b.t = Tk.create(9)
+	a.n = 3
+end 'two'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let g = Ht.create(Tk.create(2))
+	two(h, a: (h if 1 != 0 else g).t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:13: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
 <!-- test: model-hand-ao-o3-onecall-open-cond-iso-plus-holder -->
 The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3201. Model program `o3-onecall-open-cond-iso-plus-holder` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
 
@@ -3974,6 +4130,120 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:29:15: 'a' is mutable outside 'b'; a call into an isolated region takes values, immutable or isolated
+```
+
+<!-- test: model-hand-ao-o6-two-opens-same-cond-slot -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o6-two-opens-same-cond-slot` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(a Tk, b Tk)
+	a.n = 3
+	b.n = 4
+end 'two'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let g = Ht.create(Tk.create(2))
+	two((h if 1 != 0 else g).t, b: (h if 1 != 0 else g).t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:34: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: model-hand-ao-o6c-two-opens-same-slot-control -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o6c-two-opens-same-slot-control` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(a Tk, b Tk)
+	a.n = 3
+	b.n = 4
+end 'two'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let _ = Ht.create(Tk.create(2))
+	two(h.t, b: h.t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:14: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: model-hand-ao-o6m-open-cond-slot-plus-path-slot -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `o6m-open-cond-slot-plus-path-slot` of redteamAO/hand_ao2.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function two(a Tk, b Tk)
+	a.n = 3
+	b.n = 4
+end 'two'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let g = Ht.create(Tk.create(2))
+	two((h if 1 != 0 else g).t, b: h.t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:33: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
 ```
 
 <!-- test: model-hand-ao-o6i-two-iso-opens-cond -->
@@ -4224,6 +4494,44 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:30:19: 'bump' needs a writable parameter 'h' at line 23; 'h' is read-only while 'b' is open
+```
+
+<!-- test: model-hand-ao-m4-method-receiver-cond-field -->
+The model (`core-m3w-fa24`) refuses it by `C-ONECALL`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m4-method-receiver-cond-field` of redteamAO/hand_ao3.txt, in capmodel `reggio/REPORTRTAO.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function bump(h Ht)
+		h.t = Tk.create(7)
+		self.n = 3
+	end 'bump'
+end 'Tk'
+
+type Ht is unique
+	var t as Tk
+
+	static function create(t Tk) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Ht'
+
+function main() returns ExitCode
+	let h = Ht.create(Tk.create(1))
+	let g = Ht.create(Tk.create(2))
+	(h if 1 != 0 else g).t.bump(g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:30: 'g' is passed at two arguments of this call, and a unique value has one name; pass it once
 ```
 
 <!-- test: model-hand-fa14-v-fill-plain-var -->

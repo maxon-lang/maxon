@@ -1375,6 +1375,212 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ag-u1-copy -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u1-copy` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias UTArray = Array with UT
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union UI
+	none
+	have(t isolated Tk)
+end 'UI'
+
+union UJ
+	none
+	have(j Tj)
+end 'UJ'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Tj is unique
+	var n as Num
+	var t as Tk
+
+	static function create(n Num, t Tk) returns Self
+		return Self{n: n, t: t}
+	end 'create'
+end 'Tj'
+
+type Holdu
+	var u as UT
+
+	static function create(u UT) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holdu'
+
+type Su
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(uV UT)
+		match uV 'x1'
+			none then break
+			have(tV) then tV.n = 1
+		end 'x1'
+	end 'take'
+
+	export function takeI(uV isolated UI)
+		match uV 'x1'
+			none then break
+			have(tV) then tV.n = 1
+		end 'x1'
+	end 'takeI'
+
+	export function takeJ(uV UJ)
+		match uV 'x1'
+			none then break
+			have(j) then j.n = 1
+		end 'x1'
+	end 'takeJ'
+
+	export function takeK(tV Tk)
+		tV.n = 3
+	end 'takeK'
+
+	export function plain() returns Num
+		return 1
+	end 'plain'
+end 'Su'
+
+function main() returns ExitCode
+	let _ = spawn Su.create(0)
+	let uV = UT.have(Tk.create(1))
+	let _ = Holdu.create(UT.none)
+	let _ = UTArray.create(0)
+	match uV 'x1'
+		none then break
+		have then let _ = uV
+	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-u2-copy -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `u2-copy` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias UTArray = Array with UT
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union UI
+	none
+	have(t isolated Tk)
+end 'UI'
+
+union UJ
+	none
+	have(j Tj)
+end 'UJ'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Tj is unique
+	var n as Num
+	var t as Tk
+
+	static function create(n Num, t Tk) returns Self
+		return Self{n: n, t: t}
+	end 'create'
+end 'Tj'
+
+type Holdu
+	var u as UT
+
+	static function create(u UT) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holdu'
+
+type Su
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(uV UT)
+		match uV 'x1'
+			none then break
+			have(tV) then tV.n = 1
+		end 'x1'
+	end 'take'
+
+	export function takeI(uV isolated UI)
+		match uV 'x1'
+			none then break
+			have(tV) then tV.n = 1
+		end 'x1'
+	end 'takeI'
+
+	export function takeJ(uV UJ)
+		match uV 'x1'
+			none then break
+			have(j) then j.n = 1
+		end 'x1'
+	end 'takeJ'
+
+	export function takeK(tV Tk)
+		tV.n = 3
+	end 'takeK'
+
+	export function plain() returns Num
+		return 1
+	end 'plain'
+end 'Su'
+
+function f(uV UT, su Su.handle, hd Holdu, ua UTArray)
+	let _ = su
+	let _ = hd
+	let _ = ua
+	match uV 'x1'
+		none then break
+		have then let _ = uV
+	end 'x1'
+end 'f'
+
+function main() returns ExitCode
+	let su = spawn Su.create(0)
+	let hd = Holdu.create(UT.none)
+	let ua = UTArray.create(0)
+	f(UT.have(Tk.create(1)), su: su, hd: hd, ua: ua)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ag-u3-copy -->
 The model (`core-m3w-fa24`) refuses it by `R18-UNIQUE`; the compiler refuses it with E3214. Model program `u3-copy` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -2856,6 +3062,50 @@ end 'main'
 error E3214: <fragment>:40:16: cannot hand 'h.xs' to argument `xsV` of the message `Sa.takeA`: it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field
 ```
 
+<!-- test: model-hand-ag-f1-assign -->
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `f1-assign` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias TkArray = Array with Tk
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Sa
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeA(xs TkArray)
+		for x in xs 'f1'
+			x.n = 1
+		end 'f1'
+	end 'takeA'
+end 'Sa'
+
+function main() returns ExitCode
+	let _ = spawn Sa.create(0)
+	var xs = TkArray.create(0)
+	xs.push(Tk.create(1))
+	for t in xs 'f1'
+		xs = TkArray.create(0)
+		t.n = 6
+	end 'f1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:32:3: 'xs' roots what 'f1' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
 <!-- test: model-hand-ag-f2-assign -->
 The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `f2-assign` of redteamAG.hand_ag6, in capmodel `reggio/REPORTRTAG.txt`.
 
@@ -2958,6 +3208,57 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ah-b-local-let-then-send -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `b-local-let-then-send` of redteamAH.hand_ah8, in capmodel `reggio/REPORTRTAH.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Sk
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(b isolated Bx)
+		let _ = b.n
+	end 'take'
+
+	export function takeW(w isolated Wo)
+		let _ = w.keep.n
+	end 'takeW'
+end 'Sk'
+
+function main() returns ExitCode
+	let w = Bx.create(1)
+	w.n = 4
+	let k = spawn Sk.create(0)
+	try k.take(w) otherwise ignore
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ah-plain-try-full-mailbox-handle-in-handler -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `plain-try-full-mailbox-handle-in-handler` of redteamAH.hand_ah9, in capmodel `reggio/REPORTRTAH.txt`.
 
@@ -3035,7 +3336,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ai-a7-lend-result-sent -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a7-lend-result-sent` of redteamAI.hand_ai1, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `a7-lend-result-sent` of redteamAI.hand_ai1, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3081,7 +3382,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:39:24: cannot pass 'u' to parameter 'x' of 'idUT': it keeps a unique value, and 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+error E3200: <fragment>:39:24: 'idUT(u)' crosses to the service it is sent to only as the whole of its region, and it may still name 'u', which the `match` 'x1' holds across its arms; hand it over before or after the `match`
 ```
 
 <!-- test: model-hand-ai-c6-send-payload -->
@@ -6290,6 +6591,64 @@ end 'main'
 ```
 ```maxoncstderr
 error E3200: <fragment>:66:14: 'r' crosses to the service it is sent to only as the whole of its region, and 'UQ' is not closed: 'Tq.b' is a plain 'Bx' that other code may still name. Declare 'b' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: model-hand-an-c3-unique-move-h-send-nb -->
+The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `c3-unique-move-h-send-nb` of redteamAN.hand_an2, in capmodel `reggio/REPORTRTAN.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Ht is unique
+	var u as UT
+	var n as Num
+
+	static function create(u UT, n Num) returns Self
+		return Self{u: u, n: n}
+	end 'create'
+end 'Ht'
+
+type Sy4
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	export function take(x Ht)
+		match x.u 'x1'
+			none then break
+			have(t) then t.n = 7
+		end 'x1'
+	end 'take'
+end 'Sy4'
+
+function main() returns ExitCode
+	let h = Ht.create(UT.have(Tk.create(1)), n: 0)
+	let g = Ht.create(UT.none, n: 0)
+	let s = spawn Sy4.create(0)
+	match (h if 1 != 0 else g).u 'x1'
+		none then break
+		have then try s.take(h) otherwise ignore
+	end 'x1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:47:24: cannot hand 'h' to the service it is sent to: 'h' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
 ```
 
 <!-- test: model-hand-an-p1-swap-state-plain-payload -->
@@ -12059,6 +12418,95 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa15-m-pc-param-top-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-top-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function f(u isolated Pc)
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	match u 'x1'
+		u0 then break
+		u1(o) then takeB(o)
+	end 'x1'
+end 'f'
+
+function main() returns ExitCode
+	f(Pc.u1(Bx.create(5)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa15-m-pc-param-top-readfn -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-top-readfn` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
@@ -12407,6 +12855,101 @@ function f(u isolated Pc)
 		match u 'x2'
 			u0 then break
 			u1(o) then o.n = 3
+		end 'x2'
+	end 'i1'
+end 'f'
+
+function main() returns ExitCode
+	f(Pc.u1(Bx.create(5)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa15-m-pc-param-iffy-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-iffy-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function f(u isolated Pc)
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			u0 then break
+			u1(o) then takeB(o)
 		end 'x2'
 	end 'i1'
 end 'f'
@@ -12801,6 +13344,105 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa15-m-ut-let-top-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-top-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function main() returns ExitCode
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	let u = UT.have(Tk.create(5)) as isolated UT
+	match u 'x1'
+		none then break
+		have(o) then takeT(o)
+	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa15-m-ut-let-iffy-use -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-iffy-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
@@ -12994,6 +13636,111 @@ function main() returns ExitCode
 		match u 'x2'
 			none then break
 			have(o) then o.n = 3
+		end 'x2'
+	end 'i1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa15-m-ut-let-iffy-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-iffy-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function main() returns ExitCode
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	let u = UT.have(Tk.create(5)) as isolated UT
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			none then break
+			have(o) then takeT(o)
 		end 'x2'
 	end 'i1'
 	return 0
@@ -13209,6 +13956,113 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa15-m-ut-let-loopfresh-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-loopfresh-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function main() returns ExitCode
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	var i = 2 as Num
+	while i != 0 'w1'
+		let w = UT.have(Tk.create(5)) as isolated UT
+		match w 'x2'
+			none then break
+			have(o) then takeT(o)
+		end 'x2'
+		i = lg(0)
+	end 'w1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa15-m-ut-param-top-use -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-top-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
@@ -13393,6 +14247,108 @@ function f(u isolated UT)
 	match u 'x1'
 		none then break
 		have(o) then o.n = 3
+	end 'x1'
+end 'f'
+
+function main() returns ExitCode
+	f(UT.have(Tk.create(5)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa15-m-ut-param-top-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-top-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function f(u isolated UT)
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	match u 'x1'
+		none then break
+		have(o) then takeT(o)
 	end 'x1'
 end 'f'
 
@@ -13600,6 +14556,114 @@ function f(u isolated UT)
 		match u 'x2'
 			none then break
 			have(o) then o.n = 3
+		end 'x2'
+	end 'i1'
+end 'f'
+
+function main() returns ExitCode
+	f(UT.have(Tk.create(5)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa15-m-ut-param-iffy-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-iffy-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function f(u isolated UT)
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	if lg(1) != 0 'i1'
+		match u 'x2'
+			none then break
+			have(o) then takeT(o)
 		end 'x2'
 	end 'i1'
 end 'f'
@@ -15757,6 +16821,46 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa15-c21-unique-spawn -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `c21-unique-spawn` of redteamFA15.hand_fa15c, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Sk
+	var t as Tk
+
+	static function create(x Tk) returns Self
+		return Self{t: x}
+	end 'create'
+end 'Sk'
+
+function main() returns ExitCode
+	let u = UT.have(Tk.create(1)) as isolated UT
+	match u 'x1'
+		none then break
+		have(tV) then let _ = spawn Sk.create(tV)
+	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa17-r-message -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `r-message` of redteamFA17.hand_fa17a, in capmodel `reggio/REPORTFA17.txt`.
 
@@ -15891,7 +16995,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:35:25: cannot move or copy the unique value matched by 'u' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`
+error E3214: <fragment>:35:24: cannot hand 'u' to the service it is sent to: 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
 ```
 
 <!-- test: model-hand-fa17-w-spawn -->
@@ -15931,7 +17035,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:29:40: cannot move or copy the unique value matched by 'uV' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`
+error E3214: <fragment>:29:38: cannot hand 'uV' to the service the `spawn` starts: 'uV' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
 ```
 
 <!-- test: model-hand-fa17-i-msg-store -->

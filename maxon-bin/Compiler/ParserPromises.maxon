@@ -240,6 +240,7 @@ extension Parser
 
 		if self.valueIsLinear(argValue) 'aLinearArgument'
 			try self.requireLinearArgumentIsOwned(argValue, anchor: anchor)
+			try self.requireLinearIsNotOuterData(argValue, anchor: anchor)
 
 			if parameterName.equals(SelfParamName) 'itIsTheReceiver'
 				self.bodyState.consumedReceivers.push(argValue)
@@ -370,6 +371,22 @@ extension Parser
 
 		throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "this linear value is only lent to this code (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`), and only the code that owns a linear value consumes it", line: anchor.line, column: anchor.column)
 	end 'requireLinearArgumentIsOwned'
+
+	function requireLinearIsNotOuterData(value ValueId, anchor Token) throws SourceParseError
+		let windows = self.regionFactsForRead().windows
+
+		if not windowIsOpen(windows) 'noWindow'
+			return
+		end 'noWindow'
+
+		let window = innermostWindowOf(windows)
+
+		if window.kind == WindowKind.oneStatement or value >= window.floor or value == window.openedValue or self.valueIsAnOwnedClosedLinearParameter(value) or self.effectiveCapabilityOf(value) == ValueCapability.isolated 'consumedWhereItLives'
+			return
+		end 'consumedWhereItLives'
+
+		throw self.regionRefusal(ErrorCode.semanticArgumentCapabilityRefused, message: "this linear value comes from outside '{String.from(window.label)}', where it is read-only, and consuming it there would move data the window does not own; consume it before or after '{String.from(window.label)}'", line: anchor.line, column: anchor.column)
+	end 'requireLinearIsNotOuterData'
 
 	function handIsolatedArgument(argValue ValueId, anchor Token) returns ValueId
 		if self.valueIsAnOwnedIsolatedLocal(argValue) 'anOwnedRegion'
@@ -1994,6 +2011,7 @@ extension Parser
 
 			if readsAPlace 'aPositionTheValueWrites'
 				if let name = try self.bareBindingNamedBy(valueStart).localName() 'aNamedLocalToAFunctionValue'
+					try self.requireRootStaysPut(name, anchor: anchor)
 					try self.requireNotAnUnmarkedParameter(func, name: name, parameter: WrittenParameter.positional(column), callAnchor: anchor)
 					try self.requireLocalIsWritableByReference(name, parameter: WrittenParameter.positional(column), callAnchor: anchor)
 				end 'aNamedLocalToAFunctionValue'

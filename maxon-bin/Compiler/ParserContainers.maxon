@@ -7236,6 +7236,10 @@ extension Parser
 		self.noteClosureStoreSite(ClosureStoreDestination.field(step.box, base: ClosureStoreBase.spelled(step.baseBinding.boundValue, name: step.baseBinding.name)), value: value, at: self.tokenAt(valueStart))
 
 		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+
+		if self.valueIsAValueType(value) 'aWriteTakesNoReferenceOut'
+			self.forgetFreshLocalRead(step.baseBinding)
+		end 'aWriteTakesNoReferenceOut'
 	end 'parseResolvedFieldAssignment'
 
 	// ⭐ **WRITE A FIELD, DROPPING THE OLD MANAGED VALUE AND MOVING THE NEW ONE IN** — the
@@ -8358,6 +8362,8 @@ extension Parser
 	end 'valueIsAnOwnedClosedLinearParameter'
 
 	function requireCrossesWhole(value ValueId, text String, door CrossingDoor, anchor Token) throws SourceParseError
+		try self.requireNotHeldByAMatch(value, text: text, into: crossingDoorText(door), anchor: anchor)
+
 		if self.valueIsAValueType(value) or not self.valueHoldsAUniqueRecord(value) or self.valueTypeIsClosed(value) or self.valueIsAnOwnedIsolatedRegion(value) 'wholeOrNoRegion'
 			return
 		end 'wholeOrNoRegion'
@@ -8372,6 +8378,16 @@ extension Parser
 
 		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: self.notWholeRegionMessage(value, text: text, door: door), line: anchor.line, column: anchor.column)
 	end 'requireCrossesWhole'
+
+	function requireNotHeldByAMatch(value ValueId, text String, into String, anchor Token) throws SourceParseError
+		if not self.valueIsHeldByAMatch(value) 'notHeld'
+			return
+		end 'notHeld'
+
+		let holds = self.bodyState.matchHolds
+		let index = try self.heldResultIndexOf(value) otherwise throw self.regionRefusal(ErrorCode.semanticUniqueValueRefused, message: "cannot hand '{text}' to {into}: {keptUniqueRefusalSentence(UniqueOrigin.lentByMatch, subject: text)}", line: anchor.line, column: anchor.column)
+		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{text}' crosses to {into} only as the whole of its region, and it may still name '{String.from(holds.nameAt(index))}', which the `match` '{holds.subjectAt(index)}' holds across its arms; hand it over before or after the `match`", line: anchor.line, column: anchor.column)
+	end 'requireNotHeldByAMatch'
 
 	function notWholeRegionMessage(value ValueId, text String, door CrossingDoor) returns String
 		match self.signatures.valueRegionClosure(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames) 'closure'
@@ -9056,6 +9072,10 @@ extension Parser
 
 		let endIndex = self.argumentEndIndex(startIndex) if site == IsolatedRecoverySite.argument else self.pos
 
+		if site != IsolatedRecoverySite.freeze 'anIsolatedPosition'
+			try self.requireNotHeldByAMatch(value, text: self.tokenTextFrom(startIndex, endIndex: endIndex), into: "an `isolated` position", anchor: self.tokenAt(startIndex))
+		end 'anIsolatedPosition'
+
 		if self.isolateIfPossible(value, startIndex: startIndex, endIndex: endIndex) 'isolated'
 			return
 		end 'isolated'
@@ -9183,6 +9203,15 @@ extension Parser
 		let fresh = try self.bodyState.freshLocals.get(binding.boundValue) otherwise return
 		fresh.noteRead()
 	end 'noteFreshLocalRead'
+
+	function forgetFreshLocalRead(binding VarInfo)
+		if self.bodyState.freshLocals.count() == 0 'nothingIsFresh'
+			return
+		end 'nothingIsFresh'
+
+		let fresh = try self.bodyState.freshLocals.get(binding.boundValue) otherwise return
+		fresh.forgetRead()
+	end 'forgetFreshLocalRead'
 
 	function noteFreshLocalRelied(value ValueId)
 		let fresh = try self.bodyState.freshLocals.get(value) otherwise return
@@ -9910,6 +9939,10 @@ extension Parser
 
 		self.setValueCapability(value, capability: ValueCapability.isolated)
 		self.forgetUndecidedResult(value)
+
+		if let latent = try self.bodyState.latentBirths.get(value) 'anOlderRegionMovedIn'
+			self.recordWindowBirth(value, birth: latent)
+		end 'anOlderRegionMovedIn'
 	end 'recoverAsIsolated'
 
 	function valueIsCarried(value ValueId) returns bool

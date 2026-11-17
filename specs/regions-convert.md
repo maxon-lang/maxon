@@ -321,7 +321,7 @@ typealias IsoBox = isolated Box
 
 function main() returns ExitCode
 	let spare = Box.create(1)
-	spare.n = 2
+	print("{spare.n}\n")
 	let n = consume(spare)
 	print("{n}\n")
 	return 0

@@ -8799,7 +8799,7 @@ extension Parser
 	function parseAssignment(func IrFunction, block IrBlock) throws SourceParseError
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
-		try self.requireAssignmentAllowedInWindows(nameTok)
+		try self.requireRebindAllowed(nameTok)
 
 		// `_ = <expr>` — a DISCARD assignment: evaluate the RHS for its effect and throw the value away. `_`
 		// binds nothing (`DiscardBindingName`, the same discard the match-payload `walk(_)` uses), so at file
@@ -8877,7 +8877,6 @@ extension Parser
 		let rhsStart = self.pos
 		self.stateDeclaredLiteralTarget(binding.varType, scopeFilePath: self.job.path, valueStart: rhsStart)
 		let parsedValue = try self.parseExpression(func, block: block)
-		try self.requireAssignmentAllowedInWindows(nameTok)
 
 		// WHICH local the RHS was a bare reference to (`s = t`), empty for every other RHS. Only that shape
 		// can MOVE an owned value out of a source binding; every other RHS is a consume. The NAME rather
@@ -8895,6 +8894,11 @@ extension Parser
 		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, written: value, rhsBareLocalName: rhsBareLocalName, valueStart: rhsStart, valueEnd: self.pos)
 	end 'parseAssignment'
 
+	function requireRebindAllowed(nameTok Token) throws SourceParseError
+		try self.requireAssignmentAllowedInWindows(nameTok)
+		try self.requireRootStaysPut(nameTok.value, anchor: nameTok)
+	end 'requireRebindAllowed'
+
 	// ⭐⭐ **A LOCAL REBIND, FROM THE TYPE CHECK TO THE STORE — everything `x = <expr>` still owes once its
 	// value exists.** SHARED with a tuple assignment's bare target, which arrives here holding an element of
 	// an already-evaluated tuple rather than a freshly parsed expression. A second copy of this list is not
@@ -8908,6 +8912,8 @@ extension Parser
 	// afterwards). A tuple assignment cannot ask it there — its RHS is evaluated once, ahead of every
 	// target — so it asks it per target, in target order, which is the order its own pins read in.
 	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, written ValueId, rhsBareLocalName SourceBinding, valueStart ElementIndex, valueEnd ElementIndex) throws SourceParseError
+		try self.requireRebindAllowed(nameTok)
+
 		let value = try self.destinationTemporary(written, declared: binding.varType, anchor: nameTok)
 		let declaredTag = maxonTypeTag(binding.varType)
 		let valueTag = self.tagOf(value)

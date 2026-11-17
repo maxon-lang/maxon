@@ -1761,13 +1761,8 @@ end 'main'
 error E2015: <fragment>:14:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body
 ```
 
-<!-- test: error.fallthrough-out-of-a-consuming-arm-into-a-read-of-the-scrutinee -->
-Falling OUT of a binding arm stays legal (`fallthrough-out-of-a-binding-arm-into-a-payload-free-one`),
-but the arm fallen INTO inherits what the arm fallen FROM did: on that edge the scrutinee's slot is
-nulled, so a read of it there is E3102 rather than a null load. The successor is reachable BOTH ways —
-by its own dispatch edge, where `m` is whole, and by the fallthrough edge, where it is not — so the
-refusal is the conservative answer of the two, and it is the same rule an `and fallthrough` target
-already obeys for `movedFrom`.
+<!-- test: a-fallthrough-out-of-a-binding-arm-reads-the-scrutinee -->
+The binding arm falls through into one that reads `m`; the bind retained the payload, so `grab` finds it whole.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1794,8 +1789,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:21:28: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```stdout
+n=130
+```
+```exitcode
+0
 ```
 
 <!-- test: fallthrough-into-a-bare-payload-carrying-arm -->
@@ -1981,8 +1979,8 @@ solid
 
 ```
 
-<!-- test: error.match-consume-then-use -->
-A binding match consumes the union; a later read of the scrutinee is E3102.
+<!-- test: a-lending-match-leaves-the-union-for-a-second-match -->
+A `match` on a plain union lends it and never consumes it (ruling 45), so a second `match` reads it again.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2012,18 +2010,12 @@ function main() returns ExitCode
 	return first + second
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:23:21: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+10
 ```
 
-<!-- test: error.read-the-consumed-scrutinee-inside-the-arm-that-moved-it -->
-⭐ **THE READ INSIDE THE ARM THAT MOVED.** `error.match-consume-then-use` pins the read that comes AFTER
-the match; this is the same read INSIDE the arm that did the moving, where the slot is nulled from the
-bind onwards. The scrutinee is marked `partiallyMoved` at the arm that moved, not after the whole arm
-loop has been parsed — otherwise this read would parse against a LIVE `m` and compile, and `grab` would
-bind the payload out of its borrowed parameter, load the null the outer arm just stored, and dereference
-it: **exit 139 (SIGSEGV)**. A borrowed bind like `grab`'s is one spelling of the read; a nested
-`match m` (below) is the other.
+<!-- test: a-binding-arm-reads-the-matched-union-again -->
+The arm binds `s` and reads `m` again: where the union is read after the bind, the bind retains the payload instead of emptying the slot, so `grab` finds it whole.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2043,22 +2035,21 @@ function main() returns ExitCode
 	let m = M.text("an owned payload string, long enough to be a real heap allocation")
 	let r = match m 'k'
 		silent gives 0 as Integer
-		text(s) gives grab(m)
+		text(s) gives grab(m) + (s.byteLength() as Integer)
 	end 'k'
 	print("r={r}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:20:22: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```stdout
+r=130
+```
+```exitcode
+0
 ```
 
-<!-- test: error.re-match-the-consumed-scrutinee-inside-its-own-arm -->
-The nested-`match` spelling of the case above, which segfaults the same way unrefused (**exit 139**):
-the arm binds `s`, which nulls slot 0, and the nested `match m` in its own body binds `t` from that null.
-The borrowed twin — `the-same-borrowed-container-matched-again-inside-its-own-arm` — is LEGAL and stays
-legal, because a retain leaves the slot intact. Which of the two a program gets is exactly the
-owned/borrowed split, so the two tests are read together.
+<!-- test: a-nested-match-reads-the-union-its-arm-matched -->
+The nested `match m` reads the union the outer arm matched; a lending `match` never empties it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2071,7 +2062,7 @@ function main() returns ExitCode
 	let m = M.text("an owned payload string, long enough to be a real heap allocation")
 	let r = match m 'k'
 		silent gives 0 as Integer
-		text(s) gives match m 'again'
+		text gives match m 'again'
 			silent gives 1 as Integer
 			text(t) gives t.byteLength() as Integer
 		end 'again'
@@ -2080,8 +2071,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:13:23: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```stdout
+r=65
+```
+```exitcode
+0
 ```
 
 <!-- test: the-consumed-scrutinee-stays-live-in-a-sibling-arm -->
@@ -2123,13 +2117,8 @@ end 'main'
 r=65
 ```
 
-<!-- test: error.a-nested-consume-survives-a-sibling-arm -->
-⭐ **THE CARRY.** The rewind above is per-PATH, but the code AFTER the match runs on EVERY path, so a
-consume on any one of them has to survive it. Here the consume is not made by the outer match's own
-arm at all — the `text` arm's body is a NESTED `match m`, and it is that inner match which nulls the
-slot. The following `silent` arm is fresh and rewinds the bit; without the carry out of the arm it
-happened in, `m` would read LIVE after the outer match and `grab(m)` would load the nulled slot on the
-`text` path. Ordering is the whole test: put `silent` first and no rewind ever sees the bit.
+<!-- test: a-union-matched-in-a-nested-arm-is-read-after-the-match -->
+Neither the outer nor the nested `match` consumes `m`, so `grab` reads it after both.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2158,8 +2147,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:25:27: use of moved value 'm': its ownership moved to another binding at an earlier bind or assignment
+```stdout
+r=65 after=65
+```
+```exitcode
+0
 ```
 
 <!-- test: borrowed-bind-in-an-arm-that-continues -->

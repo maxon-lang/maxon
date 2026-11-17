@@ -9346,12 +9346,24 @@ extension Parser
 		// and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue` idiom), so the flag is
 		// observed by every holder — `ownedBindings`, `Scope.vars`, any loop-phi list.
 		let owned = try self.bodyState.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		self.refuseMoveOfAModifiedRoot(owned.name)
 
 		owned.markMovedAt(self.lineJustRead(), ledger: self.bodyState.moveLedger)
 		self.settleFeedDropGuardOf(value, loopCarried: LoopCarriedGuards.settleAlways)
 		self.bodyState.movedBindingValues = withValueMarked(self.bodyState.movedBindingValues, value: value)
 		self.logUniqueMove(value)
 	end 'poisonOwningBinding'
+
+	function refuseMoveOfAModifiedRoot(name ByteArray)
+		let window = try windowOpenedOnRoot(self.regionFactsForRead().windows, rootName: name) otherwise return
+
+		if window.kind != WindowKind.modify 'notItsOwnModify'
+			return
+		end 'notItsOwnModify'
+
+		let anchor = self.tokenAt(self.pos - 1)
+		self.deferRegionRefusal(ErrorCode.semanticOpenedSlotReassigned, message: "'{String.from(name)}' is open in '{String.from(window.label)}' and cannot be moved or consumed there; consume it after the block", line: anchor.line, column: anchor.column)
+	end 'refuseMoveOfAModifiedRoot'
 
 	function logUniqueMove(value ValueId)
 		if self.operandHoldsAUnique(value) 'aUniqueValue'

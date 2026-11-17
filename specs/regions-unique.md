@@ -2083,6 +2083,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3214: <fragment>:33:40: cannot pass 'other' to parameter 'slot' of 'keep': it keeps a unique value, and 'other' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+error E3207: <fragment>:33:45: 'keep' needs a writable parameter 'slot' at line 21; 'other' is read-only while 'which' is open
 ```
 
 <!-- test: a-by-reference-unique-union-kept-in-its-own-arm-is-refused -->
@@ -4116,6 +4117,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3214: <fragment>:40:24: cannot pass 'u' to parameter 's' of 'Keeper.keep': it keeps a unique value, and 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+error E3207: <fragment>:40:29: 'keep' needs a writable parameter 's' at line 25; 'u' is read-only while 'picked' is open
 ```
 
 <!-- test: a-cond-of-unique-arrays-as-a-loop-source-keeps-each-read-only -->
@@ -4351,4 +4353,151 @@ error E3207: <fragment>:43:19: 'pop' needs a writable receiver at line 246; the 
 error E3207: <fragment>:55:19: 'pop' needs a writable receiver at line 246; the argument is read-only while 'each' is open
 error E3207: <fragment>:68:28: 'reset' needs a writable parameter 'h' at line 35; 'h' is read-only while 'which' is open
 error E3197: <fragment>:80:22: cannot write 'u' through 'g', which is read-only while 'which' lends a unique value out of it
+```
+
+<!-- test: error.a-unique-slot-path-beside-its-root-in-one-call-is-refused -->
+`h.t` and `h` reach one unique value, and a callee is checked alone (ruling 18).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Holder is unique
+	var t as Token
+
+	static function create(t Token) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+
+function both(t Token, h Holder)
+	h.t = Token.create(9)
+	t.n = 3
+end 'both'
+
+function main() returns ExitCode
+	let h = Holder.create(Token.create(1))
+	both(h.t, h: h)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:15: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: error.a-container-reassigned-inside-a-for-that-lends-from-it-is-refused -->
+The loop lends `tokens`' unique elements, so the variable holding the container stays put in the body.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Tokens = Array with Token
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+function main() returns ExitCode
+	var tokens = Tokens.create(0)
+	tokens.push(Token.create(1))
+
+	for t in tokens 'each'
+		tokens = Tokens.create(0)
+		t.n = 6
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:18:3: 'tokens' roots what 'each' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: a-plain-part-beside-its-unique-root-in-one-call -->
+`h.data` is a plain part of `h`, not a second name for the unique value, so `h` is lent once in either order (ruling 44).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Holder is unique
+	var data as Box
+	var n as Count
+
+	static function create(data Box, n Count) returns Self
+		return Self{data: data, n: n}
+	end 'create'
+end 'Holder'
+
+function partFirst(d Box, h Holder)
+	h.n = h.n + d.n
+end 'partFirst'
+
+function rootFirst(h Holder, d Box)
+	h.n = h.n + d.n
+end 'rootFirst'
+
+function main() returns ExitCode
+	let h = Holder.create(Box.create(2), n: 0)
+	partFirst(h.data, h: h)
+	rootFirst(h, d: h.data)
+	print("{h.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: error.a-unique-slot-path-beside-its-root-is-refused-in-either-order -->
+`h.t` and `h` reach one unique value whichever argument comes first (ruling 18).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Holder is unique
+	var t as Token
+
+	static function create(t Token) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+
+function both(h Holder, t Token)
+	h.t = Token.create(9)
+	t.n = 3
+end 'both'
+
+function main() returns ExitCode
+	let h = Holder.create(Token.create(1))
+	both(h, t: h.t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:13: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
 ```

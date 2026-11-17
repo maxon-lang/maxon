@@ -567,6 +567,116 @@ type LentArmRoots
 	end 'isEmpty'
 end 'LentArmRoots'
 
+type RootStack
+	let values as ValueIdArray
+	let names as NameRoster
+	let subjects as StringArray
+
+	static function create() returns RootStack
+		return Self{values: ValueIdArray.create(0), names: NameRoster.create(0), subjects: StringArray.create(0)}
+	end 'create'
+
+	function count() returns ElementIndex
+		return self.values.count()
+	end 'count'
+
+	function isEmpty() returns bool
+		return self.values.isEmpty()
+	end 'isEmpty'
+
+	function push(value ValueId, name immutable ByteArray, subject String)
+		self.values.push(value)
+		self.names.push(name)
+		self.subjects.push(subject)
+	end 'push'
+
+	function popTo(floor ElementIndex)
+		while self.values.count() > floor 'eachRoot'
+			_ = try self.values.pop() otherwise panic("RootStack.popTo: values holds more than {floor} roots and cannot pop one")
+			_ = try self.names.pop() otherwise panic("RootStack.popTo: names is pushed with values and cannot be shorter")
+			_ = try self.subjects.pop() otherwise panic("RootStack.popTo: subjects is pushed with values and cannot be shorter")
+		end 'eachRoot'
+	end 'popTo'
+
+	function subjectAt(index ElementIndex) returns String
+		return try self.subjects.get(index) otherwise panic("RootStack.subjectAt: subjects.get OOB at {index} — the columns are pushed together")
+	end 'subjectAt'
+
+	function nameAt(index ElementIndex) returns immutable ByteArray
+		return try self.names.get(index) otherwise panic("RootStack.nameAt: names.get OOB at {index} — the columns are pushed together")
+	end 'nameAt'
+
+	function indexOfValue(value ValueId) returns ElementIndex throws AbsentError
+		for index in 0 upto self.values.count() 'eachRoot'
+			if (try self.values.get(index) otherwise panic("RootStack.indexOfValue: values.get OOB at {index} below its own count")) == value 'theRoot'
+				return index
+			end 'theRoot'
+		end 'eachRoot'
+
+		throw AbsentError.absent
+	end 'indexOfValue'
+
+	function indexOfName(name ByteArray) returns ElementIndex throws AbsentError
+		for index in 0 upto self.names.count() 'eachRoot'
+			if self.nameAt(index).equals(name) 'theRoot'
+				return index
+			end 'theRoot'
+		end 'eachRoot'
+
+		throw AbsentError.absent
+	end 'indexOfName'
+end 'RootStack'
+
+typealias HeldResultMap = Map with (ValueId, ElementIndex)
+
+typealias FieldPath = Array with FieldIndex
+
+type OperandPlace
+	let root as ValueId
+	let path as FieldPath
+
+	static function create(root ValueId, path FieldPath) returns OperandPlace
+		return Self{root: root, path: path}
+	end 'create'
+end 'OperandPlace'
+
+typealias OperandPlaceArray = Array with OperandPlace
+
+function overlappingPlaceRootOf(places OperandPlaceArray, other OperandPlaceArray) returns ValueId throws AbsentError
+	for place in places 'eachPlace'
+		for candidate in other 'eachOtherPlace'
+			if place.root == candidate.root and (fieldPathLeads(place.path, longer: candidate.path) or fieldPathLeads(candidate.path, longer: place.path)) 'onePlaceHoldsTheOther'
+				return place.root
+			end 'onePlaceHoldsTheOther'
+		end 'eachOtherPlace'
+	end 'eachPlace'
+
+	throw AbsentError.absent
+end 'overlappingPlaceRootOf'
+
+function fieldPathLeads(prefix FieldPath, longer FieldPath) returns bool
+	if prefix.count() > longer.count() 'tooLong'
+		return false
+	end 'tooLong'
+
+	for step in 0 upto prefix.count() 'eachStep'
+		if (try prefix.get(step) otherwise panic("fieldPathLeads: prefix.get OOB at {step} below its own count")) != (try longer.get(step) otherwise panic("fieldPathLeads: longer.get OOB at {step} below the prefix's count")) 'aDifferentField'
+			return false
+		end 'aDifferentField'
+	end 'eachStep'
+
+	return true
+end 'fieldPathLeads'
+
+type SubjectRoots
+	let roots as LentArmRoots
+	var throughCond as bool
+
+	static function create() returns SubjectRoots
+		return Self{roots: LentArmRoots.create(), throughCond: false}
+	end 'create'
+end 'SubjectRoots'
+
 export enum DroppedOwnedKind
 	promise
 	linear

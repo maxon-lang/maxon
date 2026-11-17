@@ -1381,6 +1381,7 @@ extension Parser
 		let outerDrainingLabel = self.statement.drainingLabel
 
 		let heldByTheLend = self.pauseLentHolders(walkedSource) if drainsItsSource else PausedHolders.create()
+		let sourceRoots = self.subjectRootsIn(sourceStart, stop: src.sourceEnd) if drainsItsSource else SubjectRoots.create()
 
 		if drainsItsSource 'readOnlyInTheBody'
 			self.pauseJoinedVariables(drainedValue, into: heldByTheLend)
@@ -1389,7 +1390,13 @@ extension Parser
 			self.statement.drainingLabel = loopLabelTok.value
 		end 'readOnlyInTheBody'
 
+		if sourceRoots.throughCond 'everyCondRootIsReadOnly'
+			self.pauseRoots(sourceRoots.roots, into: heldByTheLend)
+		end 'everyCondRootIsReadOnly'
+
+		let stayingFloor = self.pushRoots(sourceRoots.roots, onto: self.bodyState.stayingRoots, label: loopLabelTok.value)
 		let bodyEnd = try self.parseBlockBody(func, block: heldBodyStart, label: loopLabelTok.value)
+		self.bodyState.stayingRoots.popTo(stayingFloor)
 
 		if drainsItsSource 'writableAgain'
 			self.setValueCapability(drainedValue, capability: sourceGiven)
@@ -4709,6 +4716,13 @@ extension Parser
 		// every arm test, every arm body and the merge — so one release here covers all of them.
 		self.drainPendingTemps(scrutTempFloor, anchor: matchTok)
 
+		let isLentMatch = isEnumMatch and not deferredScrutinee and not isErrorUnionMatch
+		let consumesTheSubject = isLentMatch and self.matchConsumesItsSubject(scrut, standing: standing)
+
+		if isLentMatch and self.valueIsLinear(scrut) 'aLinearSubjectIsConsumed'
+			try self.requireLinearIsNotOuterData(scrut, anchor: matchTok)
+		end 'aLinearSubjectIsConsumed'
+
 		// The move state entering the arms — captured after the temp-scrutinee enrolment so the scrutinee
 		// binding is included. Each FRESH arm is parsed from it (`restoreMoveMark` at the arm-restore sites,
 		// the twin of `restoreBindings`), and each reaching arm captures its own exit move state for the
@@ -4734,8 +4748,12 @@ extension Parser
 		// `dead` block for an exhaustive enum (created after the loop). `planMissIsUnreachable` is set
 		// for the dead block only, and the three travel to the dispatch as one `DispatchMiss`.
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
-		let isLentMatch = isEnumMatch and not deferredScrutinee and not isErrorUnionMatch
-		let lentRoots = self.lentArmRootsOf(scrut, scrutStart: scrutStart, scrutEnd: scrutEnd, isLentMatch: isLentMatch)
+		let subjectRoots = self.subjectRootsIn(scrutStart, stop: scrutEnd)
+		let lentRoots = self.lentArmRootsOf(scrut, subjectRoots: subjectRoots, isLentMatch: isLentMatch)
+		let lendsItsSubject = isLentMatch and not consumesTheSubject
+		let condRoots = subjectRoots.roots if lendsItsSubject and subjectRoots.throughCond else LentArmRoots.create()
+		let condRootsReadOnly = not condRoots.isEmpty() and self.unionLendsHeldData(scrut, enumMatch: enumMatch)
+		let holdFloor = self.pushRoots(subjectRoots.roots if lendsItsSubject else LentArmRoots.create(), onto: self.bodyState.matchHolds, label: matchLabel)
 
 		// A frozen scrutinee lends nothing and an isolated one hands its payload out whole;
 		// frozen-union-iso-arm-write, imm-param-union-iso-arm-write and
@@ -4825,7 +4843,8 @@ extension Parser
 						// after the loop, not here.
 						planMissArgs = matchEdgeArgs
 					end 'planDefaultArgs' else if defaultNeedsADispatchEdge 'defaultFailEdgeDrops'
-						self.reconcileMovesAtTwoEdgeMerge(currentTestBlock, markA: entryMoveMark, b: prevExitBlock, markB: defaultArrivedMoveMark, anchor: defTok)
+						let failEdgeMark = try self.markAfterEndingTheSubject(currentTestBlock, subject: scrut, endsTheSubject: consumesTheSubject, entryMoveMark: entryMoveMark, arrived: defaultArrivedMoveMark, anchor: defTok)
+						self.reconcileMovesAtTwoEdgeMerge(currentTestBlock, markA: failEdgeMark, b: prevExitBlock, markB: defaultArrivedMoveMark, anchor: defTok)
 						self.recordBranchEdge(currentTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
 						self.emitBranch(currentTestBlock, targetId: defaultBody.id)
 					end 'defaultFailEdgeDrops' else if hasRealArm 'defaultFailEdge'
@@ -4855,7 +4874,7 @@ extension Parser
 				end 'planMissTarget'
 
 				if usePlan and defaultNeedsADispatchEdge 'defaultDropsOnTheDispatchEdge'
-					planMissBlockId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: defaultArrivedMoveMark, prevExit: prevExitBlock, targetId: planMissBlockId, edgeArgs: planMissArgs, anchor: defTok)
+					planMissBlockId = try self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: defaultArrivedMoveMark, prevExit: prevExitBlock, targetId: planMissBlockId, edgeArgs: planMissArgs, anchor: defTok, subject: scrut, endsTheSubject: consumesTheSubject)
 					planMissArgs = ValueIdArray.create(0)
 				end 'defaultDropsOnTheDispatchEdge'
 
@@ -4894,10 +4913,10 @@ extension Parser
 				// enum match (a catch-all would silently mask a case added later) and a real body on a
 				// scalar match. A diverging default terminates its body and so reaches no merge.
 				if divergentHandlerOpensAt(self.kindAt(self.pos)) 'divergingDefault'
-					if isEnumMatch and not deferredScrutinee and self.valueIsLinear(scrut) 'aLinearScrutineeInTheDefault'
+					if consumesTheSubject and not prevFallthrough 'aConsumedScrutineeInTheDefault'
 						self.bodyState.currentBlock = defaultBody
 						try self.endLinearScrutineeInArm(scrut, anchor: defTok)
-					end 'aLinearScrutineeInTheDefault'
+					end 'aConsumedScrutineeInTheDefault'
 
 					try self.parseDivergingTerminalForm(func, block: defaultBody)
 
@@ -5014,7 +5033,7 @@ extension Parser
 						let entry = self.enterErrorUnionArm(func, members: arm.members, fused: requireErrorUnionInfo(errorUnion).fusedOrdinal, fallenInto: prevFallthrough, body: bodyBlock, edgeArgs: matchEdgeArgs, flag: scrut, anchor: patternTok)
 
 						if armDropsOnItsDispatchEdge 'unionArmDropsOnItsDispatchEdge'
-							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: entry.targetId, edgeArgs: entry.args, anchor: patternTok)
+							let edgeId = try self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: entry.targetId, edgeArgs: entry.args, anchor: patternTok, subject: scrut, endsTheSubject: consumesTheSubject)
 							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: edgeId, args: ValueIdArray.create(0))
 						end 'unionArmDropsOnItsDispatchEdge' else 'unionArmDispatchedDirectly'
 							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: entry.targetId, args: entry.args)
@@ -5023,7 +5042,7 @@ extension Parser
 						bodyBlock = try self.blockById(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the arm body block {entry.bodyId} is not in its own function")
 					end 'errorUnionArmEntry' else 'dispatchIntoBody'
 						if armDropsOnItsDispatchEdge 'armDropsOnItsDispatchEdge'
-							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok)
+							let edgeId = try self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok, subject: scrut, endsTheSubject: consumesTheSubject)
 							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: edgeId, args: ValueIdArray.create(0))
 						end 'armDropsOnItsDispatchEdge' else 'armDispatchedDirectly'
 							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: bodyBlock.id, args: matchEdgeArgs)
@@ -5033,7 +5052,7 @@ extension Parser
 					var armTargetId = bodyBlock.id
 
 					if armDropsOnItsDispatchEdge 'chainArmDropsOnItsDispatchEdge'
-						armTargetId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok)
+						armTargetId = try self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok, subject: scrut, endsTheSubject: consumesTheSubject)
 					end 'chainArmDropsOnItsDispatchEdge' else 'chainArmDispatchedDirectly'
 						self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
 					end 'chainArmDispatchedDirectly'
@@ -5095,14 +5114,21 @@ extension Parser
 					end 'payloadSlotBindings'
 				end 'openArmBindings'
 
-				if isEnumMatch and not deferredScrutinee and not armOwnsMemberBox and self.valueIsLinear(scrut) 'aLinearScrutinee'
+				if consumesTheSubject and not armOwnsMemberBox and not prevFallthrough 'aConsumedScrutinee'
 					self.bodyState.currentBlock = bodyBlock
 					try self.endLinearScrutineeInArm(scrut, anchor: patternTok)
-				end 'aLinearScrutinee'
+				end 'aConsumedScrutinee'
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
-				let lentArmFloor = self.enterLentArm(lentRoots, scrutStart: scrutStart, scrutEnd: scrutEnd, bindsPayloads: hasPayloadBindings)
-				let heldByTheLend = self.pauseLentHolders(scrut) if hasPayloadBindings and not lentRoots.isEmpty() else PausedHolders.create()
+				let armLendsTheSubject = hasPayloadBindings and not lentRoots.isEmpty()
+				let lentArmFloor = self.enterLentArm(lentRoots, condRoots: condRoots, scrutStart: scrutStart, scrutEnd: scrutEnd, bindsPayloads: armLendsTheSubject)
+				let heldByTheLend = self.pauseLentHolders(scrut) if armLendsTheSubject else PausedHolders.create()
+
+				if condRootsReadOnly 'everyCondRootIsReadOnly'
+					self.pauseRoots(condRoots, into: heldByTheLend)
+				end 'everyCondRootIsReadOnly'
+
+				let stayingFloor = self.pushRoots(condRoots, onto: self.bodyState.stayingRoots, label: matchLabel)
 				let outerLendingLabel = self.statement.lendingLabel
 
 				if not heldByTheLend.values.isEmpty() 'readOnlyInTheArm'
@@ -5114,7 +5140,10 @@ extension Parser
 					self.openLentArmWindow(matchLabel, valueFloor: armValueFloor)
 				end 'openArmWindow'
 
+				let outerArmBodyStart = self.bodyState.armBodyStart
+				self.bodyState.armBodyStart = self.pos
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, destination: destination, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
+				self.bodyState.armBodyStart = outerArmBodyStart
 
 				if armLendsIsolatedPayload 'closeArmWindow'
 					self.closeLentArmWindow()
@@ -5125,8 +5154,9 @@ extension Parser
 					self.statement.lendingLabel = outerLendingLabel
 				end 'writableAgain'
 
+				self.bodyState.stayingRoots.popTo(stayingFloor)
 				self.resumeLentHolders(heldByTheLend)
-				self.leaveLentArm(lentArmFloor)
+				self.bodyState.lentArms.popTo(lentArmFloor)
 
 				if opensArmScope 'closeArmScope'
 					self.bodyState.scope.popScope()
@@ -5171,6 +5201,7 @@ extension Parser
 		end 'arms'
 
 		self.leaveMatch()
+		self.releaseMatchSubject(holdFloor)
 
 		// ⚠ An exhaustive enum match's FINAL `else` target — the last arm's fail edge — is UNREACHABLE
 		// (every value matches some arm), but the last arm's `condBranch` named it, so the CFG edge
@@ -5420,12 +5451,53 @@ extension Parser
 	end 'matchScrutineeIsAMutableParameter'
 
 	function scrutineeStandingOf(scrut ValueId, scrutStart ElementIndex, isAParameter bool) returns ScrutineeStanding
-		let slotsMayBeReadAgain = self.scrutineeBindingIsMutable(scrut, isAParameter: isAParameter) or self.valueIsASlotRead(scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)
+		let heldIsolated = self.valueIsAnOwnedIsolatedLocal(scrut)
+		let slotsMayBeReadAgain = self.valueIsASlotRead(scrut) or self.matchScrutineeIsAMutableParameter(scrutStart) or (not heldIsolated and (self.scrutineeBindingIsMutable(scrut, isAParameter: isAParameter) or self.matchScrutineeIsReadAgain(scrutStart)))
 
-		return ScrutineeStanding.create(self.valueIsSoleHeapOwner(scrut), slotsMayBeReadAgain: slotsMayBeReadAgain, heldIsolated: self.valueIsAnOwnedIsolatedLocal(scrut), frozen: self.effectiveCapabilityOf(scrut) == ValueCapability.immutable)
+		let solelyOwned = heldIsolated or self.valueIsSoleHeapOwner(scrut)
+
+		return ScrutineeStanding.create(solelyOwned, slotsMayBeReadAgain: slotsMayBeReadAgain, heldIsolated: heldIsolated, frozen: self.effectiveCapabilityOf(scrut) == ValueCapability.immutable)
 	end 'scrutineeStandingOf'
 
-	function lentArmRootsOf(scrut ValueId, scrutStart ElementIndex, scrutEnd ElementIndex, isLentMatch bool) returns LentArmRoots
+	function matchScrutineeIsReadAgain(scrutStart ElementIndex) returns bool
+		let name = try self.matchScrutineeBareName(scrutStart) otherwise return false
+		return self.nameIsReadAfter(name, index: scrutStart)
+	end 'matchScrutineeIsReadAgain'
+
+	function nameIsReadAfter(name ByteArray, index ElementIndex) returns bool
+		let start = self.bodyState.bodyStart
+
+		if not self.lastMentionsByBody.contains(start) 'aBodyNotYetScanned'
+			self.lastMentionsByBody.upsert(start, value: self.lastMentionsFrom(start))
+		end 'aBodyNotYetScanned'
+
+		let mentions = try self.lastMentionsByBody.get(start) otherwise panic("nameIsReadAfter: the body at {start} was scanned just above")
+		let last = try mentions.get(name) otherwise return false
+		return last > index
+	end 'nameIsReadAfter'
+
+	function lastMentionsFrom(start ElementIndex) returns LastMentionByName
+		let mentions = LastMentionByName.create()
+		var depth = 0 as BlockDepth
+		var q = start
+
+		while self.kindAt(q) != TokenKind.eof and not (depth == 0 and self.closesBlockAt(q)) 'eachToken'
+			if self.kindAt(q) == TokenKind.identifier and q > 0 and self.kindAt(q - 1) != TokenKind.dot 'aName'
+				mentions.upsert(self.tokenAt(q).value, value: q)
+			end 'aName'
+
+			depth = self.blockDepthAfter(q, depth: depth)
+			q = q + 1
+		end 'eachToken'
+
+		return mentions
+	end 'lastMentionsFrom'
+
+	function matchConsumesItsSubject(scrut ValueId, standing ScrutineeStanding) returns bool
+		return self.valueIsLinear(scrut) or standing.consumesAnIsolatedHolder()
+	end 'matchConsumesItsSubject'
+
+	function lentArmRootsOf(scrut ValueId, subjectRoots SubjectRoots, isLentMatch bool) returns LentArmRoots
 		let roots = LentArmRoots.create()
 
 		if not isLentMatch or self.valueIsLinear(scrut) or not self.valueHoldsAUniqueRecord(scrut) 'nothingIsLentUnique'
@@ -5443,51 +5515,320 @@ extension Parser
 			held = origin.holder
 		end 'eachHolder'
 
-		self.pushNamedOperandRoots(scrutStart, scrutEnd: scrutEnd, roots: roots)
-		return roots
-	end 'lentArmRootsOf'
+		if subjectRoots.throughCond 'everyArmHoldsTheCondRoots'
+			return roots
+		end 'everyArmHoldsTheCondRoots'
 
-	function pushNamedOperandRoots(scrutStart ElementIndex, scrutEnd ElementIndex, roots LentArmRoots)
-		// A call in the scrutinee may answer a fresh value, so its operands are not roots of what the arm views.
-		for index in scrutStart upto scrutEnd 'eachCallToken'
-			if self.kindAt(index) == TokenKind.leftParen 'aCallOrGrouping'
-				return
-			end 'aCallOrGrouping'
-		end 'eachCallToken'
-
-		var inCondition = false
-
-		for index in scrutStart upto scrutEnd 'eachToken'
-			let kind = self.kindAt(index)
-
-			if kind == TokenKind.if 'conditionBegins'
-				inCondition = true
-				continue
-			end 'conditionBegins'
-
-			if kind == TokenKind.else 'conditionEnds'
-				inCondition = false
-				continue
-			end 'conditionEnds'
-
-			if inCondition or kind != TokenKind.identifier or self.kindAt(index - 1) == TokenKind.dot 'notAnOperandName'
-				continue
-			end 'notAnOperandName'
-
-			let name = self.tokenAt(index).value
-
-			if not self.bodyState.scope.contains(name) or self.bodyState.scope.isSelfField(name) 'notAPlainLocal'
-				continue
-			end 'notAPlainLocal'
-
-			let bound = self.bodyState.scope.getInfo(name).boundValue
+		for index in 0 upto subjectRoots.roots.values.count() 'eachNamedRoot'
+			let bound = try subjectRoots.roots.values.get(index) otherwise panic("lentArmRootsOf: values.get OOB at {index} below its own count")
 
 			if self.valueHoldsAUniqueRecord(bound) 'aUniqueOperand'
 				roots.values.push(bound)
-				roots.names.push(name)
+				roots.names.push(try subjectRoots.roots.names.get(index) otherwise panic("lentArmRootsOf: names.get OOB at {index} — the columns are pushed together"))
 			end 'aUniqueOperand'
+		end 'eachNamedRoot'
+
+		return roots
+	end 'lentArmRootsOf'
+
+	function subjectRootsIn(start ElementIndex, stop ElementIndex) returns SubjectRoots
+		let found = SubjectRoots.create()
+		self.collectSubjectRoots(start, stop: stop, into: found)
+		return found
+	end 'subjectRootsIn'
+
+	function collectSubjectRoots(start ElementIndex, stop ElementIndex, into SubjectRoots)
+		var first = start
+		var last = stop
+
+		while last > first + 1 and self.kindAt(first) == TokenKind.leftParen and self.parenGroups.closeOf(self.tokens, open: first) == last - 1 'eachEnclosingGroup'
+			first = first + 1
+			last = last - 1
+		end 'eachEnclosingGroup'
+
+		if first >= last 'nothingSpelled'
+			return
+		end 'nothingSpelled'
+
+		if self.collectCondArmRoots(first, stop: last, into: into) 'aMergeOfArms'
+			return
+		end 'aMergeOfArms'
+
+		let opener = self.kindAt(first)
+		var baseEnd = first + 1
+
+		if opener == TokenKind.leftParen 'aGroupedBase'
+			baseEnd = self.parenGroups.closeOf(self.tokens, open: first) + 1
+		end 'aGroupedBase' else if opener != TokenKind.identifier 'noLocalBase'
+			return
+		end 'noLocalBase'
+
+		if not self.tokensSpellAFieldChain(baseEnd, stop: last) 'aCallOrAnOperator'
+			return
+		end 'aCallOrAnOperator'
+
+		if opener == TokenKind.leftParen 'theGroupHoldsTheRoots'
+			self.collectSubjectRoots(first + 1, stop: baseEnd - 1, into: into)
+			return
+		end 'theGroupHoldsTheRoots'
+
+		let name = self.tokenAt(first).value
+
+		if not self.bodyState.scope.contains(name) or self.bodyState.scope.isSelfField(name) or into.roots.names.contains(name) 'notAPlainLocal'
+			return
+		end 'notAPlainLocal'
+
+		into.roots.values.push(self.bodyState.scope.getInfo(name).boundValue)
+		into.roots.names.push(name)
+	end 'collectSubjectRoots'
+
+	function collectCondArmRoots(first ElementIndex, stop ElementIndex, into SubjectRoots) returns bool
+		if self.kindAt(first) == TokenKind.match 'aMatchMerge'
+			into.throughCond = true
+			self.collectMatchArmRoots(first, stop: stop, into: into)
+			return true
+		end 'aMatchMerge'
+
+		if self.kindAt(first) == TokenKind.try 'aTryMerge'
+			let otherwiseAt = try self.topLevelTokenIn(first + 1, stop: stop, kind: TokenKind.otherwise) otherwise return false
+			into.throughCond = true
+			self.collectSubjectRoots(first + 1, stop: otherwiseAt, into: into)
+			self.collectSubjectRoots(otherwiseAt + 1, stop: stop, into: into)
+			return true
+		end 'aTryMerge'
+
+		let ifAt = try self.topLevelTokenIn(first, stop: stop, kind: TokenKind.if) otherwise return false
+		let elseAt = try self.topLevelTokenIn(ifAt + 1, stop: stop, kind: TokenKind.else) otherwise return false
+		into.throughCond = true
+		self.collectSubjectRoots(first, stop: ifAt, into: into)
+		self.collectSubjectRoots(elseAt + 1, stop: stop, into: into)
+		return true
+	end 'collectCondArmRoots'
+
+	function topLevelTokenIn(start ElementIndex, stop ElementIndex, kind TokenKind) returns ElementIndex throws AbsentError
+		var index = start
+
+		while index < stop 'eachToken'
+			let at = self.kindAt(index)
+
+			if at == kind 'theToken'
+				return index
+			end 'theToken'
+
+			if tokenKindOpensAGroup(at) 'aGroup'
+				index = self.groupEndAfter(index, stop: stop)
+				continue
+			end 'aGroup'
+
+			index = index + 1
 		end 'eachToken'
-	end 'pushNamedOperandRoots'
+
+		throw AbsentError.absent
+	end 'topLevelTokenIn'
+
+	function groupEndAfter(open ElementIndex, stop ElementIndex) returns ElementIndex
+		if self.kindAt(open) == TokenKind.leftParen 'aParenGroup'
+			return self.parenGroups.closeOf(self.tokens, open: open) + 1
+		end 'aParenGroup'
+
+		var depth = 0 as NestingDepth
+		var index = open
+
+		while index < stop 'eachToken'
+			depth = groupNestingAfter(self.kindAt(index), nesting: depth)
+			index = index + 1
+
+			if depth == 0 'theGroupCloses'
+				return index
+			end 'theGroupCloses'
+		end 'eachToken'
+
+		panic("groupEndAfter: the group opened at {open} does not close before {stop}, and a parsed subject's groups close inside it")
+	end 'groupEndAfter'
+
+	function collectMatchArmRoots(first ElementIndex, stop ElementIndex, into SubjectRoots)
+		var depth = 0 as BlockDepth
+		var nesting = 0 as NestingDepth
+		var armStart = first
+		var inArm = false
+		var index = first
+
+		while index < stop 'eachToken'
+			let kind = self.kindAt(index)
+			let atArmLevel = depth == 1 and nesting == 0
+
+			if inArm and atArmLevel and (kind == TokenKind.newline or self.closesBlockAt(index)) 'theArmEnds'
+				self.collectSubjectRoots(armStart, stop: index, into: into)
+				inArm = false
+			end 'theArmEnds'
+
+			if atArmLevel and kind == TokenKind.gives 'anArmGives'
+				inArm = true
+				armStart = index + 1
+			end 'anArmGives'
+
+			depth = self.blockDepthAfter(index, depth: depth)
+			nesting = groupNestingAfter(kind, nesting: nesting)
+			index = index + 1
+		end 'eachToken'
+	end 'collectMatchArmRoots'
+
+	function tokensSpellAFieldChain(start ElementIndex, stop ElementIndex) returns bool
+		var index = start
+
+		while index < stop 'eachHop'
+			if self.kindAt(index) != TokenKind.dot or index + 1 >= stop or not tokenCanBeAName(self.tokenAt(index + 1)) 'notAFieldHop'
+				return false
+			end 'notAFieldHop'
+
+			index = index + 2
+		end 'eachHop'
+
+		return true
+	end 'tokensSpellAFieldChain'
+
+	function unionLendsHeldData(scrut ValueId, enumMatch DeclaredEnum) returns bool
+		if self.valueHoldsAUniqueRecord(scrut) 'aUniquePayload'
+			return true
+		end 'aUniquePayload'
+
+		if not enumMatchIsDeclared(enumMatch) 'noPayloadLayout'
+			return false
+		end 'noPayloadLayout'
+
+		for payloads in requireEnumLayout(enumMatch).casePayloads 'eachCase'
+			for field in payloads 'eachPayload'
+				if field.capability == ParamCapability.isolated 'anIsolatedPayload'
+					return true
+				end 'anIsolatedPayload'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return false
+	end 'unionLendsHeldData'
+
+	function pushRoots(roots LentArmRoots, onto RootStack, label immutable ByteArray) returns ElementIndex
+		let floor = onto.count()
+
+		for index in 0 upto roots.values.count() 'eachRoot'
+			onto.push(try roots.values.get(index) otherwise panic("pushRoots: values.get OOB at {index} below its own count"), name: try roots.names.get(index) otherwise panic("pushRoots: names.get OOB at {index} — the columns are pushed together"), subject: String.from(label))
+		end 'eachRoot'
+
+		return floor
+	end 'pushRoots'
+
+	function releaseMatchSubject(floor ElementIndex)
+		self.bodyState.matchHolds.popTo(floor)
+
+		if self.bodyState.heldResults.count() == 0 'noResultIsHeld'
+			return
+		end 'noResultIsHeld'
+
+		let released = ValueIdArray.create(0)
+
+		for (value, hold) in self.bodyState.heldResults 'eachHeldResult'
+			if hold >= floor 'heldByThisMatch'
+				released.push(value)
+			end 'heldByThisMatch'
+		end 'eachHeldResult'
+
+		for value in released 'eachReleased'
+			_ = self.bodyState.heldResults.remove(value)
+		end 'eachReleased'
+	end 'releaseMatchSubject'
+
+	function matchHoldIndexOf(value ValueId) returns ElementIndex throws AbsentError
+		let holds = self.bodyState.matchHolds
+
+		if holds.isEmpty() 'noMatchHoldsAnything'
+			throw AbsentError.absent
+		end 'noMatchHoldsAnything'
+
+		for variable in self.variablesOperandMayBe(value) 'eachVariable'
+			if let index = try holds.indexOfValue(variable) 'aHeldRoot'
+				return index
+			end 'aHeldRoot'
+		end 'eachVariable'
+
+		throw AbsentError.absent
+	end 'matchHoldIndexOf'
+
+	function heldResultIndexOf(value ValueId) returns ElementIndex throws AbsentError
+		return try self.bodyState.heldResults.get(value) otherwise throw AbsentError.absent
+	end 'heldResultIndexOf'
+
+	function heldIndexOf(value ValueId) returns ElementIndex throws AbsentError
+		if let index = try self.matchHoldIndexOf(value) 'aHeldRoot'
+			return index
+		end 'aHeldRoot'
+
+		return try self.heldResultIndexOf(value)
+	end 'heldIndexOf'
+
+	function valueIsHeldByAMatch(value ValueId) returns bool
+		if self.bodyState.matchHolds.isEmpty() 'noMatchHoldsAnything'
+			return false
+		end 'noMatchHoldsAnything'
+
+		try self.heldIndexOf(value) otherwise return false
+		return true
+	end 'valueIsHeldByAMatch'
+
+	function takeStandingOfInputs(value ValueId, inputs ValueIdArray)
+		self.noteLatentBirth(value, inputs: inputs)
+
+		if self.bodyState.matchHolds.isEmpty() 'noMatchHoldsAnything'
+			return
+		end 'noMatchHoldsAnything'
+
+		for input in inputs 'eachInput'
+			let index = try self.heldIndexOf(input) otherwise continue
+			self.bodyState.heldResults.upsert(value, value: index)
+			return
+		end 'eachInput'
+	end 'takeStandingOfInputs'
+
+	function noteLatentBirth(value ValueId, inputs ValueIdArray)
+		if not windowIsOpen(self.regionFactsForRead().windows) 'noWindowToCross'
+			return
+		end 'noWindowToCross'
+
+		var oldest = value
+
+		for input in inputs 'eachInput'
+			let birth = self.latentBirthOf(input)
+
+			if birth < oldest 'olderThanTheValue'
+				oldest = birth
+			end 'olderThanTheValue'
+		end 'eachInput'
+
+		if oldest < value 'anOlderRegionMovedIn'
+			self.bodyState.latentBirths.upsert(value, value: oldest)
+		end 'anOlderRegionMovedIn'
+	end 'noteLatentBirth'
+
+	function latentBirthOf(value ValueId) returns ValueId
+		if let birth = try self.rootBirthOf(value) 'aRootOfItsOwn'
+			return birth
+		end 'aRootOfItsOwn'
+
+		return try self.bodyState.latentBirths.get(value) otherwise value
+	end 'latentBirthOf'
+
+	function requireRootStaysPut(name ByteArray, anchor Token) throws SourceParseError
+		let index = try self.bodyState.stayingRoots.indexOfName(name) otherwise return
+		let label = self.bodyState.stayingRoots.subjectAt(index)
+		throw self.regionRefusal(ErrorCode.semanticOpenedSlotReassigned, message: "'{String.from(name)}' roots what '{label}' lends or iterates and cannot be reassigned or passed by reference inside it", line: anchor.line, column: anchor.column)
+	end 'requireRootStaysPut'
+
+	function pauseRoots(roots LentArmRoots, into PausedHolders)
+		for value in roots.values 'eachRoot'
+			if not self.valueIsAValueType(value) 'aHolder'
+				self.pauseHolder(value, into: into)
+			end 'aHolder'
+		end 'eachRoot'
+	end 'pauseRoots'
 
 	function pauseLentHolders(lent ValueId) returns PausedHolders
 		let paused = PausedHolders.create()
@@ -5533,38 +5874,40 @@ extension Parser
 		end 'innermostFirst'
 	end 'resumeLentHolders'
 
-	function enterLentArm(roots LentArmRoots, scrutStart ElementIndex, scrutEnd ElementIndex, bindsPayloads bool) returns ElementIndex
-		let floor = self.bodyState.lentArmRoots.count()
+	function enterLentArm(roots LentArmRoots, condRoots LentArmRoots, scrutStart ElementIndex, scrutEnd ElementIndex, bindsPayloads bool) returns ElementIndex
+		let floor = self.bodyState.lentArms.count()
 
-		if roots.isEmpty() 'noUniqueIsLent'
+		if not bindsPayloads and condRoots.isEmpty() 'noUniqueIsLent'
 			return floor
 		end 'noUniqueIsLent'
 
 		let subject = self.tokenTextFrom(scrutStart, endIndex: scrutEnd)
 
+		for index in 0 upto condRoots.values.count() 'eachCondRoot'
+			let value = try condRoots.values.get(index) otherwise panic("enterLentArm: condRoots.values.get OOB at {index} below its own count")
+
+			if self.valueHoldsAUniqueRecord(value) 'aUniqueRoot'
+				self.bodyState.lentArms.push(value, name: try condRoots.names.get(index) otherwise panic("enterLentArm: condRoots.names.get OOB at {index} — the columns are pushed together"), subject: subject)
+			end 'aUniqueRoot'
+		end 'eachCondRoot'
+
+		if not bindsPayloads 'noBindingViewsTheSubject'
+			return floor
+		end 'noBindingViewsTheSubject'
+
 		for index in 0 upto roots.values.count() 'eachRoot'
 			let value = try roots.values.get(index) otherwise panic("enterLentArm: values.get OOB at {index} below its own count")
-			self.pushLentArmRoot(value, name: try roots.names.get(index) otherwise panic("enterLentArm: names.get OOB at {index} — the columns are pushed together"), subject: subject)
-
-			if not bindsPayloads 'noBindingViewsAJoinedVariable'
-				continue
-			end 'noBindingViewsAJoinedVariable'
+			self.bodyState.lentArms.push(value, name: try roots.names.get(index) otherwise panic("enterLentArm: names.get OOB at {index} — the columns are pushed together"), subject: subject)
 
 			let variables = try self.joinedVariablesOf(value) otherwise continue
 
 			for variable in variables 'eachJoinedVariable'
-				self.pushLentArmRoot(variable, name: EmptySourceText, subject: subject)
+				self.bodyState.lentArms.push(variable, name: EmptySourceText, subject: subject)
 			end 'eachJoinedVariable'
 		end 'eachRoot'
 
 		return floor
 	end 'enterLentArm'
-
-	function pushLentArmRoot(value ValueId, name immutable ByteArray, subject String)
-		self.bodyState.lentArmRoots.push(value)
-		self.bodyState.lentArmNames.push(name)
-		self.bodyState.lentArmSubjects.push(subject)
-	end 'pushLentArmRoot'
 
 	function openLentArmWindow(label immutable ByteArray, valueFloor ValueId)
 		let windows = self.regionFactsForWrite().windows
@@ -5575,14 +5918,6 @@ extension Parser
 		let windows = self.regionFactsForWrite().windows
 		_ = try windows.pop() otherwise panic("closeLentArmWindow: the window this arm pushed is gone from the stack it popped")
 	end 'closeLentArmWindow'
-
-	function leaveLentArm(floor ElementIndex)
-		while self.bodyState.lentArmRoots.count() > floor 'eachRoot'
-			_ = try self.bodyState.lentArmRoots.pop() otherwise panic("leaveLentArm: lentArmRoots holds more than {floor} roots and cannot pop one")
-			_ = try self.bodyState.lentArmNames.pop() otherwise panic("leaveLentArm: lentArmNames is pushed with lentArmRoots and cannot be shorter")
-			_ = try self.bodyState.lentArmSubjects.pop() otherwise panic("leaveLentArm: lentArmSubjects is pushed with lentArmRoots and cannot be shorter")
-		end 'eachRoot'
-	end 'leaveLentArm'
 
 	function consumeScrutinee(scrut ValueId)
 		self.setBindingPartiallyMoved(scrut, value: true)
@@ -5754,14 +6089,30 @@ extension Parser
 	// so its scope drop is skipped and it leaks. Reconciled like any other two-edge merge, on a block
 	// only the dispatch edge reaches: a drop at the body's head would free the fallthrough path's
 	// value twice.
-	function enterDispatchEdgeDrops(func IrFunction, entryMoveMark MoveMark, arrived MoveMark, prevExit IrBlock, targetId BlockId, edgeArgs ValueIdArray, anchor Token) returns BlockId
+	function enterDispatchEdgeDrops(func IrFunction, entryMoveMark MoveMark, arrived MoveMark, prevExit IrBlock, targetId BlockId, edgeArgs ValueIdArray, anchor Token, subject ValueId, endsTheSubject bool) returns BlockId throws SourceParseError
 		let edge = self.artifact.module.addBlock(func, label: b"ftdispatch", heat: BlockHeat.normal)
 		let edgeId = edge.id
-		self.reconcileMovesAtTwoEdgeMerge(edge, markA: entryMoveMark, b: prevExit, markB: arrived, anchor: anchor)
+		let edgeMark = try self.markAfterEndingTheSubject(edge, subject: subject, endsTheSubject: endsTheSubject, entryMoveMark: entryMoveMark, arrived: arrived, anchor: anchor)
+		self.reconcileMovesAtTwoEdgeMerge(edge, markA: edgeMark, b: prevExit, markB: arrived, anchor: anchor)
 		self.recordBranchEdge(edge, targetId: targetId, argIds: edgeArgs)
 		self.emitBranch(edge, targetId: targetId)
 		return edgeId
 	end 'enterDispatchEdgeDrops'
+
+	function markAfterEndingTheSubject(edge IrBlock, subject ValueId, endsTheSubject bool, entryMoveMark MoveMark, arrived MoveMark, anchor Token) returns MoveMark throws SourceParseError
+		if not endsTheSubject 'nothingToEnd'
+			return entryMoveMark
+		end 'nothingToEnd'
+
+		let saved = self.bodyState.currentBlock
+		self.bodyState.currentBlock = edge
+		self.restoreMoveMark(entryMoveMark)
+		try self.endLinearScrutineeInArm(subject, anchor: anchor)
+		let ended = self.captureMoveMark()
+		self.restoreMoveMark(arrived)
+		self.bodyState.currentBlock = saved
+		return ended
+	end 'markAfterEndingTheSubject'
 
 	// Create the merge block LAST (so it lays out after every arm body) and join the reaching arms
 	// into it. An empty set means every arm terminated — the merge is `dead`. Otherwise mint the
@@ -7984,14 +8335,14 @@ extension Parser
 		return valueIsAParameter(value, paramCount: func.paramCount) and self.signatures.namesAServiceMessage(func.name)
 	end 'valueIsAMessageParameter'
 
-	function regionPayloadCount(bindings PayloadBindingArray, layout EnumLayout, consumedIsolatedUnion bool) returns ElementIndex
+	function regionPayloadCount(bindings PayloadBindingArray, layout EnumLayout) returns ElementIndex
 		var count = 0 as ElementIndex
 
 		for binding in bindings 'each'
 			let declared = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 
-			if self.payloadHoldsItsOwnRegion(binding.field, valueType: payloadValueTypeOf(class, declared: declared), consumedIsolatedUnion: consumedIsolatedUnion) 'aRegionHolder'
+			if self.payloadHoldsItsOwnRegion(binding.field, valueType: payloadValueTypeOf(class, declared: declared)) 'aRegionHolder'
 				count = count + 1
 			end 'aRegionHolder'
 		end 'each'
@@ -7999,20 +8350,16 @@ extension Parser
 		return count
 	end 'regionPayloadCount'
 
-	function payloadHoldsItsOwnRegion(field PayloadField, valueType MaxonType, consumedIsolatedUnion bool) returns bool
-		if field.capability != ParamCapability.unmarked or self.signatures.typeIsAValueType(valueType, from: self.artifact.typeNames) 'notARegionHolder'
-			return false
-		end 'notARegionHolder'
-
-		return not consumedIsolatedUnion or not self.signatures.valueHoldsAUnique(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.artifact.typeNames)
+	function payloadHoldsItsOwnRegion(field PayloadField, valueType MaxonType) returns bool
+		return field.capability == ParamCapability.unmarked and not self.signatures.typeIsAValueType(valueType, from: self.artifact.typeNames)
 	end 'payloadHoldsItsOwnRegion'
 
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, standing ScrutineeStanding, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
 		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
-		let consumedIsolatedUnion = not self.valueIsLinear(scrutBox) and standing.consumesAnIsolatedHolder()
+		let consumedIsolatedUnion = self.matchConsumesItsSubject(scrutBox, standing: standing) and not self.valueIsLinear(scrutBox)
 		let ownsItsRegion = consumedIsolatedUnion or (self.valueIsLinear(scrutBox) and (self.valueIsAnOwnedIsolatedRegion(scrutBox) or (self.valueIsAMessageParameter(scrutBox) and self.valueTypeIsClosed(scrutBox))))
-		let loneRegionPayload = ownsItsRegion and self.regionPayloadCount(bindings, layout: layout, consumedIsolatedUnion: consumedIsolatedUnion) == 1
+		let loneRegionPayload = ownsItsRegion and self.regionPayloadCount(bindings, layout: layout) == 1
 		let handedBack = self.signatures.isServiceSendError(layout.name)
 
 		for binding in bindings 'each'
@@ -8035,7 +8382,7 @@ extension Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordKeyOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
-			let regionPayload = ownsItsRegion and self.payloadHoldsItsOwnRegion(binding.field, valueType: payloadValueTypeOf(class, declared: declared), consumedIsolatedUnion: consumedIsolatedUnion)
+			let regionPayload = ownsItsRegion and self.payloadHoldsItsOwnRegion(binding.field, valueType: payloadValueTypeOf(class, declared: declared))
 
 			if regionPayload 'ownsItsOwnRegion'
 				self.setValueCapability(loaded, capability: ValueCapability.mutable)
@@ -8056,7 +8403,7 @@ extension Parser
 				self.registerFreshLocal(loaded, binding: bindingInfo)
 			end 'aPayloadNoOtherSlotNames'
 
-			if handedBack and self.valueIsLinear(loaded) and not self.valueIsAValueType(loaded) and self.valueTypeIsClosed(loaded) 'aHandedBackLinearArgument'
+			if handedBack and self.valueIsLinear(loaded) and not self.valueIsAValueType(loaded) 'aHandedBackLinearArgument'
 				self.setValueCapability(loaded, capability: ValueCapability.isolated)
 			end 'aHandedBackLinearArgument'
 
@@ -8097,7 +8444,13 @@ extension Parser
 				// either representation.
 				let take = self.payloadTakeOf(standing, loaded: loaded, slotIsEmptiable: true)
 				let isolatedPayload = standing.isolatedPayloadStanding(binding.field.capability)
-				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range, isolatedPayload: isolatedPayload)
+
+				if standing.consumesAnIsolatedHolder() 'theWordIsReleasedInTheArm'
+					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
+				end 'theWordIsReleasedInTheArm' else 'theWordOutlivesTheArm'
+					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range, isolatedPayload: isolatedPayload)
+				end 'theWordOutlivesTheArm'
+
 				self.noteLentIsolatedPayload(loaded, isolatedPayload: isolatedPayload)
 				movedManaged = take == PayloadTake.movedOut or isolatedPayload == IsolatedPayloadStanding.ownedHere or movedManaged
 			end 'aWordPayload' else if payloadClassIsManaged(class) 'managedPayload'
@@ -8203,7 +8556,7 @@ extension Parser
 	end 'retainBorrowedPayload'
 
 	function payloadTakeOf(standing ScrutineeStanding, loaded ValueId, slotIsEmptiable bool) returns PayloadTake
-		if standing.ownsTheBoxAlone() and slotIsEmptiable and not self.valueHoldsAUniqueRecord(loaded) 'theOnlyOwnerTakesIt'
+		if standing.ownsTheBoxAlone() and slotIsEmptiable and (standing.consumesAnIsolatedHolder() or not self.valueHoldsAUniqueRecord(loaded)) 'theOnlyOwnerTakesIt'
 			return PayloadTake.movedOut
 		end 'theOnlyOwnerTakesIt'
 

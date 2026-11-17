@@ -26066,6 +26066,79 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ah-i3-field-write-before -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `i3-field-write-before` of redteamAH.hand_ah5, in capmodel `reggio/REPORTRTAH.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mq
+	m0(x Rl)
+	m1(y Wo)
+end 'Mq'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+function main() returns ExitCode
+	let w = Wo.create(Bx.create(0), item: Bx.create(1))
+	w.keep.n = 4
+	let u = Mq.m1(w) as isolated Mq
+	match u 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.keep.n = 2
+	end 'x1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ah-i3-field-replace-before -->
 The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `i3-field-replace-before` of redteamAH.hand_ah5, in capmodel `reggio/REPORTRTAH.txt`.
 
@@ -28695,6 +28768,105 @@ end 'main'
 error E3200: <fragment>:73:13: 'u' crosses to the service it is sent to only as the whole of its region, and 'Mp' is not closed: 'Mp.y' is a plain 'Bx' that other code may still name. Declare 'y' `isolated`, pass a fresh value, or consume the value here
 ```
 
+<!-- test: model-hand-aj-handback-iso -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `handback-iso` of redteamAJ.hand_aj1, in capmodel `reggio/REPORTRTAJ.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Sm
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeI(m isolated Mp)
+		eatMp(m)
+	end 'takeI'
+
+	export function take(m Mp)
+		eatMp(m)
+	end 'take'
+end 'Sm'
+
+function eatMp(m Mp)
+	match m 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.n = 1
+	end 'x1'
+end 'eatMp'
+
+function takeMpI(m isolated Mp)
+	eatMp(m)
+end 'takeMpI'
+
+function f(m Mp)
+	let k = spawn Sm.create(0)
+	try k.take(Mp.m0(Rl.create(1))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then takeMpI(q)
+			serviceStopped(q) then takeMpI(q)
+		end 'x2'
+	end 'h1'
+	eatMp(m)
+end 'f'
+
+function main() returns ExitCode
+	let b = Bx.create(1)
+	let m = Mp.m1(b)
+	f(m)
+	b.n = 5
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-aj-arr-unique-plain -->
 The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `arr-unique-plain` of redteamAJ.hand_aj1, in capmodel `reggio/REPORTRTAJ.txt`.
 
@@ -30861,6 +31033,94 @@ end 'main'
 error E3200: <fragment>:55:11: 'm' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
+<!-- test: model-hand-fa16-handback-fresh-isolated -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `handback-fresh-isolated` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Sm2
+	var n as Num
+	var keep as Bx
+
+	static function create(n Num, keep isolated Bx) returns Self
+		return Self{n: n, keep: merge keep}
+	end 'create'
+
+	export function take(m Mp)
+		match m 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then self.keep = y
+		end 'x1'
+	end 'take'
+end 'Sm2'
+
+function takeMpI(m isolated Mp)
+	match m 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.n = 2
+	end 'x1'
+end 'takeMpI'
+
+function main() returns ExitCode
+	let k = spawn Sm2.create(0, keep: Bx.create(0))
+	let m = Mp.m1(Bx.create(1))
+	try k.take(m) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then takeMpI(q)
+			serviceStopped(q) then takeMpI(q)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa16-handback-relayed-owned-param -->
 The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `handback-relayed-owned-param` of redteamFA16.hand_fa16c, in capmodel `reggio/REPORTFA16.txt`.
 
@@ -32912,6 +33172,157 @@ function main() returns ExitCode
 		match sendFailure 'x2'
 			mailboxFull(z) then eatMx(z)
 			serviceStopped(z) then eatMx(z)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa23-p4-hb-to-iso -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p4-hb-to-iso` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Sm2
+	var n as Num
+	var keep as Bx
+
+	static function create(n Num, keep isolated Bx) returns Self
+		return Self{n: n, keep: merge keep}
+	end 'create'
+
+	export function take(m Mp)
+		match m 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then self.keep = y
+		end 'x1'
+	end 'take'
+end 'Sm2'
+
+function takeMpI(m isolated Mp)
+	match m 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.n = 2
+	end 'x1'
+end 'takeMpI'
+
+function main() returns ExitCode
+	let k = spawn Sm2.create(0, keep: Bx.create(0))
+	try k.take(Mp.m1(Bx.create(1))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then takeMpI(q)
+			serviceStopped(q) then takeMpI(q)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa23-p4-hb-rec-to-iso -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p4-hb-rec-to-iso` of redteamFA23.hand_fa23, in capmodel `reggio/REPORTFA23.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type RpL
+	var b as Bx
+	var code as Num
+
+	static function create(b Bx, code Num) returns Self
+		return Self{b: b, code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'RpL'
+
+type Sr
+	var n as Num
+	var keep as Bx
+
+	static function create(n Num, keep isolated Bx) returns Self
+		return Self{n: n, keep: merge keep}
+	end 'create'
+
+	export function take(r RpL)
+		r.fin(1)
+	end 'take'
+
+	export function takeI(r isolated RpL)
+		r.fin(1)
+	end 'takeI'
+end 'Sr'
+
+function takeRI(r isolated RpL)
+	r.fin(1)
+end 'takeRI'
+
+function main() returns ExitCode
+	let k = spawn Sr.create(0, keep: Bx.create(0))
+	try k.take(RpL.create(Bx.create(1), code: 1)) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(q) then takeRI(q)
+			serviceStopped(q) then takeRI(q)
 		end 'x2'
 	end 'h1'
 	return 0

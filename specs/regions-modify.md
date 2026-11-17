@@ -1327,7 +1327,7 @@ end 'Holder'
 function main() returns ExitCode
 	var holder = Holder.create()
 	var spare = Bag.create()
-	spare.text = "changed"
+	print("{spare.text}\n")
 	holder.part = spare
 	return 0
 end 'main'
@@ -2124,7 +2124,7 @@ end 'Box'
 function main() returns ExitCode
 	var a = Box.create(1) as isolated Box
 	var spare = Box.create(2)
-	spare.n = 3
+	print("{spare.n}\n")
 	var e = a
 	e = spare
 	print("{e.n}\n")
@@ -3364,4 +3364,296 @@ end 'main'
 ```
 ```maxoncstderr
 error E3204: <fragment>:30:3: 'x' holds a service handle from outside 'm' and cannot be reassigned while 'm' is open
+```
+
+<!-- test: error.the-root-consumed-inside-its-own-modify-is-refused -->
+Only the region's contents are open inside `modify r`; the variable cannot be consumed there.
+```maxon
+typealias Code = int(0 to 1000)
+
+type Reply
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function finish(consuming self, c Code)
+		let _ = c
+		destruct self
+	end 'finish'
+end 'Reply'
+
+function main() returns ExitCode
+	let r = Reply.create(0) as isolated Reply
+
+	modify r 'open'
+		r.finish(1)
+	end 'open'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:21:13: 'r' is open in 'open' and cannot be moved or consumed there; consume it after the block
+```
+
+<!-- test: error.modify-on-a-temporary-is-refused -->
+No writable reference holds a call result, so there is nothing for `modify` to open.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function make() returns isolated Box
+	return Box.create(0)
+end 'make'
+
+function main() returns ExitCode
+	modify make() 'open'
+		print("inside\n")
+	end 'open'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:17:9: no writable reference holds 'make()': `modify` opens a local, a parameter, or a field or element path; bind the value to a local and modify that
+```
+
+<!-- test: error.outer-linear-data-consumed-inside-a-modify-is-refused -->
+`o` is outer data of the open window, read-only there, so the `match` cannot consume it.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Reply
+	var code as Count
+
+	static function create(code Count) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function finish(consuming self, c Count)
+		let _ = c
+		destruct self
+	end 'finish'
+end 'Reply'
+
+union Outcome
+	done
+	pending(r Reply)
+end 'Outcome'
+
+function main() returns ExitCode
+	let b = Box.create(0) as isolated Box
+	let o = Outcome.pending(Reply.create(1))
+
+	modify b 'open'
+		match o 'which'
+			done then break
+			pending(r) then r.finish(1)
+		end 'which'
+	end 'open'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:35:3: this linear value comes from outside 'open', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'open'
+```
+
+<!-- test: error.standing-is-not-laundered-through-a-union-payload -->
+`u` is built inside `w` from `v`, which is older than `w`, so `u` and the payload `r` the consuming `match` hands over keep `v`'s standing: an outer isolated value there, which a plain parameter may not take (ruling 45).
+```maxon
+typealias Code = int(0 to 999)
+
+type Rl
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Rl'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Bx
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'm'
+		ok then break
+		notSent(r) then r.fin()
+	end 'm'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+
+	modify bx 'w'
+		let u = Sh.held(v) as isolated Sh
+
+		match u 'x'
+			none then break
+			held(r) then useS(giveS(r))
+		end 'x'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:54:28: an isolated value from outside 'w' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'w' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
+<!-- test: error.standing-is-not-laundered-through-a-recovered-record -->
+`p` is built inside `w` from `v`, which is older than `w`, so `p` keeps `v`'s standing and is not opened there (ruling 45).
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap
+	var b as isolated Box
+
+	static function create(b isolated Box) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Wrap'
+
+function main() returns ExitCode
+	let bx = Box.create(0) as isolated Box
+	let v = Box.create(1) as isolated Box
+
+	modify bx 'w'
+		let p = Wrap.create(v) as isolated Wrap
+
+		modify p 'inner'
+			print("inner\n")
+		end 'inner'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:27:10: 'p' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: error.standing-is-not-laundered-through-an-isolated-call-result -->
+`wrapIt(v)` hands back a region that holds `v`, which is older than `w`, so `p` keeps `v`'s standing (ruling 45).
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrap
+	var b as isolated Box
+
+	static function create(b isolated Box) returns Self
+		return Self{b: b}
+	end 'create'
+end 'Wrap'
+
+function wrapIt(b isolated Box) returns isolated Wrap
+	return Wrap.create(b)
+end 'wrapIt'
+
+function main() returns ExitCode
+	let bx = Box.create(0) as isolated Box
+	let v = Box.create(1) as isolated Box
+
+	modify bx 'w'
+		let p = wrapIt(v)
+
+		modify p 'inner'
+			print("inner\n")
+		end 'inner'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:31:10: 'p' cannot be opened: the value that holds it is read-only while 'w' is open
+```
+
+<!-- test: error.standing-is-not-laundered-through-a-rename -->
+`p` is `v` under a new name, declared inside `w`, so it keeps `v`'s standing (ruling 41).
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let bx = Box.create(0) as isolated Box
+	let v = Box.create(1) as isolated Box
+
+	modify bx 'w'
+		let p = v
+
+		modify p 'inner'
+			print("inner\n")
+		end 'inner'
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:19:10: 'p' cannot be opened: the value that holds it is read-only while 'w' is open
 ```

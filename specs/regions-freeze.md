@@ -55,7 +55,7 @@ end 'main'
 ```
 
 <!-- test: freeze-of-a-mutable-local-refused -->
-`cursor` was written as ordinary mutable data, so it belongs to the current region and cannot be frozen in place.
+`cursor` is read as ordinary mutable data before the `freeze`, so other code may still name it: it belongs to the current region and cannot be frozen in place.
 
 ```maxon
 typealias Coord = int(0 to 1024)
@@ -71,14 +71,14 @@ end 'Point'
 
 function main() returns ExitCode
 	var cursor = Point.create(0, y: 0)
-	cursor.x = 1
+	print("{cursor.x}\n")
 	let pinned = freeze cursor
 	print("{pinned.x}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:16:22: 'cursor' is used as mutable at line 15; freeze a copy: `freeze cursor.clone()`
+error E3200: <fragment>:16:22: 'cursor' is used as mutable at line 14; freeze a copy: `freeze cursor.clone()`
 ```
 
 <!-- test: use-after-freeze -->

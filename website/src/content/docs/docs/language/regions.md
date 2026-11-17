@@ -283,7 +283,8 @@ A local initialised from a fresh value (`let spare = Bag.create()`) goes into an
 time the program reads it: an `isolated` parameter or slot, the initializer of an `isolated` declaration
 (`let keep = Slot.holding(spare) as isolated Slot` reads it inside the union literal), `freeze` and `merge`.
 That read moves the local, so a later read is **E3102**. A local the program read earlier and one with a second
-name are ordinary mutable data and **E3200** (`specs/regions-recover.md`).
+name are ordinary mutable data and **E3200** (`specs/regions-recover.md`). Writing a value into one of its fields
+(`spare.n = 4`) takes no reference out of it and is not such a read.
 
 A local assigned a fresh value (`spare = Bag.create()`) is fresh in the same way, from that assignment on. Where
 an `if`, a `match` or a statement `try` joins fresh values, the joined local is fresh until some path has read
@@ -331,12 +332,12 @@ The index is filled in a region of its own and frozen on return; `specs/regions-
 (`build-then-freeze-runs`) runs the whole program. `modify` on a name that is not `isolated` is **E3198**
 (``'counter' is not isolated; 'modify' opens an isolated value. Declare it `as isolated Counter` ``). Opening,
 swapping, sending or freezing a region needs a writable holder, so one reached through read-only data is
-**E3199**.
+**E3199**, and so is `modify` of a temporary such as a call result: bind it to a local first.
 
 Inside a block:
 
 - Only the region's contents are writable. The slot holding `x` cannot be reassigned or passed by reference
-  in its own block (**E3203**). An outer `var` that holds anything but a number, `bool`, enum, payload-free
+  in its own block, and it cannot be moved or consumed there (**E3203**). An outer `var` that holds anything but a number, `bool`, enum, payload-free
   union, `String` or `Character` cannot be reassigned (**E3204**); the message names what it holds (``'keep' holds
   a linear value from outside 'fill' and cannot be reassigned while 'fill' is open``).
 - A mutable value cannot leave the block by `return`, by `throw` or by an outer variable (**E3202**): what
@@ -361,9 +362,13 @@ Inside a block:
   only reads `self` and ends in `destruct self` is accepted. An `isolated` value older than the innermost open
   block stays outside it through every rename inside it: a local it is moved into, the `isolated` result of a call
   it is moved into, the payload a `match` of it binds, the value a failed send hands back in `mailboxFull` or
-  `serviceStopped`, and a `mutable isolated` parameter, which is the caller's variable. Such a value is not opened
+  `serviceStopped`, and a `mutable isolated` parameter, which is the caller's variable. A union or a recovered
+  record built inside the block from such a value holds it with the same standing. Such a value is not opened
   inside the block (**E3199**) and still goes where an `isolated` value goes. A `mutable isolated` parameter open
   in its own block is read inside a block nested in it.
+- A linear value from outside the block is read-only inside it, so consuming it there is **E3207**: a finalizer
+  call, a `match` over a linear union or a move into a parameter that takes it. A linear parameter whose type
+  holds a plain part is such a value too. Consume it before or after the block.
 - Outside every open block, a method of an `isolated` receiver takes an un-opened `isolated` local of a linear type
   into a parameter it owns: `bx.eat(v)` moves `v`, and its region joins the receiver's. A non-linear `isolated`
   local, or a plain linear local, beside the opened receiver is **E3201**, and the call inside a `modify` block is
@@ -488,10 +493,15 @@ to a parameter that keeps it: move it out with `pop`, `remove`, `removeFirst` or
 of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
 readable, and an element a container call hands back is lent for the call in the same way:
 `show(items.get(0))` reads it, and `let ticket = items.get(0)` is **E3214**. A `match` over a unique union lends
-it to its arms: the variable that holds the matched union (its name, the record whose field is matched, or an
-operand of a `cond` scrutinee) is not moved, copied, stored, captured or passed to a parameter that keeps it
-inside an arm (**E3214**), while a call that only reads it is accepted; move or copy it before or after the
-`match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
+it to its arms: each variable the subject comes from (the matched name, the record whose field is matched, and
+the operands of a `cond`, a `match` expression or a `try … otherwise` subject, at any depth) is not moved,
+copied, stored, captured or passed to a parameter that keeps it inside an arm (**E3214**), while a call that only
+reads it is accepted; move or copy it before or after the `match`. The roots of a `cond` subject stay put in
+every arm, the arms that bind nothing included: reassigning one, rebinding it in a tuple assignment or passing it
+by reference is **E3203**, and when the union has a unique or `isolated` payload the roots are also read-only
+there (**E3197**). A variable the `match` holds is not a message or `spawn` factory argument, a reply or an
+argument at an `isolated` parameter inside any of its arms (**E3214**), and a call that may hand it back is
+**E3200** where its result crosses; send it before or after the `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
 own a unique value there: one read from a field or an element, lent by a loop, a tuple or a `match`, or
 borrowed through a `mutable` parameter is **E3214**, and an owned one crosses only as the whole of its region
 ([What crosses a message](/docs/language/async/#services--spawn)).
@@ -508,8 +518,10 @@ it. Apply the use inside each arm instead, as `f(t) if c else f(fresh)` does.
 
 One unique value named at two operands of one call, tuple, struct literal or case payload is **E3102**
 (``'q' is passed at two arguments of this call, and a unique value has one name; pass it once``; a tuple, a
-literal and a case say elements, fields and payloads): the operands would hold two names for one value. A merge
-that may be the value names it, and so does an operand that moves it after an earlier operand lent it, such as a
+literal and a case say elements, fields and payloads): the operands would hold two names for one value. Two
+places of one root where one path leads to the other (`h` and `h.t`) name one value as well, in either order,
+while a plain part of the root (`h.data`) beside it does not. A merge that may be the value names it (a `gives`
+arm of a `match` expression included), and so does an operand that moves it after an earlier operand lent it, such as a
 nested call or tuple that keeps it or a closure that captures it. Name the value once.
 
 The standard library's `Promise` is
@@ -598,6 +610,12 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
 - **A `match` consumes the union on its own path.** Each branch of an `if`, and the body and the handler of an
   `acquire`, may match the same union, and a read after the join is **E3102** when any path matched it. The same
   holds for a union with a managed payload that is not linear.
+- **A `match` consumes or lends its subject, decided once at its head.** A linear union, a union that holds a
+  `Reply`, an `isolated` subject that is not open (a variable or a temporary) and a message parameter without a
+  marker are consumed there, in every arm alike: a read of the subject in any arm, or after the `match` on a path
+  no arm refilled, is **E3102**, and an arm that binds nothing consumes it too. Any other `match` lends its
+  subject and consumes nothing; its holds are described under [Unique Types](#unique-types) and
+  [Match Arms That Lend an `isolated` Payload](#match-arms-that-lend-an-isolated-payload).
 - **A union held in an `isolated` local, an `isolated` parameter or a behaviour's message parameter is matched where
   it stands.** The `match` hands its payloads over as fresh owned values: the lone plain payload of its case goes
   where an `isolated` value goes (an `isolated` parameter or slot, `freeze`, `merge`), and inside an open `modify`
@@ -636,8 +654,9 @@ type Pool uses T where T is sendable
 end 'Pool'
 ```
 
-`T is sendable` takes a value, a service handle or an `immutable` record: a plain record, which the caller
-keeps sharing, and a `unique` type, whose values move, are refused. `T is isolated` takes a value, a service
+`T is sendable` takes a value (a scalar, `String`, `Character`, `cstring`, or an aggregate that is not `unique`
+and owes no drop), a service or `SharedValue` handle, or `immutable` data that is not `unique`: a plain record,
+which the caller keeps sharing, and a `unique` type, whose values move, are refused. `T is isolated` takes a value, a service
 handle or a `unique` type. Every instantiation is checked against the bound, including an instance made
 through a type parameter, and a refusal is **E3215** (``'Job' is not sendable, so it cannot be 'T' of 'Pool',
 which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value
@@ -746,22 +765,22 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore) | storing a value of one capability where another is held |
 | [E3197](/docs/cli/error-codes/#e3197--semanticwritethroughreadonly) | a write through frozen or read-only data |
 | [E3198](/docs/cli/error-codes/#e3198--semanticisolatedreadoutsideblock) | an `isolated` value read outside a block, `modify` or `swap` of a value that is not `isolated` |
-| [E3199](/docs/cli/error-codes/#e3199--semanticisolatedholdernotwritable) | opening, swapping, sending or freezing a region held by read-only data |
+| [E3199](/docs/cli/error-codes/#e3199--semanticisolatedholdernotwritable) | opening, swapping, sending or freezing a region held by read-only data, and `modify` of a temporary |
 | [E3200](/docs/cli/error-codes/#e3200--semanticisolatedrecoverneedscleaninputs) | ordinary mutable data where an `isolated` value is wanted, and `freeze` or `merge` of what they do not apply to |
 | [E3201](/docs/cli/error-codes/#e3201--semanticisolatedcallopenstworegions) | one statement reaching two isolated regions or two acquired states, mutable outer data beside one, or an outer `isolated` linear value moved into an open region |
 | [E3202](/docs/cli/error-codes/#e3202--semanticvalueleaveswindow) | a mutable value leaving a `modify` or `acquire` block, an acquired state leaving its block, a `mutable isolated` parameter moved out |
-| [E3203](/docs/cli/error-codes/#e3203--semanticopenedslotreassigned) | the slot of an open value reassigned in its own block |
+| [E3203](/docs/cli/error-codes/#e3203--semanticopenedslotreassigned) | the root of an open `modify` block, or of what a `match` or `for` lends, reassigned, rebound, passed by reference or moved while it is open |
 | [E3204](/docs/cli/error-codes/#e3204--semanticouterdatawritteninwindow) | an outer `var` holding anything but a number, `bool`, enum, payload-free union, `String` or `Character` reassigned in a block |
 | [E3205](/docs/cli/error-codes/#e3205--semanticwaitinsidewindow) | waiting or yielding inside a `modify` or `acquire` block or a one-call open |
 | [E3206](/docs/cli/error-codes/#e3206--semanticparamneedsbothcapabilities) | a parameter the body needs both mutable and immutable |
-| [E3207](/docs/cli/error-codes/#e3207--semanticargumentcapabilityrefused) | an argument whose capability the parameter refuses |
+| [E3207](/docs/cli/error-codes/#e3207--semanticargumentcapabilityrefused) | an argument whose capability the parameter refuses, and a linear value from outside an open block consumed in it |
 | [E3208](/docs/cli/error-codes/#e3208--semanticargumentclassesdisagree) | a result whose source arguments disagree |
 | [E3209](/docs/cli/error-codes/#e3209--semanticresultpathsdisagree) | a return that does not fit the declared result |
 | [E3210](/docs/cli/error-codes/#e3210--semanticcapabilityconversionrefused) | a function value or conformer that does more than its function type or requirement declares |
 | [E3211](/docs/cli/error-codes/#e3211--semanticmutablefunctionconversionrefused) | a `mutates captures` value called through frozen or read-only data |
 | [E3212](/docs/cli/error-codes/#e3212--semantictiedpromiserefused) | a tied promise returned, stored, captured, sent, passed on, or left unconsumed on an exit |
 | [E3213](/docs/cli/error-codes/#e3213--semanticpromisedropped) | a promise dropped, overwritten or discarded |
-| [E3214](/docs/cli/error-codes/#e3214--semanticuniquevaluerefused) | a unique value cloned, aliased, frozen or moved out of a slot it was only read from |
+| [E3214](/docs/cli/error-codes/#e3214--semanticuniquevaluerefused) | a unique value cloned, aliased, frozen, moved out of a slot it was only read from, or sent from an arm of the `match` that lends it |
 | [E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
 | [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) | a service type whose state can hold a promise |
 | [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable`, or whose type cannot cross at all (a promise holder, a function value, an opaque type parameter, a thread-bound handle) |

@@ -966,7 +966,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:45:14: 'giveS' needs a writable parameter 'r' at line 31; 'v' is read-only while 'm1' is open
+error E3207: <fragment>:45:8: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ad-h1-bind-first -->
@@ -1451,6 +1451,71 @@ end 'main'
 0
 ```
 
+<!-- test: model-finding-ae-union-payload-launder-iso -->
+The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3201. Model program `union-payload-launder-iso` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let v = Rl.create(0) as isolated Rl
+	modify bx 'm1'
+		let u = Sh.held(v) as isolated Sh
+		match u 'x2'
+			none then break
+			held(r) then useS(giveS(r))
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:53:28: an isolated value from outside 'm1' cannot be moved into the parameter 'r' of 'giveS', which keeps it while 'm1' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
+```
+
 <!-- test: model-finding-ae-union-payload-fn-wrap -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `union-payload-fn-wrap` of redteamAE/p1.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
@@ -1647,7 +1712,111 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:47:31: 'giveS' needs a writable parameter 'r' at line 31; 'q' is read-only while 'm1' is open
+error E3207: <fragment>:45:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
+<!-- test: model-finding-ae-outer-plain-union-match-in-modify-fin -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-match-in-modify-fin` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Sn.notSent(Rl.create(1))
+	modify bx 'm1'
+		match u 'x2'
+			ok then break
+			notSent(q) then q.fin(1)
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:34:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
+<!-- test: model-finding-ae-outer-plain-union-pass-in-modify -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-plain-union-pass-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function keepIt(s Sn) returns Sn
+	return s
+end 'keepIt'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Sn.notSent(Rl.create(1))
+	modify bx 'm1'
+		useS(keepIt(u))
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:45:8: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ae-outer-plain-linear-pass-in-modify -->
@@ -1703,7 +1872,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:45:14: 'giveS' needs a writable parameter 'r' at line 31; 'v' is read-only while 'm1' is open
+error E3207: <fragment>:45:8: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ae-outer-plain-linear-recv-in-modify -->
@@ -1759,7 +1928,71 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:45:8: 'wrap' needs a writable receiver at line 22; 'v' is read-only while 'm1' is open
+error E3207: <fragment>:45:10: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
+<!-- test: model-finding-ae-outer-iso-union-match-in-modify -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `outer-iso-union-match-in-modify` of redteamAE/p13.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Sh.held(Rl.create(1))
+	modify bx 'm1'
+		match u 'x2'
+			none then break
+			held(q) then useS(giveS(q))
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:50:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ae-w-match-consume-recv-wrap -->
@@ -1818,7 +2051,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:47:25: 'wrap' needs a writable receiver at line 22; 'q' is read-only while 'm1' is open
+error E3207: <fragment>:45:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ae-w-match-consume-param -->
@@ -1883,6 +2116,70 @@ end 'main'
 error E3207: <fragment>:45:31: 'giveS' needs a writable parameter 'r' at line 31; 'q' is read-only while 'm1' is open
 ```
 
+<!-- test: model-finding-ae-w-match-consume-nested-window -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-nested-window` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function giveS(r Rl) returns Sn
+	return Sn.notSent(r)
+end 'giveS'
+
+function useS(s Sn)
+	match s 'x1'
+		ok then break
+		notSent(r) then r.fin(1)
+	end 'x1'
+end 'useS'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Sn.notSent(Rl.create(1))
+	modify bx 'm1'
+		let u2 = Sn.notSent(Rl.create(2))
+		match u2 'x2'
+			ok then break
+			notSent(q) then useS(giveS(q))
+		end 'x2'
+		match u 'x3'
+			ok then break
+			notSent(q) then q.fin(1)
+		end 'x3'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:50:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
 <!-- test: model-finding-ae-w-match-consume-store-in-window-obj -->
 The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-store-in-window-obj` of redteamAE/p14.txt, in capmodel `reggio/REPORTRTAE.txt`.
 
@@ -1943,7 +2240,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:51:27: 'eat' needs a writable parameter 'r' (it calls 'giveS', which writes 'r'); 'q' is read-only while 'm1' is open
+error E3207: <fragment>:49:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ae-ro-union-iso-arm-write-modify -->
@@ -2130,7 +2427,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:52:32: 'giveS' needs a writable parameter 'r' at line 31; 'q' is read-only while 'm2' is open
+error E3207: <fragment>:50:4: this linear value comes from outside 'm2', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm2'
 ```
 
 <!-- test: model-finding-ae-w-match-consume-return -->
@@ -2184,6 +2481,58 @@ end 'main'
 ```
 ```maxoncstderr
 error E3202: <fragment>:34:27: 'q' is mutable and cannot leave 'm1'; a value leaving a modify block must be a value, immutable or a fresh isolated
+```
+
+<!-- test: model-finding-ae-w-match-consume-hold-in-window-obj -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `w-match-consume-hold-in-window-obj` of redteamAE/p17.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Hd
+	var k as Num
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+
+	function eat(r Rl)
+		r.fin(1)
+	end 'eat'
+end 'Hd'
+
+function main() returns ExitCode
+	let bx = Hd.create(0) as isolated Hd
+	let u = Sn.notSent(Rl.create(1))
+	modify bx 'm1'
+		match u 'x2'
+			ok then break
+			notSent(q) then bx.eat(q)
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:38:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-finding-ae-ro-field-iso-recv-call-writes-outer -->
@@ -2592,6 +2941,89 @@ end 'main'
 0
 ```
 
+<!-- test: model-finding-ae-iso-payload-in-modify-lend -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `iso-payload-in-modify-lend` of redteamAE/p5.txt, in capmodel `reggio/REPORTRTAE.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Sh.held(Rl.create(0))
+	modify bx 'm1'
+		match u 'x2'
+			none then break
+			held(r) then r.fin(1)
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:34:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
+<!-- test: model-hand-ab-w-modify-root-linear -->
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-linear` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	modify r 'm1'
+		r.fin(1)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:24:10: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
+```
+
 <!-- test: model-hand-ab-w-modify-root-linear-write -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `w-modify-root-linear-write` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
@@ -2628,8 +3060,44 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ab-w-modify-root-linear-moved-inside -->
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-linear-moved-inside` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	modify r 'm1'
+		let q = r
+		q.fin(1)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:24:11: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
+```
+
 <!-- test: model-hand-ab-w-modify-root-then-use -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-modify-root-then-use` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-root-then-use` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -2661,7 +3129,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:26:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+error E3203: <fragment>:24:10: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
 ```
 
 <!-- test: model-hand-ab-w-modify-return-inside -->
@@ -3265,6 +3733,53 @@ end 'main'
 error E3204: <fragment>:34:3: 'out' holds a linear value from outside 'm1' and cannot be reassigned while 'm1' is open
 ```
 
+<!-- test: model-hand-ab-w-modify-target-temp -->
+The model (`core-m3w-fa24`) refuses it by `C-HOLDER`; the compiler refuses it with E3199. Model program `w-modify-target-temp` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+end 'Resp'
+
+type Box
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function mkB() returns isolated Box
+	return Box.create(0)
+end 'mkB'
+
+function main() returns ExitCode
+	modify mkB() 'm1'
+		let r = Resp.create(0)
+		r.fin(1)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3199: <fragment>:34:9: no writable reference holds 'mkB()': `modify` opens a local, a parameter, or a field or element path; bind the value to a local and modify that
+```
+
 <!-- test: model-hand-ab-w-modify-two-linears -->
 The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-modify-two-linears` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
@@ -3406,8 +3921,51 @@ end 'main'
 error E3201: <fragment>:37:8: an isolated value from outside 'm1' cannot be moved into the parameter 'r' of 'useR', which keeps it while 'm1' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it
 ```
 
+<!-- test: model-hand-ad-w-modify-consume-root -->
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-consume-root` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function bump()
+		self.code = lg(1)
+	end 'bump'
+end 'Resp'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	modify r 'm1'
+		r.fin(1)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:32:10: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
+```
+
 <!-- test: model-hand-ad-w-modify-consume-root-after -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-modify-consume-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-consume-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3447,7 +4005,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:34:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+error E3203: <fragment>:32:10: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
 ```
 
 <!-- test: model-hand-ad-w-modify-bump -->
@@ -3494,8 +4052,55 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-ad-w-modify-pass-root -->
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-pass-root` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Resp
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function bump()
+		self.code = lg(1)
+	end 'bump'
+end 'Resp'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function useR(r Resp)
+	r.fin(1)
+end 'useR'
+
+function main() returns ExitCode
+	let r = Resp.create(0) as isolated Resp
+	modify r 'm1'
+		useR(r)
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:36:9: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
+```
+
 <!-- test: model-hand-ad-w-modify-pass-root-after -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-modify-pass-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `w-modify-pass-root-after` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -3539,7 +4144,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:38:2: use of moved value 'r': its ownership moved to another binding at an earlier bind or assignment
+error E3203: <fragment>:36:9: 'r' is open in 'm1' and cannot be moved or consumed there; consume it after the block
 ```
 
 <!-- test: model-hand-ad-w-modify-inner-isolated -->
@@ -5645,6 +6250,71 @@ error E3224: <fragment>:23:6: the field 's' holds a linear value, and a linear v
 error E3214: <fragment>:36:21: cannot bind '_' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
+<!-- test: model-hand-af-s4-binder-named-like-outer-before-window -->
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `s4-binder-named-like-outer-before-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Sh
+	none
+	held(r isolated Rl)
+end 'Sh'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function main() returns ExitCode
+	let bx = Bx.create(0) as isolated Bx
+	let u = Sh.held(Rl.create(1))
+	modify bx 'm1'
+		match u 'x2'
+			none then break
+			held(bx) then bx.fin(1)
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:51:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
 <!-- test: model-hand-af-s10-binder-shadows-in-window -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `s10-binder-shadows-in-window` of redteamAF.hand_af3, in capmodel `reggio/REPORTRTAF.txt`.
 
@@ -6053,7 +6723,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:58:9: 'eatMp' needs a writable parameter 'u' at line 50; 'u' is read-only while 'm1' is open
+error E3207: <fragment>:58:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-af-p3-plain-mixed-fresh-in-modify -->
@@ -6679,7 +7349,7 @@ error E3200: <fragment>:59:10: 'Mz.m1(p, b: p) as isolated Mz' is not isolated: 
 ```
 
 <!-- test: model-hand-ag-t5-plain-var-mixed-store -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3196. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `t5-plain-var-mixed-store` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `t5-plain-var-mixed-store` of redteamAG.hand_ag1, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6750,11 +7420,125 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:63:27: cannot store a read-only 'Bx' into 'keep' while 'm1' is open; store a copy
+error E3207: <fragment>:61:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
+```
+
+<!-- test: model-hand-ag-bm-modify-keep -->
+The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-keep` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mr
+	m0(x Rl)
+	m1(y Hq)
+end 'Mr'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Bm
+	var n as Num
+	var item as isolated Wo
+	var plain as Bx
+	var hq as Hq
+
+	static function create(n Num, item isolated Wo, plain isolated Bx, hq isolated Hq) returns Self
+		return Self{n: n, item: item, plain: merge plain, hq: merge hq}
+	end 'create'
+
+	function putKeep(b Bx)
+		self.item.keep = b
+	end 'putKeep'
+
+	export function eat(u Mr)
+		modify self.item 'm1'
+			match u 'x2'
+				m0(x) then x.fin(1)
+				m1(y) then self.item.keep = y
+			end 'x2'
+		end 'm1'
+	end 'eat'
+end 'Bm'
+
+function eatMr(pV Mr)
+	match pV 'x1'
+		m0(x) then x.fin(1)
+		m1(y) then y.q.n = 1
+	end 'x1'
+end 'eatMr'
+
+function main() returns ExitCode
+	let k = spawn Bm.create(0, item: Wo.create(Bx.create(0), item: Bx.create(1)), plain: Bx.create(2), hq: Hq.create(Bx.create(3), q: Bx.create(4)))
+	try k.eat(Mr.m1(Hq.create(Bx.create(1), q: Bx.create(2)))) otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull(z) then eatMr(z)
+			serviceStopped(z) then eatMr(z)
+		end 'x2'
+	end 'h1'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into an isolated region takes values, immutable or isolated
+error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-bm-modify-keep-p -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3196, E3201. Model program `bm-modify-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-keep-p` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6864,11 +7648,11 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into an isolated region takes values, immutable or isolated
-error E3196: <fragment>:83:33: cannot store a read-only 'Bx' into 'keep' while 'm1' is open; store a copy
+error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-bm-modify-plain -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3197, E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-plain` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-plain` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6978,11 +7762,11 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into an isolated region takes values, immutable or isolated
-error E3197: <fragment>:83:16: cannot write 'plain' through 'self', which is read-only while 'm1' is open
+error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-bm-modify-hq -->
-The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3197, E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-hq` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-STORE`; the compiler refuses it with E3201, E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-modify-hq` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -7092,7 +7876,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3201: <fragment>:76:20: 'b' is mutable outside 'self.item'; a store into an isolated region takes values, immutable or isolated
-error E3197: <fragment>:83:16: cannot write 'hq' through 'self', which is read-only while 'm1' is open
+error E3207: <fragment>:81:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-mi-modify-merge-keep -->
@@ -7992,7 +8776,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:58:22: 'keepIn' needs a writable parameter 'b' at line 49; 'y' is read-only while 'm1' is open
+error E3207: <fragment>:56:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-y-modify-store -->
@@ -9344,7 +10128,7 @@ error E3199: <fragment>:72:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ag-beh-win-mr-modify-item-store -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `beh-win-mr-modify-item-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `beh-win-mr-modify-item-store` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9448,7 +10232,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:78:16: cannot write 'p' through 'self.hq', which is read-only while 'm1' is open
+error E3207: <fragment>:76:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-fn-mr-keep -->
@@ -9538,7 +10322,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ag-fn-plain-mr-keep -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3196. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fn-plain-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-keep` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9620,7 +10404,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:70:24: cannot store a read-only 'Bx' into 'keep' while 'm1' is open; store a copy
+error E3207: <fragment>:68:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-fn-mr-keepfn -->
@@ -9800,11 +10584,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:74:22: 'keepIn' needs a writable parameter 'b' at line 66; 'y' is read-only while 'm1' is open
+error E3207: <fragment>:72:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-fn-plain-mr-write -->
-The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3197. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `fn-plain-mr-write` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `R4-ARG`; the compiler refuses it with E3207. Model program `fn-plain-mr-write` of redteamAG.hand_ag2, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -9886,7 +10670,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:70:15: cannot write 'n' through 'y.q', which is read-only while 'm1' is open
+error E3207: <fragment>:68:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-p-pass-store -->
@@ -10297,6 +11081,306 @@ function main() returns ExitCode
 			m1(y) then useHq(Hq.create(y, q: Bx.create(2)))
 		end 'x2'
 	end 'm1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-hb-fn-keepfn -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-keepfn` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+union Mr
+	m0(x Rl)
+	m1(y Hq)
+end 'Mr'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Cap1
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeMp(u Mp)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then y.n = 1
+		end 'x1'
+	end 'takeMp'
+
+	export function takeMr(u Mr)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then y.q.n = 1
+		end 'x1'
+	end 'takeMr'
+
+	export function busy()
+		var i = 1 as Num
+		var j = 1 as Num
+		while i != 0 'w1'
+			i = j
+			j = lg(0)
+		end 'w1'
+	end 'busy'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Cap1'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function keepIn(b Bx, w Wo)
+	w.keep = b
+end 'keepIn'
+
+function inWin(z isolated Mp, h isolated Wo)
+	modify h 'm1'
+		match z 'x2'
+			m0(x) then x.fin(1)
+			m1(y) then keepIn(y, w: h)
+		end 'x2'
+	end 'm1'
+end 'inWin'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 1) Cap1.create(0)
+	try k.busy() otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x2'
+	end 'h1'
+	try k.poke() otherwise (sendFailure) 'h3'
+		match sendFailure 'x4'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x4'
+	end 'h3'
+	let u = Mp.m1(Bx.create(1)) as isolated Mp
+	try k.takeMp(u) otherwise (sendFailure) 'h5'
+		match sendFailure 'x6'
+			mailboxFull(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
+			serviceStopped(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
+		end 'x6'
+	end 'h5'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-ag-hb-fn-none -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `hb-fn-none` of redteamAG.hand_ag21, in capmodel `reggio/REPORTRTAG.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Sn
+	ok
+	notSent(r Rl)
+end 'Sn'
+
+union Mp
+	m0(x Rl)
+	m1(y Bx)
+end 'Mp'
+
+union Mr
+	m0(x Rl)
+	m1(y Hq)
+end 'Mr'
+
+type Rl
+	var code as Num
+
+	static function create(code Num) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self, c Num)
+		let _ = c
+		destruct self
+	end 'fin'
+
+	function peek() returns Num
+		return self.code
+	end 'peek'
+
+	function set(c Num)
+		self.code = c
+	end 'set'
+
+	function wrap(consuming self) returns Sn
+		return Sn.notSent(self)
+	end 'wrap'
+end 'Rl'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wo
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(keep Bx, item isolated Bx) returns Self
+		return Self{keep: keep, item: item}
+	end 'create'
+end 'Wo'
+
+type Hq
+	var p as Bx
+	var q as Bx
+
+	static function create(p Bx, q Bx) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Hq'
+
+type Cap1
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function takeMp(u Mp)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then y.n = 1
+		end 'x1'
+	end 'takeMp'
+
+	export function takeMr(u Mr)
+		match u 'x1'
+			m0(x) then x.fin(1)
+			m1(y) then y.q.n = 1
+		end 'x1'
+	end 'takeMr'
+
+	export function busy()
+		var i = 1 as Num
+		var j = 1 as Num
+		while i != 0 'w1'
+			i = j
+			j = lg(0)
+		end 'w1'
+	end 'busy'
+
+	export function poke()
+		self.n = 1
+	end 'poke'
+end 'Cap1'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function inWin(z isolated Mp, h isolated Wo)
+	modify h 'm1'
+		match z 'x2'
+			m0(x) then x.fin(1)
+			m1 then break
+		end 'x2'
+	end 'm1'
+end 'inWin'
+
+function main() returns ExitCode
+	let k = spawn(capacity: 1) Cap1.create(0)
+	try k.busy() otherwise (sendFailure) 'h1'
+		match sendFailure 'x2'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x2'
+	end 'h1'
+	try k.poke() otherwise (sendFailure) 'h3'
+		match sendFailure 'x4'
+			mailboxFull then break
+			serviceStopped then break
+		end 'x4'
+	end 'h3'
+	let u = Mp.m1(Bx.create(1)) as isolated Mp
+	try k.takeMp(u) otherwise (sendFailure) 'h5'
+		match sendFailure 'x6'
+			mailboxFull(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
+			serviceStopped(z) then inWin(z, h: Wo.create(Bx.create(0), item: Bx.create(1)))
+		end 'x6'
+	end 'h5'
 	return 0
 end 'main'
 ```
@@ -11112,7 +12196,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:71:20: 'wrap' needs a writable receiver at line 35; 'x' is read-only while 'm1' is open
+error E3207: <fragment>:70:3: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ag-l15-wn-union-plain-linear -->
@@ -11745,7 +12829,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ah-f2-win-copy-no -->
-The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `f2-win-copy-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-SLOT`; the compiler refuses it with E3203. Model program `f2-win-copy-no` of redteamAH.hand_ah1, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11783,7 +12867,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:30:22: cannot move or copy the unique value matched by 'h.u' inside the arm that lends it: the arm's bindings view it, and a unique value has one name; move or copy it before or after the `match`
+error E3203: <fragment>:30:22: 'h' is open in 'm1' and cannot be moved or consumed there; consume it after the block
 ```
 
 <!-- test: model-hand-ah-f2-win-call-no -->
@@ -12270,11 +13354,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:91:16: 'keepP' needs a writable receiver at line 83; 'self' is read-only while 'm1' is open
+error E3207: <fragment>:89:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ah-m-svc-wi -->
-The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3197. Model program `m-svc-wi` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-WRITE`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m-svc-wi` of redteamAH.hand_ah3, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12392,7 +13476,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:91:16: cannot write 'item' through 'self', which is read-only while 'm1' is open
+error E3207: <fragment>:89:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ah-m-call-same -->
@@ -13808,7 +14892,7 @@ error E3199: <fragment>:82:10: 'h' cannot be opened: the value that holds it is 
 ```
 
 <!-- test: model-hand-ah-w-beh-store-iso-slot -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `w-beh-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-beh-store-iso-slot` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -13920,11 +15004,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:85:30: 'y' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated Bx`, or store a copy
+error E3207: <fragment>:83:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ah-w-beh-take -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `w-beh-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-beh-take` of redteamAH.hand_ah4, in capmodel `reggio/REPORTRTAH.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -14040,7 +15124,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:85:23: 'y' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3207: <fragment>:83:4: this linear value comes from outside 'm1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'm1'
 ```
 
 <!-- test: model-hand-ah-w-call-arg-match2 -->
@@ -14704,6 +15788,58 @@ end 'main'
 error E3102: <fragment>:47:8: use of moved value 'u': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: model-hand-ai-o3-open-both-branches-consume-after -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o3-open-both-branches-consume-after` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Ub.u1(Bx.create(5)) as isolated Ub
+	if lg(1) != 0 'i1'
+		modify u 'm2'
+			match u 'x3'
+				u0 then break
+				u1(o) then let _ = o.n
+			end 'x3'
+		end 'm2'
+	end 'i1' else 'e4'
+		modify u 'm5'
+			let _ = 1 as Num
+		end 'm5'
+	end 'e4'
+	match u 'x6'
+		u0 then break
+		u1(o) then takeB(o)
+	end 'x6'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ai-o4-consume-in-own-modify-arm -->
 The model (`core-m3w-fa24`) refuses it by `C-LEND`; the compiler refuses it with E3198. Model program `o4-consume-in-own-modify-arm` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
@@ -14740,6 +15876,48 @@ end 'main'
 ```
 ```maxoncstderr
 error E3198: <fragment>:26:21: 'o' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+```
+
+<!-- test: model-hand-ai-o5-own-modify-then-bare -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o5-own-modify-then-bare` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Ub.u1(Bx.create(5)) as isolated Ub
+	modify u 'm1'
+		match u 'x2'
+			u0 then break
+			u1(o) then o.n = 2
+		end 'x2'
+	end 'm1'
+	match u 'x3'
+		u0 then break
+		u1(o) then takeB(o)
+	end 'x3'
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: model-hand-ai-o7-own-modify-other-var-bare -->
@@ -22871,7 +24049,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-an-m1-iso-modify-nb-moves-whole -->
-The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3200. Model program `m1-iso-modify-nb-moves-whole` of redteamAN.hand_an1, in capmodel `reggio/REPORTRTAN.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-RECOVER`; the compiler refuses it with E3214. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `m1-iso-modify-nb-moves-whole` of redteamAN.hand_an1, in capmodel `reggio/REPORTRTAN.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -22916,7 +24094,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:37:20: 'k' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3214: <fragment>:37:20: cannot hand 'k' to an `isolated` position: 'k' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
 ```
 
 <!-- test: model-hand-an-n2-modify-holder-nb -->
@@ -23071,6 +24249,56 @@ function main() returns ExitCode
 		end 'x2'
 	end 'm1'
 	let _ = bk as isolated Bk
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-an-p1-call-plain-payload-send -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `p1-call-plain-payload-send` of redteamAN.hand_an3, in capmodel `reggio/REPORTRTAN.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UP
+	none
+	have(t Pb)
+end 'UP'
+
+type Pb
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Pb'
+
+type Kp
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(p isolated Pb)
+		modify p 'm1'
+			p.n = 9
+		end 'm1'
+	end 'take'
+end 'Kp'
+
+function mkUP() returns isolated UP
+	return UP.have(Pb.create(1))
+end 'mkUP'
+
+function main() returns ExitCode
+	let s = spawn Kp.create(0)
+	match mkUP() 'x1'
+		none then break
+		have(t) then try s.take(t) otherwise ignore
+	end 'x1'
 	return 0
 end 'main'
 ```
@@ -25252,6 +26480,108 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa15-m-pc-param-otherwin-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Wm
+	var keep as Bx
+	var item as isolated Bx
+	var u as Ub
+
+	static function create(keep Bx, item isolated Bx, u Ub) returns Self
+		return Self{keep: keep, item: item, u: u}
+	end 'create'
+end 'Wm'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(uV isolated Ub)
+		match uV 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(uV isolated Pc)
+		match uV 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(uV isolated Mq)
+		match uV 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function f(uV isolated Pc)
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	let h = Wm.create(Bx.create(0), item: Bx.create(1), u: Ub.u0) as isolated Wm
+	modify h 'm1'
+		match uV 'x2'
+			u0 then break
+			u1(o) then takeB(o)
+		end 'x2'
+	end 'm1'
+end 'f'
+
+function main() returns ExitCode
+	f(Pc.u1(Bx.create(5)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa15-m-pc-param-otherwin-readfn -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-pc-param-otherwin-readfn` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
@@ -25565,6 +26895,118 @@ end 'main'
 0
 ```
 
+<!-- test: model-hand-fa15-m-ut-let-otherwin-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-let-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Wm
+	var keep as Bx
+	var item as isolated Bx
+	var u as Ub
+
+	static function create(keep Bx, item isolated Bx, u Ub) returns Self
+		return Self{keep: keep, item: item, u: u}
+	end 'create'
+end 'Wm'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(uV isolated Ub)
+		match uV 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(uV isolated Pc)
+		match uV 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(uV isolated Mq)
+		match uV 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function main() returns ExitCode
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	let uV = UT.have(Tk.create(5)) as isolated UT
+	let h = Wm.create(Bx.create(0), item: Bx.create(1), u: Ub.u0) as isolated Wm
+	modify h 'm1'
+		match uV 'x2'
+			none then break
+			have(o) then takeT(o)
+		end 'x2'
+	end 'm1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-fa15-m-ut-param-otherwin-use -->
 The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-otherwin-use` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
 
@@ -25663,6 +27105,121 @@ function f(uV isolated UT)
 		match uV 'x2'
 			none then break
 			have(o) then let _ = o.n
+		end 'x2'
+	end 'm1'
+end 'f'
+
+function main() returns ExitCode
+	f(UT.have(Tk.create(5)))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa15-m-ut-param-otherwin-take -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `m-ut-param-otherwin-take` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Wm
+	var keep as Bx
+	var item as isolated Bx
+	var u as Ub
+
+	static function create(keep Bx, item isolated Bx, u Ub) returns Self
+		return Self{keep: keep, item: item, u: u}
+	end 'create'
+end 'Wm'
+
+type Kw
+	var n as Num
+	var keep as Bx
+	var item as isolated Bx
+
+	static function create(n Num, keep isolated Bx, item isolated Bx) returns Self
+		return Self{n: n, keep: merge keep, item: item}
+	end 'create'
+
+	export function putB(b isolated Bx)
+		self.item = b
+	end 'putB'
+
+	export function eatUb(uV isolated Ub)
+		match uV 'x1'
+			u0 then break
+			u1(o) then self.item = o
+		end 'x1'
+	end 'eatUb'
+
+	export function eatPc(uV isolated Pc)
+		match uV 'x1'
+			u0 then break
+			u1(o) then self.keep = o
+		end 'x1'
+	end 'eatPc'
+
+	export function eatMq(uV isolated Mq)
+		match uV 'x1'
+			q0(x) then self.keep = x
+			q1(y) then self.item = y
+		end 'x1'
+	end 'eatMq'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kw'
+
+function takeT(t isolated Tk)
+	let _ = t.n
+end 'takeT'
+
+function f(uV isolated UT)
+	let _ = spawn Kw.create(0, keep: Bx.create(0), item: Bx.create(0))
+	let h = Wm.create(Bx.create(0), item: Bx.create(1), u: Ub.u0) as isolated Wm
+	modify h 'm1'
+		match uV 'x2'
+			none then break
+			have(o) then takeT(o)
 		end 'x2'
 	end 'm1'
 end 'f'
@@ -26533,6 +28090,48 @@ function main() returns ExitCode
 			u1(o) then let _ = o.n
 		end 'x2'
 	end 'm1'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: model-hand-fa15-o-own-modify-reads-after -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `o-own-modify-reads-after` of redteamFA15.hand_fa15b, in capmodel `reggio/REPORTFA15.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function takeB(b isolated Bx)
+	let _ = b.n
+end 'takeB'
+
+function main() returns ExitCode
+	let u = Ub.u1(Bx.create(5)) as isolated Ub
+	modify u 'm1'
+		match u 'x2'
+			u0 then break
+			u1(o) then let _ = o.n
+		end 'x2'
+	end 'm1'
+	match u 'x3'
+		u0 then break
+		u1(o) then takeB(o)
+	end 'x3'
 	return 0
 end 'main'
 ```

@@ -3898,7 +3898,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3224: <fragment>:24:6: the field 'keep' holds a linear value, and a linear value lives only in locals, parameters and message arguments: a field would keep it past the code that must consume it
-error E3207: <fragment>:53:31: 'giveS' needs a writable parameter 'r' at line 37; 'q' is read-only while 'a1' is open
+error E3207: <fragment>:51:3: this linear value comes from outside 'a1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a1'
 ```
 
 <!-- test: model-finding-ae-w-match-consume-acquire -->
@@ -3963,7 +3963,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:51:31: 'giveS' needs a writable parameter 'r' at line 35; 'q' is read-only while 'a1' is open
+error E3207: <fragment>:49:3: this linear value comes from outside 'a1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a1'
 ```
 
 <!-- test: model-finding-ae-state-union-iso-arm-write -->
@@ -4640,8 +4640,7 @@ error E3201: <fragment>:54:11: one statement reaches through two isolated values
 ```
 
 <!-- test: model-hand-ab-w-acq-two-names-one-service -->
-<!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `w-acq-two-names-one-service` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
+The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w-acq-two-names-one-service` of redteamAB.hand_ab3, in capmodel `reggio/REPORTRTAB.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -4704,7 +4703,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:53:2: the linear value 'r' is live across this wait: a wait may never end, so a linear value is consumed before any call that waits, `await` or send that waits
+error E3207: <fragment>:54:5: this linear value comes from outside 'a1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a1'
 ```
 
 <!-- test: model-hand-ab-w-acq-nested -->
@@ -5919,8 +5918,7 @@ error E3102: <fragment>:42:3: use of moved value 'r': its ownership moved to ano
 ```
 
 <!-- test: model-hand-ad-a-acquire-consume-body -->
-<!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `a-acquire-consume-body` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a-acquire-consume-body` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -5978,13 +5976,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:48:2: this drops a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
-error E3223: <fragment>:48:2: the linear value 'r' is live across this wait: a wait may never end, so a linear value is consumed before any call that waits, `await` or send that waits
+error E3207: <fragment>:49:5: this linear value comes from outside 'a1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a1'
 ```
 
 <!-- test: model-hand-ad-a-acquire-consume-both -->
-<!-- unsupported-targets: wasm32-wasi -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3223. Model program `a-acquire-consume-both` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a-acquire-consume-both` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6042,7 +6038,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3223: <fragment>:48:2: the linear value 'r' is live across this wait: a wait may never end, so a linear value is consumed before any call that waits, `await` or send that waits
+error E3207: <fragment>:49:5: this linear value comes from outside 'a1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a1'
 ```
 
 <!-- test: model-hand-ad-a-acquire-consume-handler-only -->
@@ -6241,7 +6237,7 @@ end 'main'
 ```
 
 <!-- test: model-hand-ad-a-acquire-in-loop -->
-The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3102. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a-acquire-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
+The model (`core-m3w-fa24`) refuses it by `R-LIN-DROP`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a-acquire-in-loop` of redteamAD.hand_ad1, in capmodel `reggio/REPORTRTAD.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6303,7 +6299,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:51:4: use of moved value 'r': it was moved in an earlier iteration of this loop
+error E3207: <fragment>:51:6: this linear value comes from outside 'a2', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a2'
 ```
 
 <!-- test: model-hand-ad-a-acquire-state-method-consume -->
@@ -8720,7 +8716,7 @@ error E3197: <fragment>:87:16: cannot write 'hq' through 's', which is read-only
 ```
 
 <!-- test: model-hand-ag-bm-acquire-other -->
-The model (`core-m3w-fa24`) refuses it by `R13-NESTED`; the compiler refuses it with E3201. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-acquire-other` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
+The model (`core-m3w-fa24`) refuses it by `R13-NESTED`; the compiler refuses it with E3207. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `bm-acquire-other` of redteamAG.hand_ag12, in capmodel `reggio/REPORTRTAG.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -8843,7 +8839,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:91:26: 'y.p' is mutable outside 't'; a store into an isolated region takes values, immutable or isolated
+error E3207: <fragment>:89:4: this linear value comes from outside 'a1', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'a1'
 ```
 
 <!-- test: model-hand-ag-f1-control-acquire -->
@@ -11878,8 +11874,102 @@ end 'main'
 error E3102: <fragment>:87:8: use of moved value 'u': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: model-hand-ai-a6-handler-consumes-var-refill -->
+The model (`core-m3w-fa24`) accepts it and its oracle runs it clean; the compiler accepts it and the program exits 0. Model program `a6-handler-consumes-var-refill` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union Ub
+	u0
+	u1(b isolated Bx)
+end 'Ub'
+
+union Pc
+	u0
+	u1(b Bx)
+end 'Pc'
+
+union Mq
+	q0(x Bx)
+	q1(y isolated Bx)
+end 'Mq'
+
+type Bx
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+type Kz
+	var n as Num
+	var b as Bx
+
+	static function create(n Num, b isolated Bx) returns Self
+		return Self{n: n, b: merge b}
+	end 'create'
+
+	export function take(bV isolated Bx)
+		takeB(bV)
+	end 'take'
+
+	export function eat(u isolated Ub)
+		match u 'x1'
+			u0 then break
+			u1(o) then takeB(o)
+		end 'x1'
+	end 'eat'
+
+	export function eatMq(u isolated Mq)
+		match u 'x1'
+			q0(x) then x.n = 1
+			q1(y) then takeB(y)
+		end 'x1'
+	end 'eatMq'
+
+	export function eatPc(u isolated Pc)
+		match u 'x1'
+			u0 then break
+			u1(bV) then self.b = bV
+		end 'x1'
+	end 'eatPc'
+
+	export function plain() returns Num
+		return 5
+	end 'plain'
+end 'Kz'
+
+function takeB(bV isolated Bx)
+	let _ = bV.n
+end 'takeB'
+
+function main() returns ExitCode
+	let s = spawn Kz.create(0, b: Bx.create(0))
+	var u = Ub.u1(Bx.create(5)) as isolated Ub
+	acquire s 'a1'
+		let _ = 1 as Num
+	end 'a1' otherwise 's2'
+		match u 'x3'
+			u0 then break
+			u1(o) then takeB(o)
+		end 'x3'
+		u = Ub.u0
+	end 's2'
+	match u 'x4'
+		u0 then break
+		u1(o) then takeB(o)
+	end 'x4'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: model-hand-ai-a7-body-consumes-var-handler-refills -->
-The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3198. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a7-body-consumes-var-handler-refills` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa24`) refuses it by `E3102`; the compiler refuses it with E3102. Model program `a7-body-consumes-var-handler-refills` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -11968,11 +12058,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:75:21: 'o' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3102: <fragment>:80:8: use of moved value 'u': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: model-hand-ai-a8-body-consumes-and-refills -->
-The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3198. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `a8-body-consumes-and-refills` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
+The model (`core-m3w-fa24`) refuses it by `C-OUTER`; the compiler refuses it with E3204. Model program `a8-body-consumes-and-refills` of redteamAI.hand_ai5, in capmodel `reggio/REPORTRTAI.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -12062,7 +12152,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:75:21: 'o' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3204: <fragment>:77:3: 'u' holds an isolated value from outside 'a1' and cannot be reassigned while 'a1' is open
 ```
 
 <!-- test: model-hand-ai-a9-two-vars-acquire -->

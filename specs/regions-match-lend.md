@@ -1332,3 +1332,1097 @@ end 'main'
 ```stdout
 ok
 ```
+
+<!-- test: error.a-cond-subjects-roots-are-read-only-in-an-arm-that-binds-nothing -->
+The subject is a field path over a `cond`, and the union has a unique payload, so `h` and `g` are read-only holders in every arm, the arm that binds nothing included (ruling 48).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder is unique
+	var slot as Slot
+	var n as Count
+
+	static function create(slot Slot, n Count) returns Self
+		return Self{slot: slot, n: n}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(1)), n: 0)
+	let g = Holder.create(Slot.empty, n: 0)
+
+	match (h if h.n == 0 else g).slot 'which'
+		empty then h.n = 5
+		held then break
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:31:14: cannot write 'n' through 'h', which is read-only while 'which' lends a unique value out of it
+```
+
+<!-- test: error.a-cond-subjects-roots-stay-put-over-a-plain-union -->
+Over a union with only plain payloads the roots of a `cond` subject stay put in every arm: `first` is not reassigned there.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function pick(pickFirst bool) returns ExitCode
+	var first = Slot.held(Box.create(1))
+	let second = Slot.empty
+
+	match (first if pickFirst else second) 'which'
+		empty then break
+		held then first = Slot.empty
+	end 'which'
+
+	return 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(true)
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:23:13: 'first' roots what 'which' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: an-arm-that-binds-nothing-may-move-the-matched-variable -->
+A bare `match` guards its variable only in an arm that binds a payload (ruling 45): the `empty` arm hands `s` to a call that keeps it.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+function passOn(s Slot) returns Slot
+	return s
+end 'passOn'
+
+function count(s Slot) returns Count
+	return match s 'c'
+		empty gives 7
+		held(t) gives t.n
+	end 'c'
+end 'count'
+
+function main() returns ExitCode
+	let s = Slot.empty
+	var total = 0 as Count
+
+	match s 'which'
+		empty then total = count(passOn(s))
+		held(t) then total = t.n
+	end 'which'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.a-writing-lend-of-the-matched-variable-beside-a-binding-path-is-refused -->
+The statement names the arm's binding `t` as the root of `t.n`, not as a bare argument: `clear` still may not write through `s` there (ruling 45).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+function clear(s Slot, k Count)
+	match s 'c'
+		empty then break
+		held(t) then t.n = k
+	end 'c'
+end 'clear'
+
+function main() returns ExitCode
+	let s = Slot.held(Token.create(1))
+
+	match s 'which'
+		empty then break
+		held(t) then clear(s, k: t.n)
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:16: cannot lend 's' to parameter 's' of 'clear', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 's' in a statement that names no binding of the arm
+```
+
+<!-- test: error.a-bare-match-on-an-isolated-variable-moves-it-at-the-head -->
+The `match` consumes the `isolated` variable as it begins, whether or not an arm binds, so the arm that binds nothing cannot read it (ruling 45).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function peek(s Slot) returns Count
+	return match s 'p'
+		empty gives 0
+		held(b) gives b.n
+	end 'p'
+end 'peek'
+
+function main() returns ExitCode
+	let s = Slot.held(Box.create(3)) as isolated Slot
+
+	match s 'which'
+		empty then break
+		held then print("{peek(s)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:26: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-lending-match-leaves-a-plain-union-readable -->
+A `match` on a plain union lends and never consumes it, so a second `match` reads it again.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function main() returns ExitCode
+	let s = Slot.held(Box.create(3))
+	var total = 0 as Count
+
+	match s 'first'
+		empty then break
+		held(b) then total = b.n
+	end 'first'
+
+	match s 'second'
+		empty then break
+		held(b) then total = total + b.n
+	end 'second'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: a-match-inside-its-own-modify-leaves-the-isolated-variable-readable -->
+Inside its own `modify` the variable is open region data and the `match` lends; after the block the bare `match` consumes it and hands the payload over owned.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function take(b isolated Box) returns Count
+	return b.n
+end 'take'
+
+function main() returns ExitCode
+	let s = Slot.held(Box.create(3)) as isolated Slot
+
+	modify s 'open'
+		match s 'inner'
+			empty then break
+			held(b) then b.n = 8
+		end 'inner'
+	end 'open'
+
+	match s 'after'
+		empty then break
+		held(b) then print("{take(b)}\n")
+	end 'after'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+```
+
+<!-- test: a-consumed-isolated-unions-lone-unique-payload-goes-to-an-isolated-parameter -->
+The bare `match` consumes the `isolated` variable, so its lone unique payload is owned and goes to an `isolated` parameter.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+function take(t isolated Token) returns Count
+	return t.n
+end 'take'
+
+function main() returns ExitCode
+	let s = Slot.held(Token.create(5)) as isolated Slot
+
+	match s 'which'
+		empty then break
+		held(t) then print("{take(t)}\n")
+	end 'which'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: a-consumed-isolated-var-refilled-on-every-path-is-matched-again -->
+The first `match` consumes `s`; both branches refill it before the second `match` consumes it again (ruling 33's W2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function take(b isolated Box) returns Count
+	return b.n
+end 'take'
+
+function main() returns ExitCode
+	var s = Slot.held(Box.create(3)) as isolated Slot
+	var total = 0 as Count
+
+	if total == 0 'refill'
+		match s 'first'
+			empty then break
+			held(b) then total = take(b)
+		end 'first'
+
+		s = Slot.empty
+	end 'refill' else 'other'
+		s = Slot.empty
+	end 'other'
+
+	match s 'second'
+		empty then break
+		held(b) then total = total + take(b)
+	end 'second'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: a-consumed-isolated-union-falls-through-into-a-payload-free-arm -->
+The bare `match` consumes `p` once: the `full` arm releases it and falls through, and the `empty` arm, entered either way, releases nothing more.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Pack
+	empty
+	full(b Box, label String)
+end 'Pack'
+
+function fromFull(n Count) returns Count
+	let p = Pack.full(Box.create(n), label: "full") as isolated Pack
+	var total = 0 as Count
+
+	match p 'which'
+		full(b, _) then total = b.n and fallthrough
+		empty then total = total + 1
+	end 'which'
+
+	return total
+end 'fromFull'
+
+function fromEmpty() returns Count
+	let p = Pack.empty as isolated Pack
+	var total = 0 as Count
+
+	match p 'which'
+		full(b, _) then total = b.n and fallthrough
+		empty then total = total + 1
+	end 'which'
+
+	return total
+end 'fromEmpty'
+
+function main() returns ExitCode
+	print("{fromFull(3)} {fromEmpty()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 1
+```
+
+<!-- test: error.a-writing-lend-of-the-matched-variable-beside-a-binding-in-a-gives-arm-is-refused -->
+The `gives` arm's call names the arm's binding `t` as the root of `t.n`, so `bump` may not write through `s` there either.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+function bump(s Slot, k Count) returns Count
+	match s 'c'
+		empty then break
+		held(t) then t.n = k
+	end 'c'
+
+	return k
+end 'bump'
+
+function main() returns ExitCode
+	let s = Slot.held(Token.create(1))
+
+	let total = match s 'which'
+		empty gives 0
+		held(t) gives bump(s, k: t.n)
+	end 'which'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:31:17: cannot lend 's' to parameter 's' of 'bump', which writes through it, in a call that also names a binding of the arm: the binding views the matched value, and a unique value has one name; write through 's' in a statement that names no binding of the arm
+```
+
+<!-- test: a-consumed-isolated-union-from-a-co-owned-holder-releases-its-payloads-once -->
+Each bare `match` consumes an `isolated` union this frame may not own alone: a call's result, a word union from a call, and an `isolated` parameter. The payload is retained out of the box and the box is released at the arm's head, so the `_` payload goes with the box.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Pack
+	empty
+	full(b Box, label String)
+end 'Pack'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function makePack(n Count) returns isolated Pack
+	return Pack.full(Box.create(n), label: "pack {n}")
+end 'makePack'
+
+function makeSlot(n Count) returns isolated Slot
+	return Slot.held(Box.create(n))
+end 'makeSlot'
+
+function openPack(p isolated Pack) returns Count
+	return match p 'm'
+		empty gives 0
+		full(b, _) gives b.n
+	end 'm'
+end 'openPack'
+
+function main() returns ExitCode
+	var total = 0 as Count
+
+	match makePack(1) 'fromACall'
+		empty then break
+		full(b, label) then print("{label} {b.n}\n")
+	end 'fromACall'
+
+	match makeSlot(2) 'aWord'
+		empty then break
+		held(b) then total = total + b.n
+	end 'aWord'
+
+	let p = Pack.full(Box.create(4), label: "four") as isolated Pack
+	total = total + openPack(p)
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+pack 1 1
+6
+```
+
+<!-- test: a-consumed-isolated-message-parameter-releases-its-payloads-once -->
+The message's bare `match` consumes its `isolated` parameter and hands the managed payload over; the `_` payload goes with the box.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Pack
+	empty
+	full(b Box, label String)
+end 'Pack'
+
+type Opener
+	var opened as Count
+
+	static function create() returns Self
+		return Self{opened: 0}
+	end 'create'
+
+	export function open(p isolated Pack) returns Count
+		self.opened = self.opened + 1
+
+		return match p 'm'
+			empty gives 0
+			full(b, _) gives b.n
+		end 'm'
+	end 'open'
+end 'Opener'
+
+function main() returns ExitCode
+	let o = spawn Opener.create()
+	var total = 0 as Count
+
+	for i in 1 to 3 'each'
+		total = total + (try await o.open(Pack.full(Box.create(i), label: "pack")) otherwise 0)
+	end 'each'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: error.a-tuple-rebind-of-a-cond-subjects-root-is-refused -->
+A tuple assignment rebinds `first` as a plain assignment does, so it may not rebind a root of the `cond` subject inside an arm.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function pick(pickFirst bool) returns Count
+	var first = Slot.held(Box.create(1))
+	var n = 0 as Count
+	let second = Slot.empty
+
+	match (first if pickFirst else second) 'which'
+		empty then break
+		held then (first, n) = (Slot.empty, 1)
+	end 'which'
+
+	return n
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:24:14: 'first' roots what 'which' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: error.a-by-reference-pass-of-a-cond-subjects-root-is-refused -->
+A `mutable` parameter may replace `first`, so `first` is not passed by reference inside an arm of a `match` whose `cond` subject it roots.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function clear(s mutable Slot)
+	s = Slot.empty
+end 'clear'
+
+function pick(pickFirst bool) returns Count
+	var first = Slot.held(Box.create(1))
+	let second = Slot.empty
+
+	match (first if pickFirst else second) 'which'
+		empty then break
+		held then clear(first)
+	end 'which'
+
+	return 0
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:27:13: 'first' roots what 'which' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: error.a-match-expression-subjects-roots-are-read-only-in-every-arm -->
+A `match` expression in the subject counts as a `cond`: `h` and `g` are read-only holders in every arm of a union with a unique payload, the arm that binds nothing included (ruling 48).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder is unique
+	var slot as Slot
+	var n as Count
+
+	static function create(slot Slot, n Count) returns Self
+		return Self{slot: slot, n: n}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(1)), n: 0)
+	let g = Holder.create(Slot.empty, n: 0)
+
+	match (match h.n 'pick'
+		0 gives h
+		default gives g
+	end 'pick').slot 'which'
+		empty then h.n = 5
+		held then break
+	end 'which'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:34:14: cannot write 'n' through 'h', which is read-only while 'which' lends a unique value out of it
+```
+
+<!-- test: error.a-match-read-again-on-the-next-lap-is-a-read-of-a-moved-value -->
+The `match` is the last mention of `s` in the text, so the bind moves its payload out; the loop reads `s` again on the next lap, and that read is refused rather than reaching an emptied slot.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function main() returns ExitCode
+	let s = Slot.held(Box.create(3))
+	var total = 0 as Count
+
+	for _ in 0 upto 2 'lap'
+		match s 'which'
+			empty then break
+			held(b) then total = total + b.n
+		end 'which'
+	end 'lap'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:22:9: use of moved value 's': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: error.a-match-read-again-through-an-earlier-closure-is-a-read-of-a-moved-value -->
+The closure made before the `match` reads `s` without the text naming `s` after the `match`, and the closure owns what it captures, so the `match` reads a moved value.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function count(s Slot) returns Count
+	return match s 'p'
+		empty gives 0
+		held(b) gives b.n
+	end 'p'
+end 'count'
+
+function main() returns ExitCode
+	let s = Slot.held(Box.create(3))
+	let peek = function() gives count(s)
+	var total = 0 as Count
+
+	match s 'which'
+		empty then break
+		held(b) then total = b.n
+	end 'which'
+
+	print("{total + peek()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:8: use of moved value 's': its ownership moved to the closure that captures it
+```
+
+<!-- test: error.a-held-matched-variable-is-not-sent-from-a-binding-arm -->
+`u` is held by its `match` in every arm, so it is not a send's argument there (ruling 49).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match u 'm'
+		empty then break
+		held(t) then got = try await s.take(u) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:42:39: cannot hand 'u' to the service it is sent to: 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: error.a-held-matched-variable-is-not-sent-from-an-arm-that-binds-nothing -->
+An arm that binds nothing may move `u` in this thread (ruling 45), but `u` is still held by its `match`, so it is not a send's argument (ruling 49).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match u 'm'
+		empty then got = try await s.take(u) otherwise 0
+		held(t) then got = t.n
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:41:37: cannot hand 'u' to the service it is sent to: 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: error.a-held-matched-variable-is-not-a-spawn-argument -->
+`u` is held by its `match` in every arm, so it is not a `spawn` factory's argument there (ruling 49).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Keeper
+	var u as Slot
+
+	static function create(x Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return match self.u 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+	end 'peek'
+end 'Keeper'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	var k = spawn Keeper.create(Slot.empty)
+
+	match u 'm'
+		empty then break
+		held(t) then k = spawn Keeper.create(u)
+	end 'm'
+
+	print("{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:38:40: cannot hand 'u' to the service the `spawn` starts: 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: error.a-call-result-that-may-be-the-held-matched-variable-is-not-sent -->
+`idSlot(u)` may hand back `u`, which its `match` still holds, so the result is not the whole of its region at the send (ruling 49).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match u 'm'
+		empty then got = try await s.take(idSlot(u)) otherwise 0
+		held(t) then got = t.n
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:45:37: 'idSlot(u)' crosses to the service it is sent to only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-call-result-that-may-be-the-held-matched-variable-is-not-sent-from-a-binding-arm -->
+The binding arm sends `idSlot(u)`, which may hand back `u` while its `match` holds it, so the result is not the whole of its region at the send (ruling 49, the model's AI a7).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	var u = Slot.held(Token.create(1))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match u 'm'
+		empty then break
+		held(t) then got = try await s.take(idSlot(u)) otherwise 0
+	end 'm'
+
+	u = Slot.empty
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:46:39: 'idSlot(u)' crosses to the service it is sent to only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```

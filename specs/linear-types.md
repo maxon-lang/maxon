@@ -4206,7 +4206,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:48:31: 'giveS' needs a writable parameter 'r' at line 31; 'q' is read-only while 'w' is open
+error E3207: <fragment>:46:3: this linear value comes from outside 'w', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'w'
 ```
 
 <!-- test: an-outer-linear-union-matched-in-a-modify-block-cannot-hand-its-payload-to-a-consuming-receiver-that-keeps-it -->
@@ -4266,7 +4266,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:48:25: 'wrap' needs a writable receiver at line 17; 'q' is read-only while 'w' is open
+error E3207: <fragment>:46:3: this linear value comes from outside 'w', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'w'
 ```
 
 <!-- test: an-outer-linear-union-matched-in-a-modify-block-cannot-build-a-union-around-its-payload -->
@@ -4322,12 +4322,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:44:38: cannot store a read-only 'Resp' into 'Sent.notSent.r' while 'w' is open; store a copy
+error E3207: <fragment>:42:3: this linear value comes from outside 'w', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'w'
 ```
 
-<!-- test: an-outer-linear-union-matched-in-a-modify-block-may-consume-its-payload -->
-<!-- procs: 1 -->
-A finalizer that only destroys its receiver keeps nothing, so the payload of the outer `u` is consumed inside `modify bx` and the block leaves the union moved.
+<!-- test: error.an-outer-linear-union-matched-in-a-modify-block-cannot-consume-its-payload -->
+The outer `u` is read-only inside `modify bx`, so the `match` cannot consume it, even for a finalizer that keeps nothing (ruling 45): consume it before or after the block.
 ```maxon
 typealias Code = int(0 to 999)
 
@@ -4374,12 +4373,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-fin 1
-done
-```
-```exitcode
-0
+```maxoncstderr
+error E3207: <fragment>:35:3: this linear value comes from outside 'w', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'w'
 ```
 
 <!-- test: a-variable-holding-a-case-without-a-linear-payload-owes-nothing-when-assigned -->
@@ -7634,4 +7629,164 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-failed-sends-hand-back-goes-to-an-isolated-parameter-whatever-its-closure -->
+`Reply` holds a plain `Box`, so its type is not closed, yet the binding a failed send hands back is an `isolated` one (ruling 45) and goes to an `isolated` parameter.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Reply
+	var box as Box
+	var code as Count
+
+	static function create(box Box, code Count) returns Self
+		return Self{box: box, code: code}
+	end 'create'
+
+	function finish(consuming self)
+		destruct self
+	end 'finish'
+end 'Reply'
+
+type Taker
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function take(r Reply)
+		r.finish()
+	end 'take'
+end 'Taker'
+
+function settle(r isolated Reply)
+	r.finish()
+end 'settle'
+
+function main() returns ExitCode
+	let t = spawn Taker.create(0)
+
+	try t.take(Reply.create(Box.create(1), code: 1)) otherwise (sendFailure) 'failed'
+		match sendFailure 'why'
+			mailboxFull(r) then settle(r)
+			serviceStopped(r) then settle(r)
+		end 'why'
+	end 'failed'
+
+	print("sent\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sent
+```
+
+<!-- test: a-consumed-linear-union-falls-through-into-a-payload-free-arm -->
+The `match` consumes `m` once: the `some` arm releases it and falls through, and the `nothing` arm, entered either way, releases nothing more.
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+union Maybe
+	some(r Resp)
+	nothing
+end 'Maybe'
+
+function settle(m Maybe)
+	match m 'which'
+		some(r) then r.fin() and fallthrough
+		nothing then print("settled\n")
+	end 'which'
+end 'settle'
+
+function main() returns ExitCode
+	settle(Maybe.some(Resp.create(1)))
+	settle(Maybe.nothing)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fin 1
+settled
+settled
+```
+
+<!-- test: error.an-open-linear-parameter-consumed-inside-a-modify-is-refused -->
+`Resp` holds a plain `Note`, so its type is not closed and the parameter `r` is ordinary data of the caller's region (ruling 41): outer data, which `w` does not own and may not consume.
+```maxon
+typealias Code = int(0 to 999)
+
+type Note
+	var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Note'
+
+type Resp
+	var code as Code
+	var note as Note
+
+	static function create(code Code, note Note) returns Self
+		return Self{code: code, note: note}
+	end 'create'
+
+	function fin(consuming self)
+		print("fin {self.code} {self.note.text}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+type Bx
+	var n as Code
+
+	static function create(n Code) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Bx'
+
+function consume(r Resp)
+	let b = Bx.create(1) as isolated Bx
+
+	modify b 'w'
+		r.fin()
+	end 'w'
+end 'consume'
+
+function main() returns ExitCode
+	consume(Resp.create(1, note: Note.create("one")))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:38:5: this linear value comes from outside 'w', where it is read-only, and consuming it there would move data the window does not own; consume it before or after 'w'
 ```

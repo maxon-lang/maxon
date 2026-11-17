@@ -1540,23 +1540,86 @@ extension Parser
 		for (iter, operandStart) in starts.withIterator() 'eachOperand'
 			let index = iter.index()
 			let operand = try operands.get(index) otherwise panic("requireNoUniqueNamedTwice: operands.get OOB at {index} — every written operand has a value")
-
-			if not self.operandHoldsAUnique(operand) 'notAUniqueValue'
-				continue
-			end 'notAUniqueValue'
-
+			let operandIsUnique = self.operandHoldsAUnique(operand)
 			let variables = self.variablesOperandMayBe(operand)
 
-			if let moved = try self.variableMovedSince(variables, mark: moveMark) 'movedByALaterOperand'
-				throw self.uniqueNamedTwiceRefusal(place, value: moved, spanStart: spanStart, operandStart: operandStart)
-			end 'movedByALaterOperand'
+			if operandIsUnique 'aUniqueValue'
+				if let moved = try self.variableMovedSince(variables, mark: moveMark) 'movedByALaterOperand'
+					throw self.uniqueNamedTwiceRefusal(place, value: moved, spanStart: spanStart, operandStart: operandStart)
+				end 'movedByALaterOperand'
+			end 'aUniqueValue'
 
 			for earlier in 0 upto index 'eachEarlierOperand'
-				let shared = try sharedValueOf(variables, other: self.variablesOperandMayBe(try operands.get(earlier) otherwise panic("requireNoUniqueNamedTwice: operands.get OOB at {earlier} below {index}"))) otherwise continue
+				let other = try operands.get(earlier) otherwise panic("requireNoUniqueNamedTwice: operands.get OOB at {earlier} below {index}")
+				let otherIsUnique = self.operandHoldsAUnique(other)
+
+				if not operandIsUnique and not otherIsUnique 'noUniqueInThePair'
+					continue
+				end 'noUniqueInThePair'
+
+				let shared = try sharedValueOf(variables, other: self.variablesOperandMayBe(other)) otherwise 'noVariableNamedTwice'
+					if not operandIsUnique or not otherIsUnique 'aPlainPartBesideItsRoot'
+						continue
+					end 'aPlainPartBesideItsRoot'
+
+					let sharedRoot = try overlappingPlaceRootOf(self.operandPlacesOf(operand), other: self.operandPlacesOf(other)) otherwise continue
+					throw self.uniqueNamedTwiceRefusal(place, value: sharedRoot, spanStart: spanStart, operandStart: operandStart)
+				end 'noVariableNamedTwice'
+
 				throw self.uniqueNamedTwiceRefusal(place, value: shared, spanStart: spanStart, operandStart: operandStart)
 			end 'eachEarlierOperand'
 		end 'eachOperand'
 	end 'requireNoUniqueNamedTwice'
+
+	function operandPlacesOf(value ValueId) returns OperandPlaceArray
+		let places = OperandPlaceArray.create(0)
+
+		if self.valueIsAValueType(value) or self.effectiveCapabilityOf(value) == ValueCapability.immutable 'reachesNoRegionData'
+			return places
+		end 'reachesNoRegionData'
+
+		self.collectOperandPlaces(value, suffix: FieldPath.create(0), into: places)
+		return places
+	end 'operandPlacesOf'
+
+	function collectOperandPlaces(value ValueId, suffix FieldPath, into OperandPlaceArray)
+		var current = value
+		let inward = FieldPath.create(0)
+
+		while true 'towardTheRoot'
+			let origin = try self.regionFactsForRead().fieldOrigins.get(current) otherwise break
+			inward.push(origin.field)
+			current = origin.holder
+		end 'towardTheRoot'
+
+		let path = FieldPath.create(0)
+		var step = inward.count()
+
+		while step > 0 'outwardFromTheRoot'
+			step = step - 1
+			path.push(try inward.get(step) otherwise panic("collectOperandPlaces: inward.get OOB at {step} below its own count"))
+		end 'outwardFromTheRoot'
+
+		for field in suffix 'eachSuffixField'
+			path.push(field)
+		end 'eachSuffixField'
+
+		if let variables = try self.joinedVariablesOf(current) 'aJoin'
+			for variable in variables 'eachJoinedVariable'
+				self.collectOperandPlaces(variable, suffix: path, into: into)
+			end 'eachJoinedVariable'
+
+			return
+		end 'aJoin'
+
+		if not path.isEmpty() 'aPathOverAPayload'
+			for subject in self.uniquePayloadSubjectsOf(current) 'eachSubject'
+				self.collectOperandPlaces(subject, suffix: path, into: into)
+			end 'eachSubject'
+		end 'aPathOverAPayload'
+
+		into.push(OperandPlace.create(current, path: path))
+	end 'collectOperandPlaces'
 
 	function uniqueNamedTwiceRefusal(place UniqueOperandPlace, value ValueId, spanStart ElementIndex, operandStart ElementIndex) returns SourceParseError
 		let nameIndex = try self.lastReadIndexIn(TokenSpan.create(spanStart, endIndex: self.pos), value: value, liveOnly: false) otherwise 'noNameReadsIt'
@@ -1958,7 +2021,7 @@ extension Parser
 	function fileLentRootsBesideABinding(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray, receiver ReceiverArg) returns ParamPositionMask
 		var filed = NoParamPositions
 
-		if self.bodyState.lentArmRoots.isEmpty() 'noArmLendsAUnique'
+		if self.bodyState.lentArms.isEmpty() 'noArmLendsAUnique'
 			return filed
 		end 'noArmLendsAUnique'
 
@@ -2005,33 +2068,46 @@ extension Parser
 	end 'uniqueOriginOf'
 
 	function matchedRootIsLentBesideABinding(value ValueId, position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns bool
-		return self.argumentIsTheLentRoot(value, position: position, argAnchors: argAnchors, receiver: receiver) and self.anotherArgumentNamesAnArmBinding(argAnchors, receiver: receiver, except: position)
+		return self.argumentIsTheLentRoot(value, position: position, argAnchors: argAnchors, receiver: receiver) and self.statementNamesAnArmBinding()
 	end 'matchedRootIsLentBesideABinding'
 
 	function argumentIsTheLentRoot(value ValueId, position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns bool
-		if self.bodyState.lentArmRoots.contains(value) 'theMatchedValue'
+		if self.bodyState.lentArms.values.contains(value) 'theMatchedValue'
 			return true
 		end 'theMatchedValue'
 
 		let named = try self.bindingNamedAt(position, argAnchors: argAnchors, receiver: receiver) otherwise return false
-		return not named.isPayloadBinding() and self.bodyState.lentArmNames.contains(named.name)
+		return not named.isPayloadBinding() and self.bodyState.lentArms.names.contains(named.name)
 	end 'argumentIsTheLentRoot'
 
-	function anotherArgumentNamesAnArmBinding(argAnchors TokenIndexArray, receiver ReceiverArg, except ElementIndex) returns bool
-		for position in 0 upto argAnchors.count() 'eachArgument'
-			if position == except 'theLentArgument'
-				continue
-			end 'theLentArgument'
+	function statementNamesAnArmBinding() returns bool
+		let statementStart = self.bodyState.statementStart
+		let armBodyStart = self.bodyState.armBodyStart
+		var index = statementStart if statementStart > armBodyStart else armBodyStart
+		var depth = 0 as NestingDepth
 
-			let named = try self.bindingNamedAt(position, argAnchors: argAnchors, receiver: receiver) otherwise continue
+		while true 'eachToken'
+			let kind = self.kindAt(index)
 
-			if named.isPayloadBinding() and self.bodyState.lentArmRoots.contains(named.payloadScrutBox()) 'aBindingOfTheArm'
-				return true
-			end 'aBindingOfTheArm'
-		end 'eachArgument'
+			if kind == TokenKind.eof or (depth == 0 and kind == TokenKind.newline) 'theStatementEnds'
+				return false
+			end 'theStatementEnds'
 
-		return false
-	end 'anotherArgumentNamesAnArmBinding'
+			depth = groupNestingAfter(kind, nesting: depth)
+
+			if self.tokenReadsABindingAt(index) 'aName'
+				let named = self.bodyState.scope.getInfo(self.tokenAt(index).value)
+
+				if named.isPayloadBinding() and self.bodyState.lentArms.values.contains(named.payloadScrutBox()) 'aBindingOfTheArm'
+					return true
+				end 'aBindingOfTheArm'
+			end 'aName'
+
+			index = index + 1
+		end 'eachToken'
+
+		panic("statementNamesAnArmBinding: the walk ends only at the statement's end or the file's")
+	end 'statementNamesAnArmBinding'
 
 	function bindingNamedAt(position ElementIndex, argAnchors TokenIndexArray, receiver ReceiverArg) returns VarInfo throws AbsentError
 		let index = try self.bareNameIndexAt(position, argAnchors: argAnchors, receiver: receiver)
@@ -2078,15 +2154,15 @@ extension Parser
 	end 'bareReceiverNameIndex'
 
 	function argumentIsAMatchedUnique(value ValueId, namesABinding bool, anchorIndex ElementIndex) returns bool
-		if self.bodyState.lentArmRoots.isEmpty() 'noArmLendsAUnique'
+		if self.bodyState.lentArms.isEmpty() 'noArmLendsAUnique'
 			return false
 		end 'noArmLendsAUnique'
 
-		if self.bodyState.lentArmRoots.contains(value) 'theMatchedValue'
+		if self.bodyState.lentArms.values.contains(value) 'theMatchedValue'
 			return true
 		end 'theMatchedValue'
 
-		return namesABinding and self.bodyState.lentArmNames.contains(self.tokenAt(anchorIndex).value)
+		return namesABinding and self.bodyState.lentArms.names.contains(self.tokenAt(anchorIndex).value)
 	end 'argumentIsAMatchedUnique'
 
 	function writtenArgumentSpan(anchorIndex ElementIndex) returns TokenSpan
@@ -2168,18 +2244,9 @@ extension Parser
 	end 'fileKeptRead'
 
 	function refuseMoveOfAMatchedUnique(value ValueId)
-		let roots = self.bodyState.lentArmRoots
-
-		for index in 0 upto roots.count() 'eachRoot'
-			if (try roots.get(index) otherwise panic("refuseMoveOfAMatchedUnique: lentArmRoots.get OOB at {index} below its own count")) != value 'anotherValue'
-				continue
-			end 'anotherValue'
-
-			let subject = try self.bodyState.lentArmSubjects.get(index) otherwise panic("refuseMoveOfAMatchedUnique: lentArmSubjects.get OOB at {index} — the columns are pushed together")
-			let anchor = self.tokenAt(self.pos - 1)
-			self.deferRegionRefusal(ErrorCode.semanticUniqueValueRefused, message: matchedUniqueMovedMessage(subject), line: anchor.line, column: anchor.column)
-			return
-		end 'eachRoot'
+		let index = try self.bodyState.lentArms.indexOfValue(value) otherwise return
+		let anchor = self.tokenAt(self.pos - 1)
+		self.deferRegionRefusal(ErrorCode.semanticUniqueValueRefused, message: matchedUniqueMovedMessage(self.bodyState.lentArms.subjectAt(index)), line: anchor.line, column: anchor.column)
 	end 'refuseMoveOfAMatchedUnique'
 
 	function noteLentUniqueMoved(value ValueId, target MoveTarget)
@@ -2432,6 +2499,7 @@ extension Parser
 		end 'leavesTheOpenedRegion'
 
 		let sources = self.argumentsThatCanReachTheResult(callee, args: args, argLabels: argLabels, receiver: receiver)
+		self.takeStandingOfInputs(result, inputs: sources)
 
 		if not returnsFresh 'mayHandBackAnArgument'
 			if self.carryPartReadThroughACall(result, sources: sources) 'aPartReadReachesTheResult'
@@ -2792,9 +2860,9 @@ extension Parser
 			return self.valueIsCleanInput(argument)
 		end 'notAUniqueArgument'
 
-		if not self.valueTypeIsClosed(argument) 'holdsAPlainPart'
+		if not self.valueTypeIsClosed(argument) or self.valueIsHeldByAMatch(argument) 'holdsAPlainPartOrIsHeld'
 			return false
-		end 'holdsAPlainPart'
+		end 'holdsAPlainPartOrIsHeld'
 
 		if self.valueIsASlotRead(argument) or self.valueIsAnAcquiredState(argument) or windowIsOpen(self.regionFactsForRead().windows) 'regionDataOfAnotherOwner'
 			return self.valueIsCleanInput(argument)
@@ -2804,6 +2872,8 @@ extension Parser
 	end 'argumentIsACleanInput'
 
 	function markFreshWhenInputsClean(value ValueId, inputs ValueIdArray)
+		self.takeStandingOfInputs(value, inputs: inputs)
+
 		if self.inputsAreClean(inputs) 'allClean'
 			self.markFresh(value)
 		end 'allClean'
@@ -2854,6 +2924,11 @@ extension Parser
 		end 'aFieldPath'
 
 		let rootName = targetTok.value if targetEnd == targetStart + 1 and targetTok.kind == TokenKind.identifier else EmptySourceText
+
+		if rootName.isEmpty() and not opensAField and not self.valueIsAnIsolatedSlotRead(target) 'noHolder'
+			throw self.regionRefusal(ErrorCode.semanticIsolatedHolderNotWritable, message: "no writable reference holds '{rootText}': `modify` opens a local, a parameter, or a field or element path; bind the value to a local and modify that", line: targetTok.line, column: targetTok.column)
+		end 'noHolder'
+
 		let windows = self.regionFactsForWrite().windows
 		windows.push(OpenWindow.create(labelTok.value, rootText: freeze rootText.toByteArray(), rootName: rootName, kind: WindowKind.modify, floor: self.bodyState.valueCapabilities.count() as ValueId, openedValue: target, holderValue: holderValue, holderField: holderField, opensAField: opensAField, ownerStatement: self.bodyState.statementStart))
 

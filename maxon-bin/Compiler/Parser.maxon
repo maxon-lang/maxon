@@ -4180,6 +4180,9 @@ end 'BodyExtent'
 
 typealias NonCallNameSites = Map with ByteArray, ElementIndex
 
+typealias LastMentionByName = Map with (ByteArray, ElementIndex)
+typealias LastMentionsByBody = Map with (ElementIndex, LastMentionByName)
+
 type NonCallNameIndex
 	export let start as ElementIndex
 	export var scannedTo as ElementIndex
@@ -10045,6 +10048,7 @@ type Parser
 
 	var fileNonCallNames as NonCallNameIndex
 	var bodyNonCallNames as NonCallNameIndex
+	let lastMentionsByBody as LastMentionsByBody
 	var fileVarNames = BareNameSet.create()
 	var fileVarNamesCollected = false
 
@@ -10709,6 +10713,7 @@ type Parser
 			memos: ParseMemos.create(),
 			fileNonCallNames: NonCallNameIndex.from(0),
 			bodyNonCallNames: NonCallNameIndex.from(0),
+			lastMentionsByBody: LastMentionsByBody.create(),
 			pos: 0,
 			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory, sourceBytes: sourceBytes),
 			libraryBlame: LibraryBlame.unblamed,

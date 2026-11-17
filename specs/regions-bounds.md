@@ -10,8 +10,10 @@ category: semantics
 ## Documentation
 
 A generic type may bound a type parameter with `sendable` or `isolated` in its own `where` clause, and every
-instantiation is checked against the bound. A `sendable` bound takes a value, a service handle or an `immutable`
-record; it refuses a plain record, which the caller keeps sharing, and a `unique` type, whose values move. An
+instantiation is checked against the bound. A `sendable` bound takes a value (a scalar, `String`, `Character`,
+`cstring`, or an aggregate that is not `unique` and owes no drop), a service or `SharedValue` handle, or
+`immutable` data that is not `unique`; it refuses a plain record, which the caller keeps sharing, and a `unique`
+type, whose values move. An
 `isolated` bound takes a value, a service handle or a `unique` type. A function's or an extension's `where`
 clause cannot spell either bound.
 

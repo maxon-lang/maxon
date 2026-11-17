@@ -1175,10 +1175,15 @@ export enum ErrorCode
 	// argument already moved it. Pass it at one argument.
 	// One `unique` value named at two operands of one call, tuple, struct literal or case payload is refused at
 	// the repeat (`'q' is passed at two arguments of this call`; a tuple, a literal and a case say elements,
-	// fields and payloads): the operands would hold two names for one value. A `cond`, a `match` expression or
-	// a `try … otherwise` value that may be the `unique` value names it, and so does an operand that moves it
-	// after an earlier operand lent it, such as a nested call or tuple that keeps it or a closure that captures
-	// it. Name the value once.
+	// fields and payloads): the operands would hold two names for one value. Operands that are places of one
+	// root, where one path leads to the other (`h` and `h.t`), name one value too, in either order. A `cond`, a
+	// `match` expression (a `gives` arm included) or a `try … otherwise` value that may be the `unique` value
+	// names it, and so does an operand that moves it after an earlier operand lent it, such as a nested call or
+	// tuple that keeps it or a closure that captures it. Name the value once.
+	// A `match` that consumes its subject moves it as the `match` begins: a linear or `Reply` union, an
+	// `isolated` variable or temporary that is not open, and a message parameter without a marker. A read of
+	// the subject in any arm, or after the `match` on a path where no arm refilled it, is refused. A `match`
+	// over any other union lends it and consumes nothing.
 	// Binding, storing, returning or sending a `cond`, a `match` expression or a `try … otherwise` value moves
 	// every `unique` variable it may be, whichever arm ran, so a later read of any of them is refused.
 	// The variable a `match` arm lends a unique payload from is refused to a callee that writes through it, in a
@@ -2291,9 +2296,12 @@ export enum ErrorCode
 	// root other than the opened value is read-only. An `isolated` value older than the innermost open
 	// `modify` or `acquire` block is such a root: a local or parameter declared outside it, a `mutable isolated`
 	// parameter (the caller's variable), a local or call result it was moved into, and the payload a `match` of
-	// it bound. Passing it in an unmarked position (argument or receiver), reading or writing through it, and
+	// it bound. A value built from it inside the block keeps its standing: a union or a recovered record that
+	// holds it, the `isolated` result of a call given it, and a local that renames it. Passing it in an unmarked position (argument or receiver), reading or writing through it, and
 	// a nested `modify` of it open it. It still moves into an `isolated` parameter or slot, is sent, or is
 	// merged. A `mutable isolated` parameter open in its own block is read inside a block nested in it.
+	// `modify` of a call result or another temporary is refused too: no writable reference holds it, so there
+	// is nothing to open. Bind the value to a local and modify that.
 	// Reported at the isolated value. Open it from writable data, or inside the block that opened its holder,
 	// or before or after the block.
 	semanticIsolatedHolderNotWritable = "E3199"
@@ -2316,8 +2324,9 @@ export enum ErrorCode
 	// region: a fresh expression, an `isolated` variable or an owned `unique` or linear value of a closed type.
 	// One whose type holds a plain part is refused, naming the part: declare it `isolated`, pass a fresh value,
 	// or consume the value where it is. A call's result crosses only when the call's inputs are clean, so a
-	// call given an input that is not clean is refused at the crossing. Declare the local `as isolated T`, or
-	// pass a copy.
+	// call given an input that is not clean is refused at the crossing. The variable a `match` holds is not a
+	// clean input inside any of its arms, so a call that may hand it back is refused where its result crosses.
+	// Declare the local `as isolated T`, or pass a copy.
 	semanticIsolatedRecoverNeedsCleanInputs = "E3200"
 
 	// One call or statement opens a second region, or mixes in mutable data of the current one. A statement
@@ -2351,9 +2360,15 @@ export enum ErrorCode
 	// statement that opens the state.
 	semanticValueLeavesWindow = "E3202"
 
-	// The variable that names an open value is reassigned inside its own `modify` block. Only the region's
-	// contents are writable there; the slot holding the opened value is not. Write the contents, or leave
-	// the block before replacing the slot (`swap` takes a region out of a slot).
+	// A variable is replaced, rebound, passed by reference or moved while a block rests on it. Inside a
+	// `modify` block the variable that names the opened value cannot be reassigned, passed by reference, moved
+	// or consumed: only the region's contents are writable there, not the slot holding it. Inside a `match`
+	// or a `for` that lends from a variable, each variable the subject or source comes from cannot be
+	// reassigned, rebound by a tuple assignment or passed by reference. Those variables are found through a
+	// field path, a `cond`, a `match` expression and a `try … otherwise` value, at any depth, and the roots
+	// of a `cond` subject stay put in every arm, the arms that bind nothing included.
+	// Write the contents, or leave the block or loop before replacing or moving the variable (`swap` takes a
+	// region out of a slot).
 	semanticOpenedSlotReassigned = "E3203"
 
 	// An outer `var` is reassigned while a `modify` block is open. Inside the block only block locals,
@@ -2400,6 +2415,11 @@ export enum ErrorCode
 	// frozen slot (a `Set` element, a `Map` key) takes frozen arguments at every instantiation, so a record
 	// or array that something may write is refused there; and a closure that returns constant or module
 	// `let` data returns `immutable` data, so writing through its result is refused.
+	// A linear value that comes from outside an open `modify` block, `acquire` block or `match` arm that lends
+	// an `isolated` payload is read-only inside it, so consuming it there (a finalizer call, a `match` over a
+	// linear union, a move into a parameter that takes it) is refused: the block does not own it. A linear
+	// parameter whose type holds a plain part is such a value, as is an outer linear local. Consume it before
+	// or after the block.
 	// Reported at the argument. Pass data of the capability the parameter needs, a `clone()` or a `freeze`.
 	semanticArgumentCapabilityRefused = "E3207"
 
@@ -2470,8 +2490,11 @@ export enum ErrorCode
 	// or borrowed through a by-reference parameter is refused.
 	// A `match` over a unique union lends it to its arms, so the variable that holds the matched union (its
 	// name, the record whose field is matched, or an operand of a `cond` scrutinee) is not moved, copied,
-	// stored, captured or passed to a parameter that keeps it inside an arm. Do that before or after the
-	// `match`; an arm may still read the union through a parameter the callee only reads.
+	// stored, captured or passed to a parameter that keeps it inside an arm, whether or not the arm binds a
+	// payload. Do that before or after the `match`; an arm may still read the union through a parameter the
+	// callee only reads. The match still holds that variable, so inside any arm it is also not a message or
+	// `spawn` factory argument, a reply or an argument at an `isolated` parameter; send it before or after
+	// the `match`.
 	// A `cond`, a `match` expression and a `try … otherwise` value are transparent to unique values: bound,
 	// stored, returned, sent or passed to a parameter that keeps it, one moves every unique variable it may
 	// be, and passed straight to a call or used as a `match` subject or a `for` source it lends them. A merge
@@ -2480,9 +2503,11 @@ export enum ErrorCode
 	// instead, as `f(t) if c else f(fresh)` does.
 	semanticUniqueValueRefused = "E3214"
 
-	// A type argument breaks a bound on a generic type's type parameter. `where T is sendable` takes a value,
-	// a service handle or an `immutable` record, and refuses a plain record (the caller keeps sharing it) and a
-	// `unique` type (its values move; bound the parameter with `isolated` instead). `where T is isolated`
+	// A type argument breaks a bound on a generic type's type parameter. `where T is sendable` takes a value
+	// (a scalar, `String`, `Character`, `cstring`, or an aggregate that is not `unique` and owes no drop), a
+	// service or `SharedValue` handle, or `immutable` data that is not `unique`, and refuses a plain record
+	// (the caller keeps sharing it) and a `unique` type (its values move; bound the parameter with `isolated`
+	// instead). `where T is isolated`
 	// takes a value, a service handle or a `unique` type. Every instantiation of the generic type is
 	// checked, and so are the types of its fields. A function's or an extension's `where` clause cannot
 	// spell either bound; they belong to a generic type's own `where` clause. Reported at the instantiation.

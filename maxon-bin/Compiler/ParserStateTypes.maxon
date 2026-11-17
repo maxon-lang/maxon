@@ -3067,6 +3067,14 @@ type FreshLocal
 	function noteRead()
 		self.reads = self.reads + 1
 	end 'noteRead'
+
+	function forgetRead()
+		if self.reads == 0 'noReadToForget'
+			panic("FreshLocal.forgetRead: a read is forgotten only after the read it undoes was noted")
+		end 'noReadToForget'
+
+		self.reads = self.reads - 1
+	end 'forgetRead'
 end 'FreshLocal'
 
 typealias FreshLocalMap = Map with (ValueId, FreshLocal)
@@ -9170,9 +9178,12 @@ type FunctionBodyState
 	export var openKeptSites as OpenKeptSiteArray
 	export var lentUniqueParams as ValueIdArray
 	export var lentUniqueParamNames as NameRoster
-	export var lentArmRoots as ValueIdArray
-	export var lentArmNames as NameRoster
-	export var lentArmSubjects as StringArray
+	export var lentArms as RootStack
+	export var stayingRoots as RootStack
+	export var matchHolds as RootStack
+	export var heldResults as HeldResultMap
+	export var latentBirths as WindowBirthMap
+	export var armBodyStart as ElementIndex
 	export var capturedPromiseReads as ValueMarkColumn
 	export var letFieldPromiseReads as LetFieldPromiseNameMap
 	export var loopHeldBindings as NameRoster
@@ -9555,9 +9566,12 @@ type FunctionBodyState
 			openKeptSites: OpenKeptSiteArray.create(0),
 			lentUniqueParams: ValueIdArray.create(0),
 			lentUniqueParamNames: NameRoster.create(0),
-			lentArmRoots: ValueIdArray.create(0),
-			lentArmNames: NameRoster.create(0),
-			lentArmSubjects: StringArray.create(0),
+			lentArms: RootStack.create(),
+			stayingRoots: RootStack.create(),
+			matchHolds: RootStack.create(),
+			heldResults: HeldResultMap.create(),
+			latentBirths: WindowBirthMap.create(),
+			armBodyStart: 0,
 			capturedPromiseReads: noValueMarks,
 			letFieldPromiseReads: LetFieldPromiseNameMap.create(),
 			loopHeldBindings: NameRoster.create(0),

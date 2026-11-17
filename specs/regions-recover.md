@@ -149,7 +149,7 @@ frozen 6
 ```
 
 <!-- test: a-local-read-before-the-isolated-position-is-not-fresh -->
-`fresh.n = 1` already read the local, so it is ordinary mutable data when `consume` wants an `isolated` value.
+The `print` already read the local, so it is ordinary mutable data when `consume` wants an `isolated` value.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -167,7 +167,7 @@ end 'consume'
 
 function main() returns ExitCode
 	let fresh = Box.create(3)
-	fresh.n = 1
+	print("{fresh.n}\n")
 	consume(fresh)
 	return 0
 end 'main'
@@ -2651,4 +2651,46 @@ end 'main'
 ```
 ```maxoncstderr
 error E3200: <fragment>:36:10: 'wrap(q) as isolated Wrap' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+```
+
+<!-- test: a-field-write-of-a-value-keeps-a-local-fresh-for-a-send -->
+Writing a number into `b` takes no reference out of it, so the send still finds `b` fresh.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Keeper
+	var total as Count
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function take(b isolated Box) returns Count
+		self.total = self.total + b.n
+		return self.total
+	end 'take'
+end 'Keeper'
+
+function main() returns ExitCode
+	let k = spawn Keeper.create()
+	let b = Box.create(1)
+	b.n = 4
+	let got = try await k.take(b) otherwise 0
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
 ```
