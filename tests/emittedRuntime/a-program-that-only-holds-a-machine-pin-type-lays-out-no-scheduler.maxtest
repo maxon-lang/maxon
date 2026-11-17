@@ -3,7 +3,12 @@ let AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerCaseLabel = "pin-holde
 let PinHolderArrayFixtureName = "pin-holder-array"
 let AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerCarrier = "a program that only holds a machine pin type"
 
-let AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerReason = "Naming `__ManagedPin` as a field type makes the struct's destructor name `__gt_pin_destruct`, but only `__ManagedPin.acquire()` can take a pin, so a program that merely holds the type never has one to release. The scheduler is installed for a program that needs it, and a program without one gets an inert `__gt_pin_destruct` on every target."
+let FatalDoorName = "__rt_abort"
+let FatalMessageLabelInfix = "__fatal_msg_"
+let SchedulerSymbolPrefixes = ["__gt_", "__sched_"]
+let FatalReasonText = "a machine pin or service handle reached a runtime entry in a program that installed no green-thread scheduler"
+
+let AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerReason = "Naming `__ManagedPin` as a field type makes the struct's destructor name `__gt_pin_destruct`, but only `__ManagedPin.acquire()` can take a pin, so a program that merely holds the type never has one to release. The scheduler is installed for a program that needs it, and a program without one gets a `__gt_pin_destruct` that is a stand-in that cannot be reached: it ends in the fatal door with its reason and depends on nothing in the scheduler. The run expecting 0 is the evidence that the stand-in is never reached."
 
 test 'a program that only holds a machine pin type lays out no scheduler'
 	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerCaseLabel, fixture: PinHolderArrayFixtureName)
@@ -12,17 +17,36 @@ test 'a program that only holds a machine pin type lays out no scheduler'
 	noteHolderArrayRunsWithNoScheduler(findings, staged: staged, caseLabel: AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerCaseLabel, carrier: AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerCarrier)
 
 	for target in everyNativeTargetName() 'eachTarget'
-		notePinDestructorIsInert(findings, staged: staged, target: target)
+		notePinDestructorIsAStandInThatCannotBeReached(findings, staged: staged, target: target)
 	end 'eachTarget'
 
-	Expect.isTrue(findings.isEmpty(), message: "a program that only holds a machine pin type did not lay out an inert pin destructor and no scheduler:{renderedFindings(findings)}\n\n  {AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerReason}")
+	Expect.isTrue(findings.isEmpty(), message: "a program that only holds a machine pin type did not lay out a pin destructor that is a stand-in that cannot be reached, and no scheduler:{renderedFindings(findings)}\n\n  {AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerReason}")
 
 	discardStagedDir(staged)
 end 'a program that only holds a machine pin type lays out no scheduler'
 
-function notePinDestructorIsInert(findings StringArray, staged FilePath, target String)
+function notePinDestructorIsAStandInThatCannotBeReached(findings StringArray, staged FilePath, target String)
 	let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: AProgramThatOnlyHoldsAMachinePinTypeLaysOutNoSchedulerCaseLabel, target: target, functionName: PinDestructName, libraryTier: true)), functionName: PinDestructName, target: target)
-	let index = try firstControlTransfer(body) otherwise return
 
-	findings.push("on {target}, the emitted `{PinDestructName}` still transfers control with `{lineAt(body, index: index)}` where a program that holds no pin has nothing to release")
-end 'notePinDestructorIsInert'
+	if callsOrTailBranchesTo(body, name: FatalDoorName) == 0 'noFatalDoor'
+		findings.push("on {target}, the emitted `{PinDestructName}` never transfers control to `{FatalDoorName}`: {renderedFindings(body)}")
+	end 'noFatalDoor'
+
+	if controlTransferCount(body) != callsOrTailBranchesTo(body, name: FatalDoorName) 'anotherTransfer'
+		findings.push("on {target}, the emitted `{PinDestructName}` transfers control somewhere other than `{FatalDoorName}`: {renderedFindings(body)}")
+	end 'anotherTransfer'
+
+	for prefix in SchedulerSymbolPrefixes 'eachSchedulerPrefix'
+		if bodyLineCount(body, startingWith: NoFurtherDemand, containing: prefix, endingWith: NoFurtherDemand) != 0 'readsTheScheduler'
+			findings.push("on {target}, the emitted `{PinDestructName}` names a `{prefix}` symbol, so it depends on the scheduler: {renderedFindings(body)}")
+		end 'readsTheScheduler'
+	end 'eachSchedulerPrefix'
+
+	if bodyLineCount(body, startingWith: NoFurtherDemand, containing: "{FatalMessageLabelInfix}", endingWith: NoFurtherDemand) == 0 'noReason'
+		findings.push("on {target}, the emitted `{PinDestructName}` names no `{FatalMessageLabelInfix}` text: {renderedFindings(body)}")
+	end 'noReason'
+
+	if bodyLineCount(body, startingWith: NoFurtherDemand, containing: FatalReasonText, endingWith: NoFurtherDemand) == 0 'unreadableReason'
+		findings.push("on {target}, the emitted `{PinDestructName}` does not carry the reason `{FatalReasonText}`: {renderedFindings(body)}")
+	end 'unreadableReason'
+end 'notePinDestructorIsAStandInThatCannotBeReached'

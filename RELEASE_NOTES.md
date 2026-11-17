@@ -707,6 +707,10 @@ release's version as its heading when the release is cut.
   E2004 `Undefined variable`) or builds the nested alias's type.
   Fix: rename one of the two aliases.
 
+- On `wasm32-wasi`, `.clone()` and `.shutdown()` on a service's handle (`Echo.handle`), and `.shutdown()` on an
+  interface handle, are E3104 at the call.
+  Fix: guard the code that clones or shuts down such a handle with `#if not os(Wasi)`.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

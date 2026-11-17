@@ -546,8 +546,9 @@ export type RuntimeUsage
 	export var usesServiceRegistry = false
 	export var releasesRegistry = false
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
-	var namedSchedulerEntries = SchedulerEntrySet.create()
-	var schedulerEntriesSettled = false
+	var namedStandInEntries = StandInEntrySet.create()
+	var builtStandInEntries = StandInEntrySet.create()
+	var standInEntriesSettled = false
 
 	static function create() returns RuntimeUsage
 		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, typeParamEntries: TypeParamEntrySet.create(), usesHardwareSha: false, usesHash: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesIncrefSticky: false, usesMmIsNull: false, usesRetain: false, usesRetainSticky: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
@@ -731,6 +732,13 @@ end 'noteTypeParamEntryUsage'
 // the managed-memory runtime, a `__destruct_<T>` joins `neededDestructors` — so the reloc-baked destructor is
 // installed for the writer to resolve exactly as if the module had called it.
 function recordCallUsage(callee ByteArray, usage RuntimeUsage)
+	match standInEntryCalleeOf(callee) 'standInEntry'
+		entry(entry) then noteStandInEntryNamed(usage, entry: entry)
+		otherCallee then recordFamilyCallUsage(callee, usage: usage)
+	end 'standInEntry'
+end 'recordCallUsage'
+
+function recordFamilyCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isRuntimeCallee(callee) 'heap'
 		usage.usesHeap = true
 	end 'heap'
@@ -747,16 +755,13 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	//
 	// The exceptions are the clock read, the sleep and the strand guards on a lane that does not
 	// park on I/O, which has no scheduler to install (`ClockRuntime` builds the first two bodies
-	// without one), and a `SchedulerEntryWithInertBody` entry, which is only recorded as named.
+	// without one).
 	if not usage.parksOnIo and callee.equals(GtNowNsName) 'schedulerlessNowNs'
 		usage.usesSchedulerlessNowNs = true
 	end 'schedulerlessNowNs' else if not usage.parksOnIo and callee.equals(GtSleepName) 'schedulerlessSleep'
 		usage.usesSchedulerlessSleep = true
 	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) and not strandGuardCallIsElided(usage.parksOnIo, callee: callee) 'gt'
-		match schedulerEntryCalleeOf(callee) 'schedulerEntry'
-			entry(entry) then noteSchedulerEntryNamed(usage, entry: entry)
-			otherCallee then recordGtUsage(usage)
-		end 'schedulerEntry'
+		recordGtUsage(usage)
 	end 'gt'
 
 	if isSharedValueRuntimeCallee(callee) 'sharedValue'
@@ -1344,7 +1349,7 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isShareWalkRuntimeCallee(callee) 'shareWalkEntry'
 		usage.usesShareWalk = true
 	end 'shareWalkEntry'
-end 'recordCallUsage'
+end 'recordFamilyCallUsage'
 
 // ⭐ **THE FIXED SHARE ENTRIES — every callee of a walk that is not itself a per-type walk.** `__share_<T>` is
 // decided by prefix above; these are what a walk bottoms out in: the handle's box leaf, the existential's

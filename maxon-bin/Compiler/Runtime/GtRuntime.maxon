@@ -2705,7 +2705,7 @@ function emitGtZeroOverlapped(module StdModule, block IrBlock, overlapped ValueI
 	end 'eachWord'
 end 'emitGtZeroOverlapped'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, stdioStream EnumLayout, releasesRegistry bool, releasesGlobals bool, descendantArming DescendantArming, requestStagingBytes ByteOffset)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, stdioStream EnumLayout, releasesRegistry bool, releasesGlobals bool, descendantArming DescendantArming, requestStagingBytes ByteOffset, usage RuntimeUsage)
 	requireGtRecordLayout()
 
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
@@ -2733,7 +2733,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtInit(module)
 	buildGtPinMachine(module)
 	buildGtUnpinMachine(module)
-	buildRealSchedulerEntries(module)
+	buildRealStandInEntries(module, usage: usage)
 	buildGtPinDepth(module)
 	buildGtPinHandle(module)
 	buildGtCurrentMachine(module)
@@ -3790,8 +3790,8 @@ function buildGtUnpinMachine(module StdModule)
 	module.functions.push(func)
 end 'buildGtUnpinMachine'
 
-function buildGtUnpinOwner(module StdModule)
-	let func = IrFunction.createFromStd(GtUnpinOwnerName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildGtUnpinOwner(module StdModule, row RuntimeEntryWithStandIn)
+	let func = IrFunction.createFromStd(standInEntryName(row), returnType: standInEntryReturnType(row), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4054,74 +4054,114 @@ export function isMachineBindingCallee(callee ByteArray) returns bool
 	return callee.equals(GtPinMachineName) or callee.equals(GtUnpinMachineName) or callee.equals(GtCurrentMachineName) or callee.equals(GtPinDepthName) or callee.equals(GtPinAcquireName) or callee.equals(GtPinTokenName) or callee.equals(GtPinReleaseName) or callee.equals(GtPinSurrenderName)
 end 'isMachineBindingCallee'
 
-// Without the scheduler each entry gets a no-op body, sound only because no pin or pin token exists
-// there. An entry whose call does real work without the scheduler does not belong here.
-enum SchedulerEntryWithInertBody
+enum RuntimeEntryWithStandIn
 	pinDestruct
 	unpinOwner
-end 'SchedulerEntryWithInertBody'
+	handleClone
+	interfaceHandleClone
+	close
+end 'RuntimeEntryWithStandIn'
 
-function schedulerEntryName(entry SchedulerEntryWithInertBody) returns immutable ByteArray
+function standInEntryName(entry RuntimeEntryWithStandIn) returns immutable ByteArray
 	return match entry 'roster'
 		pinDestruct gives GtPinDestructName
 		unpinOwner gives GtUnpinOwnerName
+		handleClone gives CownHandleCloneBoxName
+		interfaceHandleClone gives CownInterfaceCloneBoxName
+		close gives CownCloseName
 	end 'roster'
-end 'schedulerEntryName'
+end 'standInEntryName'
 
-let SchedulerEntryRoster = SchedulerEntryWithInertBody.allCases
+function standInEntryReturnType(entry RuntimeEntryWithStandIn) returns StdReturnType
+	return match entry 'roster'
+		pinDestruct or
+		unpinOwner or
+		close gives StdReturnType.void
+		handleClone or
+		interfaceHandleClone gives StdReturnType.value(StdType.i64)
+	end 'roster'
+end 'standInEntryReturnType'
 
-typealias SchedulerEntrySet = Set with SchedulerEntryWithInertBody
+function standInEntryHasRealBody(entry RuntimeEntryWithStandIn, usage RuntimeUsage) returns bool
+	return match entry 'roster'
+		pinDestruct or
+		unpinOwner or
+		handleClone or
+		interfaceHandleClone or
+		close gives usage.usesGt
+	end 'roster'
+end 'standInEntryHasRealBody'
 
-union SchedulerEntryCallee
-	entry(entry SchedulerEntryWithInertBody)
+let StandInEntryRoster = RuntimeEntryWithStandIn.allCases
+
+typealias StandInEntrySet = Set with RuntimeEntryWithStandIn
+
+union StandInEntryCallee
+	entry(entry RuntimeEntryWithStandIn)
 	otherCallee
-end 'SchedulerEntryCallee'
+end 'StandInEntryCallee'
 
-function schedulerEntryCalleeOf(callee ByteArray) returns SchedulerEntryCallee
-	for entry in SchedulerEntryRoster 'eachEntry'
-		if callee.equals(schedulerEntryName(entry)) 'thisEntry'
-			return SchedulerEntryCallee.entry(entry)
+function standInEntryCalleeOf(callee ByteArray) returns StandInEntryCallee
+	for entry in StandInEntryRoster 'eachEntry'
+		if callee.equals(standInEntryName(entry)) 'thisEntry'
+			return StandInEntryCallee.entry(entry)
 		end 'thisEntry'
 	end 'eachEntry'
 
-	return SchedulerEntryCallee.otherCallee
-end 'schedulerEntryCalleeOf'
+	return StandInEntryCallee.otherCallee
+end 'standInEntryCalleeOf'
 
-function noteSchedulerEntryNamed(usage RuntimeUsage, entry SchedulerEntryWithInertBody)
-	if usage.schedulerEntriesSettled 'alreadySettled'
-		panic("noteSchedulerEntryNamed: '{String.from(schedulerEntryName(entry))}' is named after `installInertSchedulerEntries` has already run and settled which scheduler entries get a body, so a program without the scheduler would carry a call to it that links against nothing")
+function noteStandInEntryNamed(usage RuntimeUsage, entry RuntimeEntryWithStandIn)
+	if usage.standInEntriesSettled 'alreadySettled'
+		panic("noteStandInEntryNamed: '{String.from(standInEntryName(entry))}' is named after `installRuntimeEntryStandIns` has already run and settled which runtime entries get a real body, so a program whose entry has none would carry a call to it that links against nothing")
 	end 'alreadySettled'
 
-	usage.namedSchedulerEntries.insert(entry)
-end 'noteSchedulerEntryNamed'
+	usage.namedStandInEntries.insert(entry)
+end 'noteStandInEntryNamed'
 
-function emitSchedulerEntryCall(module StdModule, block IrBlock, entry SchedulerEntryWithInertBody, args ValueIdArray, usage RuntimeUsage, ids ValueMinter)
-	noteSchedulerEntryNamed(usage, entry: entry)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: schedulerEntryName(entry), args: args))
-end 'emitSchedulerEntryCall'
+function emitStandInEntryCall(module StdModule, block IrBlock, entry RuntimeEntryWithStandIn, args ValueIdArray, usage RuntimeUsage, ids ValueMinter)
+	noteStandInEntryNamed(usage, entry: entry)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: standInEntryName(entry), args: args))
+end 'emitStandInEntryCall'
 
-function buildRealSchedulerEntries(module StdModule)
-	for entry in SchedulerEntryRoster 'eachEntry'
-		match entry 'realBody'
-			pinDestruct then buildBoxDestruct(module, name: GtPinDestructName, release: GtPinReleaseName)
-			unpinOwner then buildGtUnpinOwner(module)
-		end 'realBody'
+function buildRealStandInEntries(module StdModule, usage RuntimeUsage)
+	for entry in StandInEntryRoster 'eachEntry'
+		if standInEntryHasRealBody(entry, usage: usage) 'real'
+			match entry 'realBody'
+				pinDestruct then buildBoxDestruct(module, name: standInEntryName(entry), release: GtPinReleaseName)
+				unpinOwner then buildGtUnpinOwner(module, row: entry)
+				handleClone then buildCownHandleCloneBox(module, row: entry)
+				interfaceHandleClone then buildCownInterfaceCloneBox(module, row: entry)
+				close then buildCownClose(module, row: entry)
+			end 'realBody'
+
+			usage.builtStandInEntries.insert(entry)
+		end 'real'
 	end 'eachEntry'
-end 'buildRealSchedulerEntries'
+end 'buildRealStandInEntries'
 
-export function installInertSchedulerEntries(module StdModule, usage RuntimeUsage)
-	usage.schedulerEntriesSettled = true
+export function installRuntimeEntryStandIns(module StdModule, usage RuntimeUsage)
+	usage.standInEntriesSettled = true
 
-	if usage.usesGt 'theSchedulerBuiltThem'
-		return
-	end 'theSchedulerBuiltThem'
+	for entry in StandInEntryRoster 'eachEntry'
+		if usage.namedStandInEntries.contains(entry) 'named'
+			let hasRealBody = standInEntryHasRealBody(entry, usage: usage)
+			let wasBuilt = usage.builtStandInEntries.contains(entry)
 
-	for entry in SchedulerEntryRoster 'eachEntry'
-		if usage.namedSchedulerEntries.contains(entry) 'named'
-			buildOneWordNoOpEntry(module, name: schedulerEntryName(entry))
+			if hasRealBody and not wasBuilt 'missingBody'
+				panic("installRuntimeEntryStandIns: '{String.from(standInEntryName(entry))}' is asked for a real body but none was built, so the program would carry a call to it that links against nothing")
+			end 'missingBody'
+
+			if wasBuilt and not hasRealBody 'strayBody'
+				panic("installRuntimeEntryStandIns: '{String.from(standInEntryName(entry))}' was built with a real body but is no longer asked for one, so it would be emitted twice")
+			end 'strayBody'
+
+			if not hasRealBody 'standIn'
+				buildAbortingRuntimeEntry(module, symbolName: standInEntryName(entry), returnType: standInEntryReturnType(entry), reason: RuntimeAbortReason.fatal(RuntimeFatal.entryRanWithoutItsRuntime))
+			end 'standIn'
 		end 'named'
 	end 'eachEntry'
-end 'installInertSchedulerEntries'
+end 'installRuntimeEntryStandIns'
 
 function buildGtPinHandle(module StdModule)
 	buildGtPinAcquire(module)

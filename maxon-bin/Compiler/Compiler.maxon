@@ -2643,7 +2643,7 @@ function afterPipeline(project Project, lowered LoweredProgram) returns BackendB
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, stdioStream: stdioStreamEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, descendantArming: descendantArmingOf(usage), requestStagingBytes: serviceRequestStagingBytes(signatures))
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, stdioStream: stdioStreamEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, descendantArming: descendantArmingOf(usage), requestStagingBytes: serviceRequestStagingBytes(signatures), usage: usage)
 	end 'installGt'
 
 	installInterfaceHandleConversions(pipeline.stdModule, globalData: project.globalData, usage: usage, signatures: signatures)
@@ -2865,9 +2865,9 @@ function afterPipeline(project Project, lowered LoweredProgram) returns BackendB
 	// surface is a function while its four siblings expand in the parser.
 	installEnumLookupHelpers(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededEnumLookups)
 
-	// Below every installer that can name a `SchedulerEntryWithInertBody` entry
-	// (`installProfileRuntime` does): `noteSchedulerEntryNamed` panics once this has run.
-	installInertSchedulerEntries(pipeline.stdModule, usage: usage)
+	// Below every installer that can name a `RuntimeEntryWithStandIn` entry
+	// (`installProfileRuntime` does): `noteStandInEntryNamed` panics once this has run.
+	installRuntimeEntryStandIns(pipeline.stdModule, usage: usage)
 
 	// ⭐⭐ **THE DEBUGSTREAM PRODUCER, INSTALLED LAST OF EVERYTHING, BECAUSE IT RENDERS THE TAG BLOB.**
 	// `MXDS_TAGS` is the table the monitor resolves a 16-bit tag index against, and it is written ONCE, from

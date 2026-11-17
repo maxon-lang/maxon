@@ -225,19 +225,15 @@ function callsOrTailBranchesTo(body StringArray, name String) returns LineTally
 	return found
 end 'callsOrTailBranchesTo'
 
-function firstControlTransfer(body StringArray) returns LineIndex throws IrScanError
-	let prefixes = controlTransferPrefixes()
+function controlTransferCount(body StringArray) returns LineTally
+	var found = 0 as LineTally
 
-	for (iter, text) in body.withIterator() 'eachLine'
-		for prefix in prefixes 'eachTransfer'
-			if text.startsWith(prefix) 'aTransfer'
-				return iter.index()
-			end 'aTransfer'
-		end 'eachTransfer'
-	end 'eachLine'
+	for prefix in controlTransferPrefixes() 'eachTransfer'
+		found = found + bodyLineCount(body, startingWith: prefix, containing: NoFurtherDemand, endingWith: NoFurtherDemand)
+	end 'eachTransfer'
 
-	throw IrScanError.noSuchLine
-end 'firstControlTransfer'
+	return found
+end 'controlTransferCount'
 
 function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}{executableSuffix()}")

@@ -88,7 +88,7 @@ that reaches one of the following is **refused at compile time**, at the call:
 
 | Not available on `wasm32-wasi` | Refused with |
 |--------------------------------|--------------|
-| `async`/`await`, green threads, services (the standard library's `Log` included), `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| `async`/`await`, green threads, services (the standard library's `Log` included; a service handle's `clone()` and `shutdown()` and an interface handle's `shutdown()`), `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
 | Machine uptime and thread CPU time (`Clock.osTickMs`, `Clock.threadCpuTicks`) | E3104 |
 | File and directory I/O | E3104 |
 | Sockets | E3104 |

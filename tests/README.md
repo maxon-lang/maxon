@@ -949,8 +949,9 @@ tests/
     a-new-green-threads-saved-context-lives-in-its-record-not-on-its-stack.maxtest   a new green thread is seeded with its stack top and no frame below it
     published-scheduler-words-are-stored-with-release-and-loaded-with-acquire.maxtest   the scheduler words published from under the lock are stored with a release and loaded with an acquire
     the-macos-trust-store-reads-the-admin-and-user-trust-settings-domains.maxtest   a macOS image that reads the trust store imports the trust-settings walk and no anchor-only call
-    a-program-that-only-holds-a-machine-pin-type-lays-out-no-scheduler.maxtest   an empty array of `__ManagedPin` holders runs with no `__gt_init` on any native lane, and its `__gt_pin_destruct` makes no call, tail branch or syscall there
+    a-program-that-only-holds-a-machine-pin-type-lays-out-no-scheduler.maxtest   an empty array of `__ManagedPin` holders runs with no `__gt_init` on any native lane, and its `__gt_pin_destruct` there is a stand-in that cannot be reached: its only control transfer is the call to `__rt_abort`, it names no scheduler symbol, and it carries the reason text of `RuntimeFatal.entryRanWithoutItsRuntime`
     a-program-that-only-holds-a-process-handle-type-lays-out-no-scheduler.maxtest   an empty array of `__ManagedHandle` holders runs with no `__gt_init` on any native lane
+    a-program-that-clones-a-handle-carrying-value-and-spawns-nothing-lays-out-no-scheduler.maxtest   a cloned empty array of service handles runs with no `__gt_init` on any native lane
     a-program-that-never-spawns-a-service-lays-out-no-second-strand.maxtest   a program that shares a frozen and a `SharedValue` record with coroutines lays out no `__gt_spawn_green` and no `__cown_spawn` on any native lane, and its one-spawn sibling lays out both
     fixtures/cown/main.maxon.fixture        stored name only - see rule 1
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
@@ -966,6 +967,7 @@ tests/
     fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
     fixtures/pin-holder-array/main.maxon.fixture   stored name only - see rule 1
     fixtures/handle-holder-array/main.maxon.fixture   stored name only - see rule 1
+    fixtures/handle-clone-array/main.maxon.fixture   stored name only - see rule 1
     fixtures/no-spawn-shares/main.maxon.fixture   stored name only - see rule 1
     fixtures/one-spawn-shares/main.maxon.fixture   stored name only - see rule 1
   examples/
@@ -1791,7 +1793,7 @@ failed build; a case that owes its own reason for one spawns the build with `spa
 reads the printed body at `stagedIrPath`. `functionIsLaidOut` asks whether a build asked to render a
 function succeeds, and panics when the build is refused for any reason but naming no function of the
 program; `noteFunctionAbsent` records a finding when it does, and `noteFunctionLaidOut` when it does
-not. `firstControlTransfer` and `callsOrTailBranchesTo` read the lines `controlTransferPrefixes`
+not. `controlTransferCount` and `callsOrTailBranchesTo` read the lines `controlTransferPrefixes`
 lists for both ISAs: every call, tail branch, syscall and indirect return.
 The cases that locate a word's accesses by walking the body themselves — the scheduler words and the
 debug-stream ring — tally each access they find into a `WordAccesses`, which sorts it into plain loads,
@@ -1816,7 +1818,10 @@ whose struct holds a `__ManagedPin` or a `__ManagedHandle` and which makes only 
 the type's destructor is named and never runs. `noteHolderArrayRunsWithNoScheduler` runs it on this host,
 expecting `0`, and asks each of `everyNativeTargetName`'s lanes to render `__gt_init`, which must be
 refused as absent. The pin case also reads `__gt_pin_destruct` on every native lane and requires a body
-with no control transfer: only a taken pin has anything to release.
+that is the aborting stand-in of a program with no scheduler: at least one call to `__rt_abort` and no
+other control transfer, no `__gt_` or `__sched_` symbol, and the reason text of
+`RuntimeFatal.entryRanWithoutItsRuntime` beside its `__fatal_msg_` label. The run expecting `0` is that case's
+evidence that the stand-in is never reached.
 
 **`a-program-that-never-spawns-a-service-lays-out-no-second-strand`** — the `no-spawn-shares` fixture
 freezes one interface-holding record, publishes another to a `SharedValue`, and reads both from two

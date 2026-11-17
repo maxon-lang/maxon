@@ -7,11 +7,6 @@ let CownInterfaceStubPrefix = b"__cown_iface_stub."
 let CownInterfaceTablePrefix = b"__cown_iface_table."
 let CownInterfaceSlotBytes = 8
 
-function buildCownInterfaceRuntime(module StdModule)
-	buildCownInterfaceCloneBox(module)
-	buildCownInterfaceSend(module)
-end 'buildCownInterfaceRuntime'
-
 export function isInterfaceHandleRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CownInterfaceRuntimePrefix)
 end 'isInterfaceHandleRuntimeCallee'
@@ -36,8 +31,8 @@ export function interfaceSendSlotOffset(slot CaseIndex) returns FullRangeInt
 	return (slot as FullRangeInt) * CownInterfaceSlotBytes
 end 'interfaceSendSlotOffset'
 
-function buildCownInterfaceCloneBox(module StdModule)
-	let func = IrFunction.createFromStd(CownInterfaceCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+function buildCownInterfaceCloneBox(module StdModule, row RuntimeEntryWithStandIn)
+	let func = IrFunction.createFromStd(standInEntryName(row), returnType: standInEntryReturnType(row), paramCount: 1, paramTypes: oneI64Param())
 	let ids = ValueMinter.create(1)
 
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
