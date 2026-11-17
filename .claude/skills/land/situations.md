@@ -113,19 +113,6 @@ the time at m=3, so use m ≥ 20 per cell before comparing cells. A case that fa
 gate. A racy red is finished only when it is deterministic: force the losing interleaving structurally
 (put the readied work where the other contender cannot take it), never by widening a timeout.
 
-## A rebase conflict (§7)
-
-- **Resolve it BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file: a whole-file
-  resolution in a doc has silently reverted somebody else's landed section, and it looks clean in
-  `git diff`.
-- Resolve as the UNION of both sides, then run the OTHER side's cases as well as your own: "take my side"
-  on a struct literal can silently revert the other change's fix while your acceptance stays green. When
-  both sides correct one rotting fact (a count, a caller list), derive it from the merged file.
-- **A clean rebase is not a coherent one.** When both sides changed a file, read the merged result for
-  contradictions: git can join a new upstream rule to a new case that breaks it with no conflict marker.
-- **A stash never outlives §7.** If the pop conflicts, resolve it now: work sitting in `git stash list`
-  looks exactly like work that vanished.
-
 ## A red gate (§8)
 
 **It STOPS the change**, and a red you did not cause still gets fixed, in its own commit, before yours
@@ -212,8 +199,8 @@ write-tree`, records the working tree, untracked files included, without touchin
   matches nothing stages NOTHING, so stage only paths `git status --porcelain` lists, and read
   `git diff --cached --stat` before committing: a commit whose message describes a code change must show
   that code file.
-- **The CI glance and the push are separate commands**: chained in one, the push goes out before anyone
-  reads the answer.
+- **The CI glance and the submit are separate commands**: chained in one, the submit goes out before
+  anyone reads the answer.
 
 ## A change against an approved design
 
@@ -224,12 +211,32 @@ reports; the coordinator puts the amended rule to the user, and the amended rule
 executable model (campaigns and a fresh red team, 0 counterexamples) before it lands. Every brief for
 such a change quotes the rulings it implements and says this.
 
-## A rejected push (§9)
+## A bounce (§9)
 
-**It is not a retry.** Someone landed while you were running, so the tree you tested is not the tree you
-would push: rebase, list the changed paths, and re-take each §8 gate whose inputs changed (the inputs
-rule) before pushing again. A ladder row the commit already carries measured the tree before that rebase:
-delete it from all three tables, mint it again on the rebased tree, amend the commit, and check the
-commit itself with `scripts/check-scale-rows.sh --range origin/main..HEAD --compiler
-./maxon-bin/.maxon/maxon` (`--working-tree` compares against `HEAD`, which by then holds the row, so it
-reports that nothing was added).
+**It is not a retry.** The door refused the commit and its run printed why (`land.sh submit` and `await`
+print it and exit 1). A bounce is one of:
+
+- **a file both sides changed since your base**: named by the run. Rebase onto `origin/main` by hand
+  (below) and read each named file's merged result;
+- **the pinned seed refuses the merged tree**: the run names the error; fix the tree, or land it as a
+  bootstrap chain (`compiler-workflow`);
+- **a refused note, a hand-made row or a misplaced trailer**: carry the note as a `Scale-Note:` trailer in the commit's
+  final paragraph, drop any edit to the scale tables.
+
+**The hand rebase:**
+
+- **Resolve each conflict BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file: a
+  whole-file resolution in a doc has silently reverted somebody else's landed section, and it looks clean
+  in `git diff`.
+- Resolve as the UNION of both sides, then run the OTHER side's cases as well as your own: "take my side"
+  on a struct literal can silently revert the other change's fix while your acceptance stays green. When
+  both sides correct one rotting fact (a count, a caller list), derive it from the merged file.
+- **A clean rebase is not a coherent one.** When both sides changed a file, read the merged result for
+  contradictions: git can join a new upstream rule to a new case that breaks it with no conflict marker.
+- **A stash never outlives the rebase.** If the pop conflicts, resolve it now: work sitting in
+  `git stash list` looks exactly like work that vanished.
+
+List the changed paths (`git diff --name-only <tree then> <tree now>`), re-take each §8 gate whose inputs
+changed (the inputs rule), amend or rewrite the commit, and submit again under the same name. The run
+deletes its branch when the branch still points at the run's head, so the push needs no delete. A push
+refused because the name still exists means a run of it is going or a run kept it: read the run.

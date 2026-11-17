@@ -24,24 +24,24 @@ the compiler indexes by, and READ it.
 - **The ladder DOUBLES, so the RATIO between rungs IS the growth** — ×2 linear, ×4 quadratic. Read it
   off the **ALLOCATION** columns, which are exact and bit-for-bit reproducible; the CPU column carries a
   few-percent noise band and a platform-defined unit, and there is no wall time at all.
-- **The artifact is the trend: `docs/optimization-log.md`.** A run writes a row there only when given a
-  reason — `note:` (`--note=` on the CLI) — and that reason is the WHY, recorded at the one moment it
-  is still known: the instrument sees exactly WHAT moved and can never see WHY. **Write no row you did
-  not measure.**
+- **The artifact is the trend: `docs/optimization-log.md`.** A row carries a reason — the change note —
+  and that reason is the WHY, recorded at the one moment it is still known: the instrument sees exactly
+  WHAT moved and can never see WHY. The author reads the ladder and carries the note as a `Scale-Note:`
+  trailer in the commit's final paragraph; `land.yml` mints the row on the merged tree. **A commit that
+  adds a row by hand is refused.**
 - **One run writes one row to each of the three tables, and they share five leading cells**: date,
   `minted at` (where the compiler and corpus ran), `corpus` (a digest of the generated ladder), `tree` (a
   digest of the `maxon-bin/`, `stdlib/` and `runtime/` sources measured) and the change note; older rows
-  read `*(unrecorded)*` in the two digest cells. `--note=` writes only into the tree it measured. The
+  read `*(unrecorded)*` in the two digest cells. A minted row records only the tree it measured. The
   allocation and byte deltas against the last row are both withheld (the ladder computes no CPU delta), with the reason printed, when the
   corpus or the place differs or was not recorded; the absolute counts and rung ratios still print, and the
   attributable figure is then an A/B against a control compiler built from the parent, run from the same
   location.
-- **A row is re-minted, never hand-edited**: the `tree` cell must be the digest of the tree the row is
-  committed with. `scale-test --check-row` (MCP `checkRow: true`) measures nothing and exits 0 only when
-  the last row carries the current directory's tree digest. `scripts/check-scale-rows.sh` checks the
-  history: every row a commit adds is the last of its table, the same in all three, and passes
-  `--check-row` in that commit's tree (`--working-tree` in `/land` §8, `--range` in CI where a compiler is
-  built). `scale-rows.yml` runs `--range --history-only`, every check but `--check-row`, on every push to `main`.
+- **A row is minted by the door, never hand-edited**: the `tree` cell must be the digest of the tree the
+  row is committed with. `scale-test --check-row` (MCP `checkRow: true`) measures nothing and exits 0
+  only when the last row carries the current directory's tree digest. `scripts/check-scale-rows.sh`
+  checks the history: every row a commit adds is the last of its table, the same in all three, and
+  passes `--check-row` in that commit's tree (`--range` in CI where a compiler is built). `scale-rows.yml` runs `--range --history-only`, every check but `--check-row`, on every push to `main`.
 - ⛔ **`ScaleHistory` checks only the LAST row of each table, so a well-formed row appended after a ragged one
   masks it**: the tip runs, the merge base reports BROKEN RUN, and the ragged row survives merges. The cause is
   a dropped trailing pipe or a literal pipe in the prose column (`splitRow` splits on every one): name that
@@ -209,7 +209,7 @@ faults on the first load.
 
 The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins. A commit it refuses
 (E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002, which is a locked slot)
-lands with a seed frozen from it by `land.yml`, never by `git push` and never by a seed frozen on this
+lands with a seed frozen from it by `land.yml`, never by `git push origin main` and never by a seed frozen on this
 machine.
 
 **`/land` §8's seed-chain gate** is that check: on a throwaway clone at a short path, with the diff applied
@@ -225,29 +225,32 @@ two stages per commit, in `temp/land-branch/`, and names the commit no step coul
 checkout:
 
 ```
-scripts/land.sh submit --rehearsal   # every step, the publish included; retracted at the end
-scripts/land.sh submit               # land it: main receives your commit, squashed, and its pin
+scripts/land.sh submit --rehearsal --name=<name>   # every step, the publish included; retracted at the end
+scripts/land.sh submit --name=<name>               # land it: main receives your commit, squashed, and its pin
 ```
 
-`submit` pushes `HEAD` to `land/<first 12 of HEAD>`, dispatches `land.yml` there and follows the run. A
-session that can push only its own branch pushes the chain there instead, with the trailer `Land: main`
-(or `Land: rehearsal`) on its head. CI freezes the seed from the chain's last compiler, proves it on every
-native lane's own runner, publishes it with the ref `<seed-tag>-chain`, and pushes the commit and its pin
-in one push. After a land from the main checkout, `git fetch origin main && git reset --keep origin/main`
-replaces the local chain with what landed. A failed or moved-`main` run retracts what it published:
-rebase, re-take each `/land` §8 gate whose inputs changed, and land again. `docs/RELEASING.md` owns the
-procedure and the retraction.
+`submit` pushes `HEAD` to `land/<name>`, dispatches `land.yml` there and follows the run. A session that
+can push only its own branch pushes the chain there instead, with the trailer `Land: main` (or `Land:
+rehearsal`) on its head, and follows the run with `scripts/land.sh await <branch> <head>`. CI freezes the
+seed from the chain's last compiler, proves it on every native lane's own runner, publishes it with the
+ref `<seed-tag>-chain`, and pushes the commit and its pin in one push; the run then deletes its branch.
+After a land from the main checkout, `git fetch origin main && git reset --keep origin/main` replaces the
+local chain with what landed. A failed or moved-`main` run retracts what it published: rebase onto
+`origin/main` (a chain needs main's tip as its base), re-take each `/land` §8 gate whose inputs changed,
+and submit again under the same name. A chain mints no scale row: it carries no `Scale-Note:`.
+`docs/RELEASING.md` owns the procedure and the retraction.
 
 **A chain land in flight holds `main`**: a push while `land.yml` publishes a seed costs that land its run.
 `scripts/land.sh in-flight --wait` prints `none` at once when no chain land is running; otherwise it names
 the branch and run and returns when they finish. A failure to read GitHub is a failure, not a `none`.
 
 **A session that can push only its own branch** lands an ordinary commit, one the seed accepts, the same
-way: one commit carrying the trailer `Land: main`, pushed to that branch; `land.yml` fast-forwards `main`
-to it, and the outcome is that commit's check runs.
+way: one commit carrying the trailer `Land: main` in its final paragraph, pushed to that branch; `land.yml`
+merges it at `main`'s tip (it needs no rebase) and deletes the branch, and `scripts/land.sh await <branch>
+<head>` prints the sha main received.
 
 ⭐ **Land it WITHOUT ASKING (user ruling)** whenever the seed refuses a commit you are landing:
-publishing the seed and pushing its pin is standing-authorized, like the `git push` it replaces. Never
+publishing the seed and pushing its pin is standing-authorized, like a push to `main`. Never
 stop for approval and never leave the seed for the user to publish.
 
 ## Staging `vendor/`

@@ -1,14 +1,14 @@
 ---
 name: land
-description: Implement one self-contained compiler change end to end and push it as one commit on main — a spec set watched red first, the code, optimization, independent review, documentation, rebase, the landing gates once (build, filtered specs, codecs check, plus lint, self-compile and the seed chain when the diff calls for them; CI runs the rest). Use for a bug fix, a missing diagnostic, a defect found by hand, or a feature of any size. Invoke as `/land <what to do>`.
+description: Implement one self-contained compiler change end to end and land it as one commit on main through land.yml — a spec set watched red first, the code, optimization, independent review, documentation, the landing gates once (build, filtered specs, codecs check, plus lint, self-compile and the seed chain when the diff calls for them; CI runs the rest), then the door's verdict. Use for a bug fix, a missing diagnostic, a defect found by hand, or a feature of any size. Invoke as `/land <what to do>`.
 ---
 
 # Land one change
 
-**One invocation = ONE change, done WHOLE: specified, implemented, reviewed and pushed as a single
-commit**, in the main checkout, on `main`, with no branch. The landing gates run **exactly once, at the
-end**, and there is **no full local battery**: you push on a build, filtered specs covering what changed
-and the codecs check; CI runs the rest. **This is the process for all compiler work** — a bug just found,
+**One invocation = ONE change, done WHOLE: specified, implemented, reviewed and landed as a single
+commit** that ends at `land.yml`'s verdict, in the main checkout, on `main`, with no branch. The landing
+gates run **exactly once, at the end**, and there is **no full local battery**: you submit on a build,
+filtered specs covering what changed and the codecs check; CI runs the rest. **This is the process for all compiler work** — a bug just found,
 a missing diagnostic, a pass that answers wrong, a feature however large; there is no heavier sibling.
 
 **Beside this file, read on demand:** `brief.md` before any brief; `situations.md` when a situation it
@@ -18,7 +18,7 @@ names arises; `known-issues.md` for §10 outside the fleet. Seed-chain landing: 
 > and filing the rest. Size, several passes, new IR ops, a design decision you can make, or hours of work
 > are no reason to leave (`AGENTS.md`); a big change is a longer §2 and §3, not more commits. The only
 > stops are the HALT list, each answered in place, then you carry on. **Do not slice**: §1–§9 run once,
-> to one commit, since §8 runs once (slices multiply rebases, gates, self-compiles, reviews), a slice
+> to one commit, since §8 runs once (slices multiply bounces, gates, self-compiles, reviews), a slice
 > leaves `main` half a mechanism (an `export` without its consumer is an E3092 failing CI's lint; an
 > unreached diagnostic is dead; a lowering with no emitter is a wrong answer waiting), and §1's red set
 > is the whole change's acceptance. Delegating labour is the method: several implementers at once on
@@ -36,12 +36,12 @@ gates and the commit.** Agents do the reading and the typing.
 | 1 | MINIMAL spec set, **every case watched FAILING** | scout, then **you** pick, an author writes (located fix: you); **you** read the red | a case green now tests nothing |
 | 2 | All the code | implementer(s) | |
 | 3 | Green the set **on the FILTER** | same; **you** confirm | keep going |
-| 4 | Optimization | `optimize` on a trigger; **the ladder read is yours**, row in §8 | a ladder you cannot explain |
+| 4 | Optimization | `optimize` on a trigger; **the ladder read and its note are yours**; the door mints the row | a ladder you cannot explain |
 | 5 | Review | `code-review`, never a writer of the code | fix before the commit |
 | 6 | Every comment, the `docs/` source | `documenter` | a non-empty code-identity proof |
-| 7 | Rebase on `origin/main` | you | resolve by hand |
+| 7 | Wait out a chain land | you | |
 | 8 | THE LANDING GATES, once | you | **stop** |
-| 9 | Commit, push; do not wait for CI | you | rejected push: rebase, re-take gates whose inputs changed |
+| 9 | Commit, land through the door; do not wait for CI | you | a bounce: rebase by hand, re-take gates whose inputs changed |
 
 **Every spec run, in §8 as before it, is `--filter`ed**: the whole set in ONE run, one `--filter=` per
 pattern (MCP: a `filter` array), so its files run as parallel jobs. That is honest only because §1's red
@@ -49,8 +49,7 @@ was real: a proxy you never saw fail is a proxy for nothing. CI runs the suite.
 
 ⚠ **Steps 4–8 do not reorder.** Optimize before review (an optimizer can add the duplication review
 catches); review before commit (after it, a review is a bug report); document after review (comments are
-written once, on code that stopped moving); rebase before the gates (else they tested a tree you do not
-push).
+written once, on code that stopped moving).
 
 ## Coordinating
 
@@ -66,7 +65,7 @@ over, and **§5's review still runs**: independence is not a size question.
 
 **Never delegated**, since that would move the gate: **the choice of spec set** (the scout returns facts);
 **reading the red** (§1) and **confirming the green** (§3) with your own filtered run; **the ladder read**
-(§4) and its `optimization-log.md` row (§8); **the rebase, the gates, the commit, the push** (§7–§9).
+and its note (§4); **the gates, the commit, the submit** (§8–§9).
 
 ### ⛔ Each gate runs once, where this table says
 
@@ -75,8 +74,8 @@ over, and **§5's review still runs**: independence is not a size question.
 | **build** | only when stale | **you, §8** (the documenter, last editor, does not build) | ⛔ nobody builds a current binary |
 | **filtered specs** | many | each agent's own loop | the loop, not a gate |
 | **§8 gates** (final filtered specs, codecs, lint, self-compile, seed chain, docs check) | once | **you, §8** | ⛔ no agent runs any; the documenter runs no tests. Full suite, wasm lane, tree corpora: CI |
-| **`scale-test` ladder** | once to read, once to mint | **you**: read §4, row §8 on the rebased documented tree; plus the optimizer's before/after | ⛔ not the implementer's: a pre-review reading attributes nothing |
-| **`git commit`/`push`/`rebase`** | once | **you, §7, §9** | ⛔ no agent commits, pushes, rebases, stashes or opens a worktree |
+| **`scale-test` ladder** | once to read | **you**: read §4, the note in §9; the door mints the row; plus the optimizer's before/after | ⛔ not the implementer's: a pre-review reading attributes nothing |
+| **`git commit`/`push`/`rebase`, `land.sh submit`** | once | **you, §9** | ⛔ no agent commits, pushes, rebases, stashes, submits or opens a worktree |
 
 Without this table each brief's thoroughness runs the suite 3–5 times per change, once gating. **An agent
 reports what it suspects but cannot cheaply confirm**: it feeds a gate that runs anyway.
@@ -98,9 +97,8 @@ reports what it suspects but cannot cheaply confirm**: it feeds a gate that runs
 >   gate's, the files it reads. After a fix round or manual rebase **list the changed paths**
 >   (`git diff --name-only <tree then> <tree now>`, trees named per `situations.md`): **a gate with no
 >   input listed stands**, its log quoted. **Others' changes in files you did not touch are not your
->   inputs**: drop them; CI is where disjoint changes meet. The ladder row carries the tree digest, so any
->   tree change re-mints it. **A measurement over fixtures** re-takes only fixtures a round could move
->   (`situations.md`).
+>   inputs**: drop them; CI is where disjoint changes meet. **A measurement over fixtures** re-takes only
+>   fixtures a round could move (`situations.md`).
 
 ### Agents
 
@@ -223,9 +221,10 @@ between its report and §8. Re-run the filter yourself only when that evidence i
   pass, an IR op or an indexed collection, or (b)'s allocation ladder bends ≳2.4 per doubling
   unexplained. **No trigger: the report says so** (a hunt over no new algorithm finds nothing).
 
-**If you ran the ladder, settle the row's note now**: attribution exists only now. §8 mints the row on
-the rebased, documented tree; one taken earlier carries a stale digest, which `scale-test --check-row`
-reports. ⚠ **Write no row you did not measure.**
+**If you ran the ladder, settle the row's note now**: attribution exists only now. §9 carries it as the
+commit's `Scale-Note:` trailer, and `land.yml` mints the row on the merged tree with the compiler it
+built: you mint nothing, and a commit that adds a row by hand is refused. The note holds the A/B figure
+`compiler-workflow` describes. ⚠ **Write no note you did not measure.**
 
 ## 5. Review
 
@@ -256,21 +255,16 @@ comments are written once, on code that stopped moving.
 (added, rewritten, deleted, net) is zero or close — more than a few, or a comment over two lines, failed
 the skill. **§8 builds**: §6 edits compiled-in sources without building.
 
-## 7. Rebase on `origin/main` — yours
+## 7. Wait out a chain land — yours
 
 ```bash
 scripts/land.sh in-flight --wait                    # a chain land in flight holds main: wait for it first
-git fetch && git log --oneline HEAD..origin/main    # empty: nothing to rebase onto — skip the rest of §7
-git stash push -u -m land && git pull --rebase && git stash pop
 ```
 
-(`in-flight`: `compiler-workflow`.) **Stash only when the log prints commits**: a stash round-trip moves
-every changed file's mtime past the binary, so `spec-test` refuses it and §8 pays a full build (two for emitted runtime). Rebase
-FIRST, so §8 gates and mints the ladder row (`check-scale-rows.sh`'s `corpus` cell withholds a delta
-across a corpus change) on the tree you push. **A conflict is resolved BY HAND, hunk by hunk**; **a clean
-rebase is not a coherent one** (`situations.md`). **A stash never outlives this step.**
+(`in-flight`: `compiler-workflow`.) **You do not rebase for the door**: it merges your commit at main's
+tip (§9), and §8 gates the tree you wrote.
 
-## 8. THE LANDING GATES — once, on the rebased tree — yours
+## 8. THE LANDING GATES — once, on your tree — yours
 
 ⭐ **The MINIMUM targeted run.** A row whose condition the diff does not meet is not run; a filter is never
 widened "to be safe": breadth is CI's, and a CI red costs one fix commit where a local battery costs
@@ -286,7 +280,6 @@ every change. ⛔ **No agent runs any part of this.** `$M` is `./maxon-bin/.maxo
 | **Seed chain**: `build-from-seed.sh` on a throwaway clone (`compiler-workflow`) | **Where the tree's sources start using a declaration, intrinsic, form, rule or runtime behaviour the change made legal or required, or the change alters a rule the seed applies to the compiler's source.** Exit 0, or a refusal (any failure but E6002, a locked slot), which lands via `land.yml` (§9) |
 | **Codecs**: `python3 scripts/library-cache/generate-codecs.py --check` | exit 0; on 1, run without `--check` and stage the rewrite |
 | **Documentation**: `node website/scripts/sync-docs.mjs --check` | exit 0. A user-visible change: each doc-coverage gate its surface owns, `0 fail` — `maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` (also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`), `tests/docs`; else state nothing is user-visible. ⚠ Red after a new diagnostic: §6 missed its registry doc comment |
-| **Ladder row**: `maxon scale-test --note=…` (MCP `note:`) on the rebased, documented, built tree, then `scripts/check-scale-rows.sh --working-tree` | **When §4 read the ladder.** Both exit 0; one row added to each table, last, with this tree's digest. A delta the run withholds is stated in the note, with the A/B figure `compiler-workflow` describes |
 | **No leftovers**: `python3 scripts/check-ignored-files.py` | exit 0, every change: no untracked path, no ignored path off `scripts/allowed-ignored-paths.txt`. Exit 1: `situations.md` |
 | **§1's count check**, final tree | markers == ran, no name twice |
 
@@ -300,38 +293,49 @@ attribute it by the failing cases alone, then a control (`situations.md`). ⚠ *
 RUN is a SKIP you report**, never folded into the green. **A CI red after the push is fixed next**, in its
 own commit.
 
-## 9. Commit and push
+## 9. Commit and land through the door
 
 **ONE commit, on `main`**, holding the whole change: compiler source, spec cases, the documentation and
-regenerated site pages, every re-minted `TargetIr` pin, any `optimization-log.md` row. ⛔ Never a commit
+regenerated site pages, every re-minted `TargetIr` pin. ⛔ Never a commit
 per piece or a partial landing "to follow": the gates licensed the whole tree. **The message carries what
 the diff cannot**: the wrong answer that motivated it, the mechanism, the cases red → green, the gate
-figures measured. ⚠ **Never a figure you did not measure**: it looks exactly like one taken.
+figures measured. ⚠ **Never a figure you did not measure**: it looks exactly like one taken. **When §4
+read the ladder, the final paragraph carries `Scale-Note: <text>`** as a trailer, beside any
+`Co-Authored-By:`; a `Land:` or `Scale-Note:` line outside the final paragraph fails the run.
 
 - **Stage and commit as `situations.md`'s "Staging and committing" says**: explicit paths, stderr in
   view, the cached stat read.
 - **Glance at the last COMPLETED CI run as its own step** (`gh run list --branch main --workflow ci
-  --limit 3`), then push in a separate command. A completed red goes through §10's CI-red check (claimed
-  by someone else: theirs; else recorded, its culprit asked); push anyway, and that red (it hides later failures) is first in your
-  drain if it falls to you. A run in progress never blocks a push.
+  --limit 3`), then land in a separate command. A completed red goes through §10's CI-red check (claimed
+  by someone else: theirs; else recorded, its culprit asked); land anyway, and that red (it hides later failures) is first in your
+  drain if it falls to you. A run in progress never blocks a land.
 - **Then, as its own step, `scripts/land.sh in-flight`**: anything but `none` is a chain land started
-  since §7 — wait (`--wait`), rebase, re-take each gate whose inputs changed. Then `git push origin main`.
+  since §7 — wait (`--wait`).
+- **Then land, in the background** (`run_in_background`; about 4 minutes for a compiler change, and its
+  exit wakes you). **From `main`: `scripts/land.sh submit --name=<name>`**, which pushes `land/<name>`,
+  dispatches `land.yml` and waits for the run. **A session that pushes only its own branch** ends the
+  commit's final paragraph with `Land: main`, pushes the branch, and runs `scripts/land.sh await <branch>
+  <head>`. **No agent runs `git push origin main`.** The door merges the commit at main's tip and mints the §4 row.
 
-⛔ **A commit the seed chain refused lands only through `land.yml`**, on a bootstrap chain, as does an
-ordinary commit from **a session that can push only its own branch** (`compiler-workflow`). ⭐ **Land it
-WITHOUT ASKING (user ruling)**: publishing the `seed-*` pre-release and its pin is authorized like the
-`git push` it replaces; never hand the user a seed to publish. ⛔ **A REJECTED PUSH IS NOT A RETRY**: rebase and re-take each gate whose inputs
-changed, re-minting a ladder row the commit carries (`situations.md`). Once the push is accepted, delete
-`temp/land/` and every other `temp/` directory this change created.
+⛔ **A commit the seed chain refused lands through the same door, on a bootstrap chain**
+(`compiler-workflow`). ⭐ **Land it WITHOUT ASKING (user ruling)**: publishing the `seed-*` pre-release
+and its pin is authorized like a push to `main`; never hand the user a seed to publish.
+⛔ **A BOUNCE IS NOT A RETRY** (a file both sides changed, the seed refusing the merged tree, a refused
+note, a misplaced trailer): the run names what to fix and deletes its branch when the branch still
+points at the run's head; nobody deletes it by hand, and a name that still exists is a run going or a
+run that kept it (read the run). Rebase by hand (`situations.md`), re-take each gate whose inputs
+changed, and submit again under the same name.
 
-> ⛔ **DO NOT WAIT FOR CI (user ruling).** The push ends the change: do not watch, poll or schedule a
-> check. CI hosts the four native targets on their own architecture, the full suite, the tree corpora,
+> ⛔ **DO NOT WAIT FOR CI (user ruling).** The door's verdict ends the change: `land.sh` prints the sha
+> main received, the door's commit and not yours. Then `git fetch origin main && git reset --keep
+> origin/main`, delete `temp/land/` and every other `temp/` directory this change created, and do not
+> watch, poll or schedule a check. CI hosts the four native targets on their own architecture, the full suite, the tree corpora,
 > the two-stage seed build and wasm32-wasi (on its x64-linux lane), so a lane can go red after you report. A red lane reported
 > to you goes through §10's CI-red check; one that falls to you is yours whether or not you caused it,
 > in its own commit, reproduced on that platform's own host, never on the cross lane that missed it.
 
-**Report in a few lines**: the change, the cases red → green, each gate's number, and every gate or lane
-not run, with its reason (CI-only lanes included). **Then drain the known issues (§10)**: the task is not
+**Report in a few lines**: the change, the cases red → green, each gate's number, the sha main received,
+and every gate or lane not run, with its reason (CI-only lanes included). **Then drain the known issues (§10)**: the task is not
 over while one is claimable.
 
 ## 10. Known issues

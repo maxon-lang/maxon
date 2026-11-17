@@ -29,50 +29,55 @@ findable BY NAME under `tests/ladders/`.
 
 ## How rows get here
 
-Rows are **appended by the tool, not by hand**. Running
+Rows are **minted by `land.yml`, not by hand**. A commit whose author read the ladder carries its note as
+a `Scale-Note: <what changed, and why the numbers moved>` trailer in its final paragraph. After the final
+merge onto `main`'s tip, the door runs
 
 ```
-./maxon-bin/.maxon/maxon scale-test --note="<what changed, and why the numbers moved>"
+./maxon-bin/.maxon/maxon scale-test --note="<the commit's Scale-Note>"
 ```
 
-records this run as a new dated row in all three tables. **A run without `--note` records nothing** —
-scale-test is run dozens of times a day against dirty trees and abandoned experiments, and a log of
-all of them would be a log nobody reads.
+in the merged tree with the compiler it built there, and the new dated row in all three tables joins the
+landed commit. A commit that adds or edits a row by hand is refused at the plan, and the refusal names the
+trailer. Every row is minted on one runner, at one path, with one corpus, in one fixed environment, so each
+row's deltas print against the row before it.
+
+The author still reads the ladder locally (`maxon scale-test`, which records nothing) and takes its A/B
+against a control compiler; it mints nothing. **A run without `--note` records nothing** — scale-test is run
+dozens of times a day against dirty trees and abandoned experiments, and a log of all of them would be a log
+nobody reads.
 
 **`--note` is an instruction, not a request: if you pass one, the row is written.** Even if the
 numbers are identical to the row above it. The run will tell you plainly that nothing moved, and then
-record it anyway, because you are the one who knows whether it is a datapoint and the instrument is
+record it anyway, because the author is the one who knows whether it is a datapoint and the instrument is
 not.
 
-The `--note` is not a formality. The instrument can see exactly *what* moved and can never see *why*,
+The note is not a formality. The instrument can see exactly *what* moved and can never see *why*,
 and six months from now a number with no reason attached is worth almost nothing. So the reason is
-demanded at the one moment it is still known: from you, now. See
+demanded at the one moment it is still known: from the author, in the commit. See
 [`maxon-bin/Testing/ScaleHistory.maxon`](../maxon-bin/Testing/ScaleHistory.maxon).
 
 **A row is minted on the tree it is committed with, and it is the last row of each table.** Its `tree`
 cell is the digest of the sources the measured compiler was built from (see the next section), and
 `--note` writes a row only into that tree: run from any other directory, it refuses and records nothing.
-So a row is minted after the rebase and after the last source edit — comments included, since the tree
-digest covers every source byte — on the tree that is pushed. Two checks hold it there:
+The door mints after the merge, so the row's tree is the landed commit's tree. Two checks hold it there:
 
 - `scale-test --check-row` (MCP `run_scale_test` with `checkRow: true`) measures nothing and exits 0
   only when the last row carries the digest of the tree in the current directory; otherwise it exits 1,
-  showing the row's tree cell and this tree's digest, and names the fix: re-run `--note` on this tree.
+  showing the row's tree cell and this tree's digest.
 - `scripts/check-scale-rows.sh` checks the history: every row a commit adds is added to all three tables,
   is the last row of each, and carries that commit's tree digest, and no existing row is altered or
   removed. Every push to `main` runs its history checks over each commit pushed (`--range` with
   `--history-only`, in `scale-rows.yml`, which builds nothing). The tree digest is checked where a compiler
-  is built: for every row by `/land` with `--working-tree` before the commit, and in CI by each `ci.yml`
-  run on `main`, with `--range` over the commits of the push that started it. CI does not check it for a
-  push that changes nothing among the paths that start `ci.yml` (this file and other prose are not among
-  them), which starts no `ci.yml` run, nor for a push whose pending run a newer push replaced, since the
-  newer run ranges over its own push alone.
-  This file merges as a union, so a rebase can leave an added row above another commit's; the check
-  catches that too.
+  is built: in CI by each `ci.yml` run on `main`, with `--range` over the commits of the push that started
+  it. CI does not check it for a push that changes nothing among the paths that start `ci.yml` (this file
+  and other prose are not among them), which starts no `ci.yml` run, nor for a push whose pending run a
+  newer push replaced, since the newer run ranges over its own push alone.
+  This file merges as a union: when two lands add a row concurrently, the door's merge keeps both, the row
+  of the land that merges last at the end, and the check catches a row left above another's.
 
-**A row on `main` is never edited.** A correction is a new row whose note names the row it corrects. A
-row not yet pushed that must change, in the working tree or in a commit still to be pushed, is deleted
-from all three tables and minted again.
+**A row on `main` is never edited.** A correction is a new row, minted from a `Scale-Note:` that names the
+row it corrects.
 
 ⚠ **One run writes the last row of Allocations, Bytes and CPU together**, so those three rows agree cell
 for cell on `date`, `minted at`, `corpus`, `tree` and `change` — and the next run **refuses to read this
@@ -192,7 +197,7 @@ beside every phase; these tables carry the raw counts it is taken from.
 | **allocations** (per rung) | **Exact and bit-for-bit reproducible for ONE place — and NOT comparable across two.** The same source through the same compiler at the same paths makes exactly the same allocations, on an idle machine or a loaded one. Across two places the count moves with the depth and names of the paths a compile works with, by a term that grows with the program (the `minted at` section above), so `scale-test` withholds the delta. Within one place a number that moved, moved for a *reason*. |
 | **bytes** (per rung) | **Exact and bit-for-bit reproducible for ONE place — and NOT comparable across two.** A compile allocates the compiler's own path, derives every library source path from it, and resolves every corpus path against its working directory, so this column also carries a term proportional to those paths' *length*: measured at **+98,888 → +435,455 bytes** across two checkouts 47 characters apart. Within one place a movement is as real as an allocation's. |
 | **the rung-over-rung ratio** | **Exact**, for the same reason: it is a division of two numbers that cannot move. And it is the one reading the path term barely touches: across those same two checkouts the top rung's byte ratio read **×2.0355 and ×2.0353**. |
-| **CPU ticks** (per rung) | **MEASURED: median 1.7%, worst 6.3%, across three idle runs — for phases above 50M ticks, which are the ones a ratio is read from.** Small phases are much noisier (`phase:runtimeAugment` at ~100K ticks swung 28.6%); do not read a growth ratio off one. **A movement inside the band is NOT a datapoint.** Against the question the ladder asks — ×2 linear vs ×4 quadratic — 6% has a 100% margin. Rows are the MINIMUM of `--repeat` compiles. |
+| **CPU ticks** (per rung) | **MEASURED on `ubuntu-latest`, the runner every row is minted on, over three rehearsal runs of one tree (`land.yml` runs 44057310001, 44057314801 and 44057319371): the per-rung CPU totals deviate from their median by 11.5% to 20.8%, median 16.5%, worst 20.8%.** The Allocations and Bytes rows of the three runs are identical. The figures are per-rung totals, not phases. **A movement inside the band is NOT a datapoint.** The attributable CPU figure is the A/B against a control compiler, run from one directory on one machine. Rows are the MINIMUM of `--repeat` compiles. |
 | **the CPU rung-over-rung RATIO** | **The durable part, and it survives a busy box.** Absolute ticks do NOT: a fully CPU-loaded machine inflated every rung by **+49% to +52%** (cache and SMT contention — this counter ignores preemption, not contention). But it inflated them *uniformly*, so the growth reading came through nearly intact: **loaded ×1.90/×1.98 against idle ×1.86/×2.00.** Compare ratios across dates and boxes; compare absolutes only within one machine's own quiet runs. |
 | **wall time** | **Not measured, and never will be here.** It is machine-dependent in the way that matters: it counts every *other* process too, so a dated column of it would compare a loaded box in July against an idle one in August. Measured: one run read `phase:parse` at ×5.03 then ×1.78 across a doubling ladder — preemption, not a curve. For the milliseconds of one compile, use the compiler's own `--log=compiler:debug`, which now prints a `cpu%` column beside the wall `%`; a phase where the two disagree spent its wall time not running. |
 

@@ -66,25 +66,58 @@ built from the last commit. It works in `temp/land-branch/`, its `tree/` a git w
 
 #### Landing a branch — `land.yml`
 
+`land.yml` is the one door to `main`: every commit reaches it through a run, which merges the commit at
+`main`'s tip, proves the pinned seed builds the merged tree, mints the scale row and pushes. The maintainer's
+own push to `main` stays possible, as the escape when Actions is down.
+
 A run starts on a push to any branch but `main` whose head commit carries the git trailer `Land: main` or
-`Land: rehearsal`, or on a dispatch of `land.yml` on a branch with the input `mode`. Both take write access
-to the repository. Another `Land:` value, or two `Land:` trailers, is an error. The steps are
+`Land: rehearsal`, or on a dispatch of `land.yml` on a branch. Both take write access to the repository.
+The dispatch inputs are `mode` (`main` or `rehearsal`), `head` (the full commit id the dispatch lands; the
+plan fails when the branch has moved from it) and `attempt` (which dispatch of this land it is, 1 to 3);
+`scripts/land.sh submit` fills them in. The rehearsal-only inputs `tip` and `moved` stand in for `main`'s tip
+when the plan merges and when the land job pushes, so the paths that need `main` to move can be rehearsed
+without moving it; `main` mode refuses both. Another `Land:` value, or two `Land:` trailers, is an error.
+
+A commit carries its note as a `Scale-Note: <text>` trailer when its author read the scale ladder (below).
+`Land:` and `Scale-Note:` are read by one rule, git's trailer parse of the commit's final paragraph. A line
+with either key anywhere else fails the plan: `move it into the final paragraph`. The steps are
 [`scripts/land.sh`](../scripts/land.sh) subcommands, one per job.
 
-1. **plan** classifies the branch by the pinned seed's verdict on its head tree and its commits since
-   `origin/main`:
+1. **plan** (`contents: read`, no secret) classifies the branch by the pinned seed's verdict on its head
+   tree and its commits since its base, the merge-base of `origin/main` and the head, and does everything
+   that builds:
 
    | Commits | Pinned seed | Result |
    |---|---|---|
-   | 0 | — | nothing to land |
-   | not a fast-forward of `origin/main` | — | rebase and push again |
-   | 1 | builds it | **ordinary**: `main` is fast-forwarded to that commit, unchanged |
+   | 0 | — | error: nothing to land |
+   | 1 | builds it | **ordinary** |
    | more than 1 | builds the head | error: an ordinary land is one commit |
    | 1 | refuses it | error: the seed's diagnostic, and the fix — commit the intermediate tree before it |
    | more than 1 | refuses the head | **chain** |
 
-   A branch that changes `scripts/seed-tag` or holds a merge commit is refused. For a chain it records the
-   tag `seed-<date>-<first 12 hex digits of S>` and refuses one that exists as a tag or a release.
+   A branch that changes `scripts/seed-tag`, holds a merge commit, or changes a row of the scale-history
+   tables in `docs/optimization-log.md` by hand is refused; the last names the `Scale-Note:` trailer. An
+   **ordinary** land continues:
+
+   - **Merge at the tip.** The overlap is the files the commit changed since the base that `main` also
+     changed since the base, less the files `.gitattributes` declares `merge=union`. A non-empty overlap
+     bounces the land to its author: `rebase by hand and submit again`. An empty one is merged by
+     `git merge-tree --write-tree` onto `main`'s tip as one commit with the author's name, email and date, the
+     message less its `Land:` line, and `github-actions[bot]` as committer. `main` always receives this
+     commit, so every land has one shape.
+   - **Prove the seed.** When the merge changed a seed input — `maxon-bin/`, `stdlib/`, `runtime/`,
+     `vendor/`, `project.maxon`, `maxon.maxtasks`, `scripts/seed-tag`, `scripts/build-from-seed.sh`,
+     `scripts/fetch-seed.sh`, `scripts/fetch-vendor.sh`, `scripts/lib/` — relative to the head the plan already
+     built, the seed pinned at `main`'s tip builds the merged tree, and a refusal bounces the land. A merge
+     that changed none skips the build. Everything else, including a semantic conflict between disjoint files, is
+     `ci.yml`'s on `main`.
+   - **Mint the row.** With a `Scale-Note:`, the plan runs `maxon scale-test --note=<note>` in the merged tree
+     with the compiler it built there, and the row joins the landed commit. A refused note bounces.
+   - **Hand off.** The landed commit travels to the **land** job as a git bundle artifact, with the tip it
+     merged onto.
+
+   For a chain it records the tag `seed-<date>-<first 12 hex digits of S>` and refuses one that exists as a
+   tag or a release. A chain lands only on `main`'s tip, and a `Scale-Note:` on one is refused.
 2. **credential** (`main` only) mints the landing App's token and drops it, so a missing or
    under-permissioned App fails before anything is published.
 3. **chain** walks the chain, checks out `S` and runs `scripts/freeze-seed.sh`, which builds `maxon-bin`
@@ -96,40 +129,78 @@ to the repository. Another `Land:` value, or two `Land:` trailers, is an error. 
 5. **publish** re-checks that `origin/main` is still `S`'s parent, pushes the tag on `S` and the chain ref,
    creates the pre-release through GitHub's REST API, and fetches every target back against its
    `SHA256SUMS`.
-6. **land** (`main` only) pushes the ordinary commit, or `S` and the pin commit — the tag in
-   `scripts/seed-tag` — to `main` in one push. CI runs on the pin with the new seed.
-7. **retract** runs after a failure, a cancellation, and every rehearsal. It deletes the release, the tag
-   and the chain ref this run created — each checked against this run's commits — unless `main` holds the
-   pin, and deletes nothing when `main` cannot be read. Re-running the job is safe.
+6. **land** pushes `main`, and in `main` mode holds the App token. For an ordinary land it runs git alone,
+   with no build and no `maxon`: it checks that the plan's bundle is the head merged onto the plan's tip
+   plus the one minted row, then pushes the landed commit with `--force-with-lease` on the tip the plan
+   merged onto, a compare-and-swap. When `main` has moved:
+   - by commits that change no seed input, it merges the landed commit onto the new tip with git alone (the
+     overlap check runs again, and a row a concurrent land added to the union log merges, this land's last)
+     and pushes again, up to 3 pushes. The minted row's tree digest reads seed inputs only, so a merge that
+     changed none leaves the row true;
+   - by a seed input, it re-dispatches the run with the next `attempt`, so **plan** merges and proves again
+     against the new tip, up to 3 attempts, and bounces when they are spent.
+
+   It records the sha `main` received as the annotation `landed`, and a rehearsal records the sha `main`
+   would receive as `rehearsed`. For a chain it pushes `S` and the pin
+   commit — the tag in `scripts/seed-tag` — to `main` in one push, after checking that `main` is still `S`'s
+   parent. CI runs on the pin with the new seed.
+7. **retract** runs after a failure, a cancellation, and every rehearsal of a chain. It deletes the release,
+   the tag and the chain ref this run created — each checked against this run's commits — unless `main`
+   holds the pin, and deletes nothing when `main` cannot be read. Re-running the job is safe.
+8. **consume** runs last, whatever the outcome, landed or bounced, in either mode, unless the run
+   re-dispatched itself. It deletes the branch the run ran on with a compare-and-swap push on the run's
+   head, so a branch pushed again meanwhile is kept. Nobody deletes the branch by hand; a session that
+   cannot force-push submits a rewritten commit under the same name with a plain push.
 
 `S` and the pin commit are committed by `github-actions[bot]` at the time **plan** recorded, so every job
-recomputes the same commits from the plan's outputs. Every land run shares one concurrency group, and
-runs never overlap: a run left pending is replaced by a newer one — any branch push whose message has a line starting `Land:` joins the group — and a replaced run did not land —
-push again. The workflow never rebases. **chain**, **prove**, **publish** and **land**, and every step of the chain walk, first
-checks that `origin/main` is still `S`'s parent, so a run that lost the race stops within minutes:
-`origin/main moved past <base> — nothing published; rebase and push again`. **publish**'s check, made just
-before anything is published, is the one that decides.
+recomputes the same commits from the plan's outputs. The workflow has no concurrency group: land runs go in
+parallel, no pending run is replaced, and the compare-and-swap push is the only serialisation. The workflow
+never rebases. For a chain, **chain**, **prove**, **publish** and **land**, and every step of the chain
+walk, first check that `origin/main` is still `S`'s parent, so a run that lost the race stops within minutes:
+`origin/main moved past <base> — nothing published; rebase and push again`. **publish**'s check, made
+just before anything is published, is the one that decides.
 
 ⚠ **A chain land in flight holds `main`, by convention.** `scripts/land.sh in-flight` prints the branch and
 run of every `land.yml` run that is landing a chain in `main` mode — or whose plan has not yet said what it
-is — and `none` otherwise; it fails when GitHub cannot be read. `/land` runs it before its rebase and again
-before `git push origin main`, and when a chain land is in flight waits for it (`in-flight --wait`), then
-rebases, so the chain's publish finds `main` where its plan left it. The hold is advisory: nothing stops a
-push to `main`, and a push during a chain land costs that land a run.
+is — and `none` otherwise; it fails when GitHub cannot be read. `/land` runs it before it submits and waits
+for a chain land in flight (`in-flight --wait`), so the chain's publish finds `main` where its plan left
+it. The hold is advisory: nothing stops a push to `main`, and a push during a chain land costs that land a
+run.
 
-⭐ **`Land: rehearsal` is the dry run, and runs every step**: the proofs, the publish and the fetch-back.
-It never mints the token that pushes `main`, and it always retracts, so it leaves nothing behind.
+⭐ **`Land: rehearsal` is the dry run, and runs every step**: the plan, and for a chain the proofs, the
+publish and the fetch-back. It never mints the token that pushes `main`: the **land** job runs without it,
+stops before the push, and keeps the commit it would push as the artifact `would-push`. A chain
+rehearsal always retracts, so it leaves nothing behind. Like every run, it consumes its branch.
+
+**The scale row** is minted by the door. After the final merge the plan runs `maxon scale-test --note=…`
+with the compiler it built, in the merged tree, and the row lands in the same commit, so `check-scale-rows.sh`
+and `scale-test --check-row` see a row that is last and carries the commit's digest. Every row is minted at
+one path with one corpus, on the runner, in a fixed environment (`env -i` with `PATH`, `HOME` and `TMPDIR`
+set), so row-to-row deltas print: the compiles `scale-test` measures inherit the environment, and its size
+enters the Bytes rows. The author still reads the ladder and
+takes its A/B against a control; it mints nothing (`docs/optimization-log.md`).
 
 **How a commit reaches `main`:**
 
-- an ordinary commit from a session that can push `main`: `git push origin main`;
-- an ordinary commit from a session that can push only its own branch: one commit with `Land: main`,
-  pushed to that branch;
+- an ordinary commit: one commit on `origin/main`, landed with `scripts/land.sh submit [--rehearsal]
+  [--name=<n>]`, which pushes `HEAD` to `land/<n>` (`<n>` defaults to the current branch), dispatches
+  `land.yml` on it and waits for the verdict; or one commit with `Land: main` in its final paragraph, pushed
+  to its branch, followed with `scripts/land.sh await <branch> <head>`;
 - a commit the pinned seed refuses, from any session: only through `land.yml` — push the chain with
-  `Land: main` on its head, or run `scripts/land.sh submit [--rehearsal]`, which pushes `HEAD` to
-  `land/<first 12 hex digits of HEAD>`, dispatches `land.yml` on it, follows the run and deletes the branch.
+  `Land: main` on its head, or run `scripts/land.sh submit`.
 
-The outcome is the head commit's check runs. A chain's `S` is the commit on `main` whose `Bootstrap-Chain:`
+The base of an ordinary land is the merge-base with `origin/main`, so the branch needs no rebase when
+`main` has moved. `submit` pushes one name per branch, `land/<n>`, so a rewritten commit goes up under the
+same name; a push the remote refuses because the name still exists means a run of it is going, or a run
+kept it.
+
+**The verdict ends the change.** `scripts/land.sh await` waits for the run and reports success only for a
+successful run, printing the sha `main` received — the door's commit, which has the same author and message as
+the head but is not the head. For a rehearsal it says `main` would receive that sha. A run that ends in any
+other conclusion fails `await`, even after it recorded a sha. A bounce — a file
+both sides changed, a seed that refuses the merged tree, a refused note, a misplaced trailer, a hand-made
+scale row — prints what to fix; the author rebases by hand, re-takes only the results whose inputs changed,
+and submits again under the same name. A chain's `S` is the commit on `main` whose `Bootstrap-Chain:`
 trailers end with the head commit.
 
 ⛔ **Old seeds stay published.** Every `seed-*` release is pinned by some commit, and bisecting and a
@@ -460,8 +531,9 @@ which is why the tap needs its own.
 workflow, and CI must run on what lands. It is a GitHub App installed on this repository alone, with the
 repository permissions **Contents: write** and **Workflows: write** — without the second, a land whose
 commit touches `.github/workflows/` is refused. `LAND_APP_ID` is its App ID and `LAND_APP_PRIVATE_KEY` a
-private key generated for it. Only the jobs that mint its token name them, and the jobs that build a branch's
-compilers do not. ⚠ A run uses the `land.yml` and `scripts/land.sh` of the branch it lands, so anyone who can push a branch can reach the App: push access to this repository is the access to `main`. `GITHUB_TOKEN` creates the seed's tags and release, so a seed release starts none of the
+private key generated for it. Only the jobs that mint its token name them: **credential**, which drops the
+token after proving it, and **land**, which holds it for the push and runs git alone. The jobs that build a
+branch's compilers (**plan**, **chain**, **prove**) hold no secret and no write access to `main`. ⚠ A run uses the `land.yml` and `scripts/land.sh` of the branch it lands, so anyone who can push a branch can reach the App: push access to this repository is the access to `main`. `GITHUB_TOKEN` creates the seed's tags and release, so a seed release starts none of the
 `release: published` workflows.
 
 ---

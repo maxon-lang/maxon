@@ -3676,7 +3676,9 @@ A value out of range is refused, never clamped.
 
 `--note=<text>` records the run in `docs/optimization-log.md` as one row in each of its three tables
 (allocations, bytes and CPU per rung), and only in the tree the compiler was built from: run from any other
-directory, it is refused before anything is measured, and nothing is written. Each row carries:
+directory, it is refused before anything is measured, and nothing is written. `land.yml` mints each row
+by running it on the landing commit's tree with the commit's `Scale-Note:` trailer as the note. Each row
+carries:
 
 | Cell | What it holds |
 |------|---------------|

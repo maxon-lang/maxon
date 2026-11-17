@@ -1,6 +1,9 @@
 # Land a branch on `main`. `scripts/land.sh` holds every step; `docs/RELEASING.md` owns the procedure.
+# No concurrency group: a group replaces a pending run, which would drop a land. The push job's
+# compare-and-swap push is the serialisation.
 
 name: land
+run-name: ${{ inputs.head && format('land {0} attempt {1}', inputs.head, inputs.attempt) || '' }}
 
 on:
   push:
@@ -13,13 +16,33 @@ on:
         type: choice
         options: [rehearsal, main]
         default: rehearsal
-
-concurrency:
-  group: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, format('{0}Land:', fromJSON('"\n"')))) && 'land-main' || format('land-skip-{0}', github.run_id) }}
-  cancel-in-progress: false
+      head:
+        description: the full commit id this dispatch lands; the plan refuses the run when the branch has moved from it
+        required: false
+        type: string
+        default: ''
+      tip:
+        description: rehearsal only (main mode refuses it) — a branch or full commit id that stands in for main's tip when the plan merges
+        required: false
+        type: string
+        default: ''
+      moved:
+        description: rehearsal only (main mode refuses it) — a branch or full commit id that stands in for main's tip when the land job pushes
+        required: false
+        type: string
+        default: ''
+      attempt:
+        description: which dispatch of this land this is; the land job dispatches the next when main moved by a seed input
+        required: false
+        type: string
+        default: '1'
 
 permissions:
   contents: read
+
+env:
+  LAND_BRANCH: ${{ github.ref_name }}
+  LAND_RUN_HEAD: ${{ inputs.head || github.sha }}
 
 defaults:
   run:
@@ -33,12 +56,14 @@ jobs:
       mode: ${{ steps.plan.outputs.mode }}
       kind: ${{ steps.plan.outputs.kind }}
       base: ${{ steps.plan.outputs.base }}
+      tip: ${{ steps.plan.outputs.tip }}
       head: ${{ steps.plan.outputs.head }}
       native: ${{ steps.plan.outputs.native }}
       chain: ${{ steps.plan.outputs.chain }}
       committed: ${{ steps.plan.outputs.committed }}
       date: ${{ steps.plan.outputs.date }}
       landed: ${{ steps.plan.outputs.landed }}
+      proof: ${{ steps.plan.outputs.proof }}
       tag: ${{ steps.plan.outputs.tag }}
       pin: ${{ steps.plan.outputs.pin }}
     steps:
@@ -46,13 +71,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Classify the branch by the pinned seed's verdict
+      - name: Classify the branch, merge it at main's tip, prove the seed and mint the scale row
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           LAND_EVENT: ${{ github.event_name }}
           LAND_MODE: ${{ inputs.mode }}
+          LAND_HEAD_INPUT: ${{ inputs.head }}
+          LAND_TIP_INPUT: ${{ inputs.tip }}
+          LAND_MOVED_INPUT: ${{ inputs.moved }}
+          LAND_ATTEMPT: ${{ inputs.attempt || '1' }}
         run: ./scripts/land.sh plan "$GITHUB_SHA"
+
+      - name: Hand the landed commit to the land job
+        if: steps.plan.outputs.kind == 'ordinary'
+        uses: actions/upload-artifact@v6
+        with:
+          name: landed
+          path: temp/land-bundle/landed.bundle
+          retention-days: 1
+          if-no-files-found: error
 
   credential:
     needs: plan
@@ -70,6 +108,7 @@ jobs:
       - &mint-token
         name: Mint the token that pushes main
         id: app
+        if: needs.plan.outputs.mode == 'main'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.LAND_APP_ID }}
@@ -82,8 +121,10 @@ jobs:
     if: needs.plan.outputs.kind == 'chain'
     runs-on: ubuntu-latest
     env: &plan-env
+      LAND_MODE: ${{ needs.plan.outputs.mode }}
       LAND_KIND: ${{ needs.plan.outputs.kind }}
       LAND_BASE: ${{ needs.plan.outputs.base }}
+      LAND_TIP: ${{ needs.plan.outputs.tip }}
       LAND_HEAD: ${{ needs.plan.outputs.head }}
       LAND_CHAIN: ${{ needs.plan.outputs.chain }}
       LAND_COMMITTED: ${{ needs.plan.outputs.committed }}
@@ -159,9 +200,15 @@ jobs:
   land:
     needs: [plan, credential, publish]
     if: >-
-      needs.plan.outputs.mode == 'main' && !cancelled() && needs.credential.result == 'success'
-      && (needs.plan.outputs.kind == 'ordinary' || (needs.plan.outputs.kind == 'chain' && needs.publish.result == 'success'))
+      !cancelled() && needs.plan.result == 'success'
+      && ((needs.plan.outputs.kind == 'ordinary' && (needs.plan.outputs.mode == 'rehearsal' || needs.credential.result == 'success'))
+      || (needs.plan.outputs.kind == 'chain' && needs.plan.outputs.mode == 'main' && needs.credential.result == 'success' && needs.publish.result == 'success'))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      redispatched: ${{ steps.land.outputs.redispatched }}
     env: *plan-env
     steps:
       - *mint-token
@@ -169,12 +216,31 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.app.outputs.token || github.token }}
 
-      - name: Push main
+      - uses: actions/download-artifact@v7
+        if: needs.plan.outputs.kind == 'ordinary'
+        with:
+          name: landed
+          path: temp/land-bundle
+
+      - name: Push main, merging again if it moved
+        id: land
         env:
           GH_TOKEN: ${{ github.token }}
+          LAND_TIP_INPUT: ${{ inputs.tip }}
+          LAND_MOVED_INPUT: ${{ inputs.moved }}
+          LAND_ATTEMPT: ${{ inputs.attempt || '1' }}
         run: ./scripts/land.sh land
+
+      - name: Keep the commit a rehearsal would push
+        if: needs.plan.outputs.mode == 'rehearsal' && steps.land.outputs.redispatched != 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: would-push
+          path: temp/land-bundle/would-push.bundle
+          retention-days: 1
+          if-no-files-found: error
 
   retract:
     needs: [plan, chain, prove, credential, publish, land]
@@ -194,3 +260,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/land.sh retract
+
+  consume:
+    needs: [plan, chain, prove, credential, publish, land, retract]
+    if: >-
+      always() && needs.plan.result != 'skipped' && needs.land.outputs.redispatched != 'true'
+      && startsWith(github.ref, 'refs/heads/') && github.ref_name != 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Delete the run's branch unless it was pushed again
+        run: ./scripts/land.sh consume

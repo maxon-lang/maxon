@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # The scale-ladder row check: every row a commit adds to `docs/optimization-log.md`'s three trend tables is
-# the LAST row of its table and carries that commit's tree digest. `/land` §8 runs it on the working tree
-# against HEAD; `ci.yml` runs it on each commit of a push where it builds a compiler, and `scale-rows.yml`
-# runs the history half alone on each commit of every push to `main`.
+# the LAST row of its table and carries that commit's tree digest. `ci.yml` runs it on each commit of a push
+# where it builds a compiler, and `scale-rows.yml` runs the history half alone on each commit of every push
+# to `main`.
 #
 # The half that is a fact about history lives here: which rows a commit added. Each table is read as the
 # contiguous `|` lines directly above its `<!-- scale-history:… -->` marker, and its data rows are compared
@@ -40,10 +40,8 @@ ExitFailed=1
 ExitCannotRun=2
 
 Script="check-scale-rows.sh"
-LogPath="docs/optimization-log.md"
-Tables="allocations bytes cpu"
-RowFix="re-run \`maxon scale-test --note=…\` on this tree; a row is minted last, after the rebase"
-EditFix="a committed row is never edited or removed: restore it, and record a correction as a new row minted with \`maxon scale-test --note=…\`"
+RowFix="drop the hand-made row and carry its note as a \`Scale-Note:\` trailer in the commit's final paragraph: land.yml mints the row on the merged tree, and a row is not minted by hand"
+EditFix="a committed row is never edited or removed: restore it, and record a correction as a new row, carried as a \`Scale-Note:\` trailer that land.yml mints"
 Unrecorded="*(unrecorded)*"
 ChangeTextWidth=60
 
@@ -54,6 +52,8 @@ cd "$repo_root"
 . scripts/lib/host-binaries.sh || exit "$ExitCannotRun"
 # shellcheck source=lib/system-temp.sh
 . scripts/lib/system-temp.sh || exit "$ExitCannotRun"
+# shellcheck source=lib/scale-tables.sh
+. scripts/lib/scale-tables.sh || exit "$ExitCannotRun"
 
 usage() {
 	printf 'usage: %s --working-tree [--history-only]\n       %s --range <base>..<head> --compiler <path>\n       %s --range <base>..<head> --history-only\n' "$Script" "$Script" "$Script" >&2
@@ -121,17 +121,23 @@ on_exit() {
 
 trap on_exit EXIT
 
+log_present_at() {
+	local status=0
+
+	scale_log_at "$1" "$2" || status=$?
+
+	case "$status" in
+		0) return 0 ;;
+		"$ScaleLogAbsent") return 1 ;;
+		*) cannot_run "cannot read $ScaleLogPath at $1" ;;
+	esac
+}
+
 # Reads $1 (the parent's log, or an empty path when there is none) and $2 (the log under check). Prints
 # each defect it finds and exits 1, or writes the number of rows each table gained to $3.
 judge_rows() {
-	OldLog="$1" NewLog="$2" CountFile="$3" Subject="$subject" LogPath="$LogPath" Tables="$Tables" RowFix="$RowFix" \
-	EditFix="$EditFix" Unrecorded="$Unrecorded" ChangeTextWidth="$ChangeTextWidth" awk '
-		function trim(text) {
-			sub(/^[ \t]+/, "", text)
-			sub(/[ \t]+$/, "", text)
-			return text
-		}
-
+	OldLog="$1" NewLog="$2" CountFile="$3" Subject="$subject" LogPath="$ScaleLogPath" Tables="$ScaleTables" RowFix="$RowFix" \
+	EditFix="$EditFix" Unrecorded="$Unrecorded" ChangeTextWidth="$ChangeTextWidth" awk "$ScaleTablesAwk"'
 		function report(table, message, fix) {
 			print subject ": the " table " table: " message
 			print "  Fix: " fix
@@ -148,83 +154,6 @@ judge_rows() {
 			}
 
 			return cell[version, table, row, "date"] " · " change
-		}
-
-		function load(path, version,    line, count) {
-			count = 0
-
-			if (path != "") {
-				while ((getline line < path) > 0) {
-					sub(/\r$/, "", line)
-					text[version, ++count] = line
-				}
-
-				close(path)
-			}
-
-			lineCount[version] = count
-		}
-
-		function readTable(version, table,    marker, at, start, i, heading, cells, columns, row, j, k, name) {
-			marker = "<!-- scale-history:" table " -->"
-			at = 0
-
-			for (i = 1; i <= lineCount[version]; i++) {
-				if (trim(text[version, i]) == marker) {
-					at = i
-					break
-				}
-			}
-
-			rowCount[version, table] = 0
-			hasCells[version, table] = 0
-
-			if (at == 0) {
-				return 0
-			}
-
-			start = at
-
-			while (start > 1 && substr(text[version, start - 1], 1, 1) == "|") {
-				start--
-			}
-
-			if (at - start < 2) {
-				return 0
-			}
-
-			columns = split(text[version, start], heading, "|")
-			corpusAt[version, table] = 0
-			treeAt[version, table] = 0
-
-			for (j = 1; j <= columns; j++) {
-				name = trim(heading[j])
-				column[version, table, name] = j
-
-				if (name == "corpus") {
-					corpusAt[version, table] = j
-				} else if (name == "tree") {
-					treeAt[version, table] = j
-				}
-			}
-
-			hasCells[version, table] = corpusAt[version, table] && treeAt[version, table]
-
-			for (i = start + 2; i < at; i++) {
-				row = ++rowCount[version, table]
-				cellCount[version, table, row] = split(text[version, i], cells, "|")
-
-				for (j = 1; j <= cellCount[version, table, row]; j++) {
-					raw[version, table, row, j] = trim(cells[j])
-				}
-
-				for (k = 1; k <= keyCount; k++) {
-					j = column[version, table, keyName[k]]
-					cell[version, table, row, keyName[k]] = j ? raw[version, table, row, j] : ""
-				}
-			}
-
-			return 1
 		}
 
 		function normalised(version, table, row, dropping,    j, key) {
@@ -433,13 +362,13 @@ if [ "$mode" = "working-tree" ]; then
 	subject="the working tree"
 	old_log="$scratch/old.md"
 
-	if ! git show "HEAD:$LogPath" > "$old_log" 2>/dev/null; then
+	if ! log_present_at HEAD "$old_log"; then
 		old_log=""
 	fi
 
-	[ -f "$LogPath" ] || cannot_run "$LogPath is not in the working tree"
+	[ -f "$ScaleLogPath" ] || cannot_run "$ScaleLogPath is not in the working tree"
 
-	if check_subject "$old_log" "$LogPath" ""; then
+	if check_subject "$old_log" "$ScaleLogPath" ""; then
 		exit "$ExitPassed"
 	fi
 
@@ -479,24 +408,24 @@ for commit in $commits; do
 	old_log=""
 
 	if [ "$#" -eq 1 ]; then
-		if git diff --quiet "$1" "$commit" -- "$LogPath"; then
+		if git diff --quiet "$1" "$commit" -- "$ScaleLogPath"; then
 			printf '%s: adds no row\n' "$subject"
 			continue
 		fi
 
 		old_log="$scratch/old.md"
-		git show "$1:$LogPath" > "$old_log" 2>/dev/null || old_log=""
+		log_present_at "$1" "$old_log" || old_log=""
 	fi
 
 	new_log="$scratch/new.md"
 
-	if ! git show "$commit:$LogPath" > "$new_log" 2>/dev/null; then
+	if ! log_present_at "$commit" "$new_log"; then
 		if [ -z "$old_log" ]; then
 			printf '%s: adds no row\n' "$subject"
 			continue
 		fi
 
-		printf '%s: removes %s\n' "$subject" "$LogPath"
+		printf '%s: removes %s\n' "$subject" "$ScaleLogPath"
 		failures=$((failures + 1))
 		continue
 	fi
