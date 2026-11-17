@@ -30,6 +30,13 @@ priority prefer:
 It must be:
 - **on the Roadmap, `Ready` and unassigned.** Nothing on the Backlog is assigned; moving an issue from
   the Backlog to the Roadmap is the user's decision.
+- **not a class issue, nor a stage of one.** An issue with sub-issues is a class plan, and each
+  sub-issue is one stage of it. The maintainer starts a session per class, which lands the stages in
+  order; they are assigned to the maintainer and are never the fleet's. A fleet task whose area a running
+  class holds is parked behind it.
+- **not blocked.** Every issue in its "Blocked by" list is closed
+  (`gh api repos/maxon-lang/maxon/issues/<n>/dependencies/blocked_by -q '[.[]|select(.state=="open")|.number]'`
+  prints `[]`).
 - **clear of every open task's area.** If the best candidate overlaps an active task, take the next one.
   If only overlapping work is left, park the worker, or the task, behind it (step 5's `Waits on:`).
 - **for a worker that holds no other open task.** A held task is cleared, or reopened for the next free
