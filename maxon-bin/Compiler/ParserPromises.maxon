@@ -253,6 +253,7 @@ extension Parser
 		end 'aPlainPosition'
 
 		self.noteMovedIntoCall(argValue, callee: callee, parameter: parameterName)
+		self.logUniqueMove(argValue)
 
 		if intoAnIsolatedParameter 'anIsolatedParameter'
 			try args.set(column, value: self.handIsolatedArgument(argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
@@ -663,15 +664,17 @@ extension Parser
 	function transferConsumedArg(argValue ValueId, anchor Token) returns ValueId
 		let subjects = self.uniquePayloadSubjectsOf(argValue)
 		let transferred = self.takeConsumedReference(argValue, anchor: anchor)
-
-		for subject in subjects 'eachSubjectOfAMovedUnique'
-			self.setBindingPartiallyMoved(subject, value: true)
-		end 'eachSubjectOfAMovedUnique'
-
+		self.markSubjectsPartiallyMoved(subjects)
 		self.carryFactsToTheHandedReference(argValue, transferred: transferred)
 
 		return transferred
 	end 'transferConsumedArg'
+
+	function markSubjectsPartiallyMoved(subjects ValueIdArray)
+		for subject in subjects 'eachSubjectOfAMovedUnique'
+			self.setBindingPartiallyMoved(subject, value: true)
+		end 'eachSubjectOfAMovedUnique'
+	end 'markSubjectsPartiallyMoved'
 
 	function carryFactsToTheHandedReference(argValue ValueId, transferred ValueId)
 		if transferred != argValue 'aReferenceOfItsOwn'

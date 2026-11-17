@@ -2611,7 +2611,7 @@ extension Parser
 	// definition dominates.
 	function renderedPanicMessagePointer(func IrFunction, panicTok Token) returns ValueId throws SourceParseError
 		let record = try self.parseStringInterpolation(func, prefix: panicMessageLinePrefix(self.job.path, line: panicTok.line), suffix: PanicMessageLineTerminator)
-		self.removeFromPendingTemps(record)
+		self.withdrawFromPendingTemps(record)
 		return self.emitLoadStringField(record, offset: StringBufferOffset, range: SourceRange.ofToken(panicTok))
 	end 'renderedPanicMessagePointer'
 
@@ -4064,7 +4064,7 @@ extension Parser
 			if self.valueIsOwnedHeap(otherwiseValue) 'ownedFallback'
 				self.transferFallbackToPhi(errEdgeValue, tryTok: tryTok)
 			end 'ownedFallback' else if self.borrowedValueOwesAHandoffReference(otherwiseValue) 'promoteBorrowedFallback'
-				errEdgeValue = try self.promoteBorrowedMergeEdge(otherwiseValue, edgeBlock: self.bodyState.currentBlock, anchor: tryTok)
+				errEdgeValue = try self.promoteBorrowedMergeEdge(otherwiseValue, edgeBlock: self.bodyState.currentBlock, anchor: tryTok, edge: PromotedEdge.tryFallback)
 			end 'promoteBorrowedFallback' else if not self.valueIsDeferred(otherwiseValue) 'aResolvedUnownedFallback'
 				panic("finishValueTry: a resolved fallback that owns no heap met an owned try-result — `refuseOtherwiseMismatch` refuses that pair unless the fallback is a deferred call result")
 			end 'aResolvedUnownedFallback'
@@ -4217,7 +4217,7 @@ extension Parser
 	// disjoint: a transfer to a binding removes the value from the pending list first.
 	function transferFallbackToPhi(errEdgeValue ValueId, tryTok Token)
 		if self.pendingTempsContain(errEdgeValue) 'movedTemp'
-			self.removeFromPendingTemps(errEdgeValue)
+			self.withdrawFromPendingTemps(errEdgeValue)
 		end 'movedTemp' else if self.valueIsAnOwnedIsolatedLocal(errEdgeValue) 'anIsolatedRegion'
 			self.moveOwnedValueOut(errEdgeValue)
 		end 'anIsolatedRegion' else 'aliasedBinding'
@@ -5852,7 +5852,7 @@ extension Parser
 			return false
 		end 'notPending'
 
-		self.removeFromPendingTemps(value)
+		self.withdrawFromPendingTemps(value)
 		return true
 	end 'takeOffPendingTemps'
 
@@ -8255,7 +8255,7 @@ extension Parser
 
 		// The exclusivity claim goes with the ownership it qualified — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(value)
-		self.removeFromPendingTemps(value)
+		self.withdrawFromPendingTemps(value)
 	end 'releaseOwnedTemp'
 
 	// Set `value`'s owned-heap provenance bit WITHOUT enrolling it as a statement-scoped pending temporary
@@ -8528,11 +8528,17 @@ extension Parser
 		return valueIsMarked(self.bodyState.immortalFunctionValues, value: value)
 	end 'valueIsImmortalFunction'
 
-	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
-	// remove it from the pending list. A filter-rebuild rather than a pop because, while the transferred
-	// value is normally the last one pushed (a binding's initializer is the statement's final expression),
-	// keying on identity rather than position is what stays correct if that ever stops holding.
+	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop.
+	// A join of unique values moves every variable it may be; `withdrawFromPendingTemps` leaves them.
 	function removeFromPendingTemps(value ValueId)
+		self.moveJoinedVariables(value)
+		self.withdrawFromPendingTemps(value)
+	end 'removeFromPendingTemps'
+
+	// A filter-rebuild rather than a pop because, while the transferred value is normally the last one
+	// pushed (a binding's initializer is the statement's final expression), keying on identity rather
+	// than position is what stays correct if that ever stops holding.
+	function withdrawFromPendingTemps(value ValueId)
 		let kept = ValueIdArray.create(0)
 
 		for pending in self.bodyState.pendingTempDrops 'each'
@@ -8542,7 +8548,96 @@ extension Parser
 		end 'each'
 
 		self.bodyState.pendingTempDrops = kept
-	end 'removeFromPendingTemps'
+	end 'withdrawFromPendingTemps'
+
+	function noteJoinedVariables(merged ValueId, arms ValueIdArray)
+		if not self.anArmIsAJoinableUnique(arms) 'noUniqueArm'
+			return
+		end 'noUniqueArm'
+
+		let variables = ValueIdArray.create(0)
+
+		for arm in arms 'eachArm'
+			if not self.valueIsAJoinableUnique(arm) 'notAUniqueArm'
+				continue
+			end 'notAUniqueArm'
+
+			for variable in self.variablesOperandMayBe(arm) 'eachVariable'
+				if not valueIdArrayContains(variables, value: variable) 'notYetNamed'
+					variables.push(variable)
+				end 'notYetNamed'
+			end 'eachVariable'
+		end 'eachArm'
+
+		self.recordJoinedVariables(merged, variables: variables)
+	end 'noteJoinedVariables'
+
+	function anArmIsAJoinableUnique(arms ValueIdArray) returns bool
+		for arm in arms 'eachArm'
+			if self.valueIsAJoinableUnique(arm) 'aUniqueArm'
+				return true
+			end 'aUniqueArm'
+		end 'eachArm'
+
+		return false
+	end 'anArmIsAJoinableUnique'
+
+	function valueIsAJoinableUnique(value ValueId) returns bool
+		return self.operandHoldsAUnique(value) and not self.valueIsLinear(value)
+	end 'valueIsAJoinableUnique'
+
+	function operandHoldsAUnique(value ValueId) returns bool
+		return self.valueHoldsAUniqueRecord(value) and not self.valueIsAVacantImageCase(value)
+	end 'operandHoldsAUnique'
+
+	function carryJoinedVariables(source ValueId, target ValueId)
+		if self.valueIsAJoinableUnique(source) 'aUniqueEdge'
+			self.recordJoinedVariables(target, variables: self.variablesOperandMayBe(source))
+		end 'aUniqueEdge'
+	end 'carryJoinedVariables'
+
+	function recordJoinedVariables(merged ValueId, variables ValueIdArray)
+		self.bodyState.joinedVariables = withJoinedVariables(self.bodyState.joinedVariables, merged: merged, variables: variables)
+	end 'recordJoinedVariables'
+
+	function joinedVariablesOf(merged ValueId) returns ValueIdArray throws MapError
+		match self.bodyState.joinedVariables 'column'
+			unwritten then throw MapError.keyNotFound
+			entries(byMerge) then return try byMerge.get(merged)
+		end 'column'
+	end 'joinedVariablesOf'
+
+	function variablesOperandMayBe(value ValueId) returns ValueIdArray
+		return try self.joinedVariablesOf(value) otherwise argsOf(value)
+	end 'variablesOperandMayBe'
+
+	function isAJoinOfVariables(value ValueId) returns bool
+		try self.joinedVariablesOf(value) otherwise return false
+		return true
+	end 'isAJoinOfVariables'
+
+	function moveJoinedVariables(merged ValueId)
+		let variables = try self.joinedVariablesOf(merged) otherwise return
+		let range = SourceRange.ofToken(self.tokenAt(self.pos - 1))
+
+		match self.bodyState.joinedVariables 'column'
+			unwritten then panic("moveJoinedVariables: v{merged} was just found among the joins, so the column is written")
+			entries(byMerge) then _ = byMerge.remove(merged)
+		end 'column'
+
+		for variable in variables 'eachVariable'
+			let subjects = self.uniquePayloadSubjectsOf(variable)
+
+			if self.hasLiveOwner(variable) 'ownedHere'
+				self.emitDecref(variable, range: range)
+				self.poisonMoveSource(variable)
+			end 'ownedHere' else 'ownedElsewhere'
+				self.noteLentUniqueMoved(variable, target: MoveTarget.elsewhere)
+			end 'ownedElsewhere'
+
+			self.markSubjectsPartiallyMoved(subjects)
+		end 'eachVariable'
+	end 'moveJoinedVariables'
 
 	// ⭐⭐ **RELEASE WHAT BUILDING A HAND-OFF'S VALUES LEFT BEHIND, BEFORE THE HAND-OFF WALKS THEIR GRAPHS.** A
 	// `spawn`'s state and a send's arguments are walked at run time at the hand-off, and
@@ -8624,7 +8719,7 @@ extension Parser
 			return
 		end 'notATemporary'
 
-		self.removeFromPendingTemps(value)
+		self.withdrawFromPendingTemps(value)
 		self.enrolOwnedBinding(VarInfo.createValueBinding(name, varType: self.typeOf(value), kind: BindingKind.let, boundValue: value))
 	end 'giveTemporaryScopeLifetime'
 
@@ -9255,7 +9350,32 @@ extension Parser
 		owned.markMovedAt(self.lineJustRead(), ledger: self.bodyState.moveLedger)
 		self.settleFeedDropGuardOf(value, loopCarried: LoopCarriedGuards.settleAlways)
 		self.bodyState.movedBindingValues = withValueMarked(self.bodyState.movedBindingValues, value: value)
+		self.logUniqueMove(value)
 	end 'poisonOwningBinding'
+
+	function logUniqueMove(value ValueId)
+		if self.operandHoldsAUnique(value) 'aUniqueValue'
+			self.bodyState.uniqueMoves.push(value)
+		end 'aUniqueValue'
+	end 'logUniqueMove'
+
+	function uniqueMoveMark() returns ElementIndex
+		return self.bodyState.uniqueMoves.count()
+	end 'uniqueMoveMark'
+
+	function variableMovedSince(variables ValueIdArray, mark ElementIndex) returns ValueId throws AbsentError
+		let moves = self.bodyState.uniqueMoves
+
+		for index in mark upto moves.count() 'eachLaterMove'
+			let moved = try moves.get(index) otherwise panic("variableMovedSince: uniqueMoves.get OOB at {index} below its own count")
+
+			if valueIdArrayContains(variables, value: moved) 'anOperandsVariable'
+				return moved
+			end 'anOperandsVariable'
+		end 'eachLaterMove'
+
+		throw AbsentError.absent
+	end 'variableMovedSince'
 
 	// ⭐⭐ **A MOVE POISONS EVERY NAME THAT READS THE VALUE, NOT ONLY THE ONE THAT OWNS IT.** An immutable
 	// rebind (`let b = a`) enrols no second owner — `b` simply reads `a`'s value — so `poisonMoveSource`'s
@@ -9793,7 +9913,7 @@ extension Parser
 	end 'deepBoxCloneCallee'
 
 	function unsharedByteRecord(value ValueId, range SourceRange) returns ValueId
-		self.removeFromPendingTemps(value)
+		self.withdrawFromPendingTemps(value)
 
 		let unshared = self.emitOwnedRuntimeResult(StrUnshareName, args: argsOf(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 		self.carryValueFacts(unshared, from: value, source: self.bodyState, path: ValueCarryPath.value)
@@ -9807,7 +9927,7 @@ extension Parser
 		end 'nothingShared'
 
 		let unshared = self.unsharedByteRecord(stored, range: range)
-		self.removeFromPendingTemps(unshared)
+		self.withdrawFromPendingTemps(unshared)
 
 		return unshared
 	end 'unsharedStoredByteRecord'
@@ -10321,17 +10441,21 @@ extension Parser
 	//     `transferFallbackToPhi`: a retain mints a fresh SSA name that is no pending temp, so that helper would
 	//     read it as an aliased BINDING and incref a second time — a leak. `transferFallbackToPhi` settles an
 	//     ALREADY-OWNED edge, which is the other branch of the question, not a further step of this one.
-	function promoteBorrowedMergeEdge(value ValueId, edgeBlock IrBlock, anchor Token) returns ValueId throws SourceParseError
+	function promoteBorrowedMergeEdge(value ValueId, edgeBlock IrBlock, anchor Token, edge PromotedEdge) returns ValueId throws SourceParseError
 		let saved = self.bodyState.currentBlock
 		self.bodyState.currentBlock = edgeBlock
 
 		let owned = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.merged, range: SourceRange.ofToken(anchor))
-		self.removeFromPendingTemps(owned)
+		self.withdrawFromPendingTemps(owned)
 
 		if owned != value and not self.valueIsCopyableTuple(value) 'anAliasOfTheEdge'
 			self.carryCapabilityToAlias(value, target: owned)
 			self.carryImmutableSlotRead(value, target: owned)
 			self.carryIsolatedPartRead(owned, arm: value)
+
+			if edge == PromotedEdge.mergeArm 'joinedAfterThePromotion'
+				self.carryJoinedVariables(value, target: owned)
+			end 'joinedAfterThePromotion'
 		end 'anAliasOfTheEdge'
 
 		self.bodyState.currentBlock = saved
@@ -11017,3 +11141,8 @@ extension Parser
 		return try self.parseBlockBody(func, block: elseBlock, label: elseLabelTok.value)
 	end 'parseElseBranchBody'
 end 'Parser'
+
+enum PromotedEdge
+	mergeArm
+	tryFallback
+end 'PromotedEdge'

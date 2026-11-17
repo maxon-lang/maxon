@@ -1337,6 +1337,7 @@ extension Parser
 		end 'movesTheLocal'
 
 		self.noteMergedIntoRegion(merged)
+		self.markFresh(merged)
 		return merged
 	end 'parseMerge'
 
@@ -1481,13 +1482,17 @@ extension Parser
 		return maxonTypeTag(paramType) == ValueTypeTag.typeParameter
 	end 'parameterIsOpaque'
 
-	function checkCallCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, receiver ReceiverArg, anchor Token, spawning CallSpawning) returns bool throws SourceParseError
+	function checkCallCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, receiver ReceiverArg, anchor Token, spawning CallSpawning, moveMark ElementIndex) returns bool throws SourceParseError
 		let declaration = try self.declarationNameableHere(callee) otherwise return false
 		let receiverFirst = self.receiverIsPassed(receiver)
 
 		if receiverFirst and declaration.selfCapability == ParamCapability.immutable 'aFrozenSelf'
 			self.notePassedParamNeed(func, value: try args.get(0) otherwise panic("checkCallCapabilities: a call with a receiver carries it at argument 0"), mutable: false, line: anchor.line)
 		end 'aFrozenSelf'
+
+		if argAnchors.count() > 1 'severalArguments'
+			try self.requireNoUniqueNamedTwice(args, starts: argAnchors, spanStart: self.callOperandsStart(argAnchors, receiver: receiver), moveMark: moveMark, place: UniqueOperandPlace.callArguments)
+		end 'severalArguments'
 
 		let opensAnIsolatedValue = try self.openIsolatedPositions(callee, args: args, declaration: declaration, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, spawning: spawning)
 		let firstSource = 1 if receiverFirst else 0
@@ -1522,6 +1527,46 @@ extension Parser
 
 		return opensAnIsolatedValue
 	end 'checkCallCapabilities'
+
+	function callOperandsStart(argAnchors TokenIndexArray, receiver ReceiverArg) returns ElementIndex
+		if self.receiverIsPassed(receiver) 'theReceiverLeads'
+			return self.receiverSpanOf(receiver).startIndex
+		end 'theReceiverLeads'
+
+		return try argAnchors.get(0) otherwise panic("callOperandsStart: a call with several written arguments anchors its first")
+	end 'callOperandsStart'
+
+	function requireNoUniqueNamedTwice(operands ValueIdArray, starts TokenIndexArray, spanStart ElementIndex, moveMark ElementIndex, place UniqueOperandPlace) throws SourceParseError
+		for (iter, operandStart) in starts.withIterator() 'eachOperand'
+			let index = iter.index()
+			let operand = try operands.get(index) otherwise panic("requireNoUniqueNamedTwice: operands.get OOB at {index} — every written operand has a value")
+
+			if not self.operandHoldsAUnique(operand) 'notAUniqueValue'
+				continue
+			end 'notAUniqueValue'
+
+			let variables = self.variablesOperandMayBe(operand)
+
+			if let moved = try self.variableMovedSince(variables, mark: moveMark) 'movedByALaterOperand'
+				throw self.uniqueNamedTwiceRefusal(place, value: moved, spanStart: spanStart, operandStart: operandStart)
+			end 'movedByALaterOperand'
+
+			for earlier in 0 upto index 'eachEarlierOperand'
+				let shared = try sharedValueOf(variables, other: self.variablesOperandMayBe(try operands.get(earlier) otherwise panic("requireNoUniqueNamedTwice: operands.get OOB at {earlier} below {index}"))) otherwise continue
+				throw self.uniqueNamedTwiceRefusal(place, value: shared, spanStart: spanStart, operandStart: operandStart)
+			end 'eachEarlierOperand'
+		end 'eachOperand'
+	end 'requireNoUniqueNamedTwice'
+
+	function uniqueNamedTwiceRefusal(place UniqueOperandPlace, value ValueId, spanStart ElementIndex, operandStart ElementIndex) returns SourceParseError
+		let nameIndex = try self.lastReadIndexIn(TokenSpan.create(spanStart, endIndex: self.pos), value: value, liveOnly: false) otherwise 'noNameReadsIt'
+			let operandTok = self.tokenAt(operandStart)
+			return self.regionRefusal(ErrorCode.useAfterMove, message: uniqueNamedTwiceMessage(place, name: self.pathTextOf(operandStart)), line: operandTok.line, column: operandTok.column)
+		end 'noNameReadsIt'
+
+		let nameTok = self.tokenAt(nameIndex)
+		return self.regionRefusal(ErrorCode.useAfterMove, message: uniqueNamedTwiceMessage(place, name: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
+	end 'uniqueNamedTwiceRefusal'
 
 	function positionOpensItsValue(args ValueIdArray, declaration SweptDeclaration, argLabels NameRoster, receiverFirst bool, position ElementIndex) returns bool
 		let argument = try args.get(position) otherwise panic("positionOpensItsValue: args.get OOB at {position}")
@@ -1668,8 +1713,8 @@ extension Parser
 		try self.requireArgumentFrozen(func, callee: callee, declaration: declaration, argument: argument, anchorIndex: anchorIndex, argColumn: argColumn, label: label)
 	end 'requireCrossingArgumentFrozen'
 
-	function checkSendArgumentCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, anchor Token) throws SourceParseError
-		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: anchor, spawning: CallSpawning.direct)
+	function checkSendArgumentCapabilities(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, anchor Token, moveMark ElementIndex) throws SourceParseError
+		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: anchor, spawning: CallSpawning.direct, moveMark: moveMark)
 		try self.checkCrossingArguments(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, firstSource: 0, door: CrossingDoor.message)
 	end 'checkSendArgumentCapabilities'
 
@@ -1848,9 +1893,13 @@ extension Parser
 				end 'onlyLentToTheCaller'
 			end 'aWrittenArgument'
 
-			let spelled = try self.keptArgumentTokenAt(position, argAnchors: argAnchors, receiver: receiver, anchor: anchor) otherwise continue
+			let spelled = try self.keptArgumentTokenAt(position, argAnchors: argAnchors, receiver: receiver, anchor: anchor) otherwise 'notABareName'
+				self.fileKeptJoinedVariables(func, opIdx: opIdx, position: position, argValue: argValue, argAnchors: argAnchors, receiver: receiver)
+				continue
+			end 'notABareName'
 
 			if not tokenCanBeAName(spelled) or not self.bodyState.scope.contains(spelled.value) 'notABinding'
+				self.fileKeptJoinedVariables(func, opIdx: opIdx, position: position, argValue: argValue, argAnchors: argAnchors, receiver: receiver)
 				continue
 			end 'notABinding'
 
@@ -1860,9 +1909,51 @@ extension Parser
 				continue
 			end 'notThisFramesToGive'
 
-			self.fileKeptArgumentSite(func, opIdx: opIdx, position: position, anchor: spelled, argValue: argValue, holder: binding.payloadScrutBox() if binding.isPayloadBinding() else argValue, argAnchors: argAnchors)
+			self.fileKeptArgumentSite(func, opIdx: opIdx, position: position, anchor: spelled, argValue: argValue, holder: keptHolderOf(binding, value: argValue), argAnchors: argAnchors)
 		end 'eachArgument'
 	end 'noteKeptArgumentSites'
+
+	function fileKeptJoinedVariables(func IrFunction, opIdx ElementIndex, position ElementIndex, argValue ValueId, argAnchors TokenIndexArray, receiver ReceiverArg)
+		let variables = try self.joinedVariablesOf(argValue) otherwise return
+		let span = self.openedPositionSpan(position, argAnchors: argAnchors, receiver: receiver)
+
+		for variable in variables 'eachVariable'
+			let nameIndex = try self.lastReadIndexIn(span, value: variable, liveOnly: true) otherwise continue
+			let origin = self.uniqueOriginOf(variable, namesABinding: true, anchorIndex: nameIndex)
+
+			if origin != UniqueOrigin.owned 'onlyLentToTheCaller'
+				self.fileLentKeptArgument(func, opIdx: opIdx, position: position, origin: origin, span: TokenSpan.create(nameIndex, endIndex: nameIndex + 1))
+				continue
+			end 'onlyLentToTheCaller'
+
+			self.fileKeptArgumentSite(func, opIdx: opIdx, position: position, anchor: self.tokenAt(nameIndex), argValue: variable, holder: keptHolderOf(self.bodyState.scope.getInfo(self.tokenAt(nameIndex).value), value: variable), argAnchors: argAnchors)
+		end 'eachVariable'
+	end 'fileKeptJoinedVariables'
+
+	function lastReadIndexIn(span TokenSpan, value ValueId, liveOnly bool) returns ElementIndex throws AbsentError
+		var index = span.endIndex
+
+		while index > span.startIndex 'towardTheStart'
+			index = index - 1
+
+			if not self.tokenReadsABindingAt(index) 'notAReadOfABinding'
+				continue
+			end 'notAReadOfABinding'
+
+			let binding = self.bodyState.scope.getInfo(self.tokenAt(index).value)
+
+			if binding.boundValue == value and not (liveOnly and binding.movedFrom) 'aReadOfTheValue'
+				return index
+			end 'aReadOfTheValue'
+		end 'towardTheStart'
+
+		throw AbsentError.absent
+	end 'lastReadIndexIn'
+
+	function tokenReadsABindingAt(index ElementIndex) returns bool
+		let tok = self.tokenAt(index)
+		return tokenCanBeAName(tok) and self.bodyState.scope.contains(tok.value) and self.kindAt(index + 1) != TokenKind.colon and (index == 0 or self.kindAt(index - 1) != TokenKind.dot)
+	end 'tokenReadsABindingAt'
 
 	function fileLentRootsBesideABinding(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray, receiver ReceiverArg) returns ParamPositionMask
 		var filed = NoParamPositions
@@ -2053,15 +2144,11 @@ extension Parser
 		let stop = self.argumentSpanEnd(argStart)
 
 		for index in argStart upto stop 'eachToken'
+			if not self.tokenReadsABindingAt(index) 'notARead'
+				continue
+			end 'notARead'
+
 			let tok = self.tokenAt(index)
-
-			if not tokenCanBeAName(tok) or not self.bodyState.scope.contains(tok.value) 'notABinding'
-				continue
-			end 'notABinding'
-
-			if self.kindAt(index + 1) == TokenKind.colon or self.kindAt(index - 1) == TokenKind.dot 'aLabelOrAField'
-				continue
-			end 'aLabelOrAField'
 
 			if self.bindingReadsValue(self.bodyState.scope.getInfo(tok.value), value: value, holder: holder) 'theKeptValue'
 				self.fileKeptRead(notes, site: site, tok: tok)
@@ -2096,6 +2183,11 @@ extension Parser
 	end 'refuseMoveOfAMatchedUnique'
 
 	function noteLentUniqueMoved(value ValueId, target MoveTarget)
+		if self.isAJoinOfVariables(value) 'aJoin'
+			self.moveJoinedVariables(value)
+			return
+		end 'aJoin'
+
 		self.refuseMoveOfAMatchedUnique(value)
 
 		if self.bodyState.lentUniqueParams.isEmpty() 'noLentUniqueHere'
@@ -2135,6 +2227,7 @@ extension Parser
 		notes.keptNextLap.push(false)
 		notes.sparseForWrite().keptMovedSites.push(site)
 		self.bodyState.openKeptSites.push(OpenKeptSite.create(site, value: value, holder: holder, movedNames: movedNames))
+		self.logUniqueMove(value)
 	end 'fileMovedLentUniqueSite'
 
 	// A rebind refuses reads of the names that hold the value when it is filed, never the new name or a
@@ -7361,6 +7454,7 @@ extension Parser
 	// A function value is the exception: it takes the column type a receiving slot declares
 	// (`declaredTupleColumnType`).
 	function parseTupleLiteral(func IrFunction, first ValueId, firstStart ElementIndex, openTok Token, target DeclaredTupleTarget) returns ValueId throws SourceParseError
+		let moveMark = self.uniqueMoveMark()
 		let elementValues = ValueIdArray.create(0)
 		let elementBareLocal = BoolArray.create(0)
 		let elementTypes = MaxonTypeArray.create(0)
@@ -7397,6 +7491,7 @@ extension Parser
 		end 'eachElement'
 
 		let closeTok = try self.consume(TokenKind.rightParen)
+		try self.requireNoUniqueNamedTwice(elementValues, starts: elementStarts, spanStart: firstStart, moveMark: moveMark, place: UniqueOperandPlace.tupleElements)
 		let layout = try self.internTupleLayout(elementTypes, brands: elementBrands, capabilities: elementCapabilities, anchor: openTok)
 		try self.requireTupleColumns(layout, elementValues: elementValues, elementStarts: elementStarts, anchor: openTok)
 
@@ -8316,7 +8411,7 @@ extension Parser
 	function releaseInterpolationHolds(holds ValueIdArray, range SourceRange)
 		for held in holds 'eachHold'
 			self.emitDecref(held, range: range)
-			self.removeFromPendingTemps(held)
+			self.withdrawFromPendingTemps(held)
 		end 'eachHold'
 	end 'releaseInterpolationHolds'
 
@@ -9425,6 +9520,10 @@ extension Parser
 		// still refused is a repeat at a field that INHERITS this frame's single reference, which would drop it
 		// twice; `rejectDoubleOwningStore` asks that through the gate the ARGUMENT guard asks too.
 		let movedOwningValues = ValueIdArray.create(0)
+		let fieldsStart = self.pos
+		let moveMark = self.uniqueMoveMark()
+		let writtenValues = ValueIdArray.create(0)
+		let writtenStarts = TokenIndexArray.create(0)
 
 		while true 'fieldLoop'
 			let nameTok = try self.consume(TokenKind.identifier)
@@ -9464,6 +9563,8 @@ extension Parser
 			try fieldValues.set(index, value: held) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
 			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
 			try fieldBareLocal.set(index, value: bareLocal) otherwise panic("parseStructLiteralFields: fieldBareLocal.set OOB at {index} — the columns are sized to the layout's field count")
+			writtenValues.push(held)
+			writtenStarts.push(valueStart)
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -9471,6 +9572,8 @@ extension Parser
 
 			try self.consume(TokenKind.comma)
 		end 'fieldLoop'
+
+		try self.requireNoUniqueNamedTwice(writtenValues, starts: writtenStarts, spanStart: fieldsStart, moveMark: moveMark, place: UniqueOperandPlace.literalFields)
 	end 'parseStructLiteralFields'
 
 	function absorbStructLiteralFields(func IrFunction) throws SourceParseError
@@ -10968,3 +11071,33 @@ extension Parser
 		end 'chain'
 	end 'chainHeadsAValue'
 end 'Parser'
+
+enum UniqueOperandPlace
+	callArguments
+	tupleElements
+	literalFields
+	casePayloads
+end 'UniqueOperandPlace'
+
+function uniqueNamedTwiceMessage(place UniqueOperandPlace, name String) returns String
+	return match place 'place'
+		callArguments gives "'{name}' is passed at two arguments of this call, and a unique value has one name; pass it once"
+		tupleElements gives "'{name}' is named at two elements of this tuple, and a unique value has one name; name it once"
+		literalFields gives "'{name}' is named at two fields of this literal, and a unique value has one name; name it once"
+		casePayloads gives "'{name}' is named at two payloads of this case, and a unique value has one name; name it once"
+	end 'place'
+end 'uniqueNamedTwiceMessage'
+
+function sharedValueOf(values ValueIdArray, other ValueIdArray) returns ValueId throws AbsentError
+	for value in values 'eachValue'
+		if valueIdArrayContains(other, value: value) 'inBoth'
+			return value
+		end 'inBoth'
+	end 'eachValue'
+
+	throw AbsentError.absent
+end 'sharedValueOf'
+
+function keptHolderOf(binding VarInfo, value ValueId) returns ValueId
+	return binding.payloadScrutBox() if binding.isPayloadBinding() else value
+end 'keptHolderOf'

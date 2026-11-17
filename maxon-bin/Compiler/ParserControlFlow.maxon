@@ -1383,6 +1383,7 @@ extension Parser
 		let heldByTheLend = self.pauseLentHolders(walkedSource) if drainsItsSource else PausedHolders.create()
 
 		if drainsItsSource 'readOnlyInTheBody'
+			self.pauseJoinedVariables(drainedValue, into: heldByTheLend)
 			self.setValueCapability(drainedValue, capability: ValueCapability.paused)
 			self.statement.drainingLoops = self.statement.drainingLoops + 1
 			self.statement.drainingLabel = loopLabelTok.value
@@ -1928,7 +1929,7 @@ extension Parser
 
 		let site = self.emitStringLiteral(panicMessageLinePrefix(self.job.path, line: forTok.line), range: range)
 		let record = self.emitLabelledRuntimeCall(EmptySlotMessageName, args: twoArgs(site, second: index), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range, argLabels: emptySlotMessageLabels())
-		self.removeFromPendingTemps(record)
+		self.withdrawFromPendingTemps(record)
 		let messagePointer = self.emitLoadStringField(record, offset: StringBufferOffset, range: range)
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.panicAbortValue(messagePointer), range: range)
 		self.emitDeadReturn(func, anchor: forTok)
@@ -5100,7 +5101,7 @@ extension Parser
 				end 'aLinearScrutinee'
 
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
-				let lentArmFloor = self.enterLentArm(lentRoots, scrutStart: scrutStart, scrutEnd: scrutEnd)
+				let lentArmFloor = self.enterLentArm(lentRoots, scrutStart: scrutStart, scrutEnd: scrutEnd, bindsPayloads: hasPayloadBindings)
 				let heldByTheLend = self.pauseLentHolders(scrut) if hasPayloadBindings and not lentRoots.isEmpty() else PausedHolders.create()
 				let outerLendingLabel = self.statement.lendingLabel
 
@@ -5495,19 +5496,32 @@ extension Parser
 		while true 'eachHolder'
 			let origin = try self.regionFactsForRead().fieldOrigins.get(held) otherwise break
 			held = origin.holder
-			let capability = self.capabilityOfValue(held)
-
-			if capability == ValueCapability.immutable 'alreadyReadOnly'
-				continue
-			end 'alreadyReadOnly'
-
-			paused.values.push(held)
-			paused.capabilities.push(capability)
-			self.setValueCapability(held, capability: ValueCapability.paused)
+			self.pauseHolder(held, into: paused)
+			self.pauseJoinedVariables(held, into: paused)
 		end 'eachHolder'
 
 		return paused
 	end 'pauseLentHolders'
+
+	function pauseJoinedVariables(source ValueId, into PausedHolders)
+		let variables = try self.joinedVariablesOf(source) otherwise return
+
+		for variable in variables 'eachJoinedVariable'
+			self.pauseHolder(variable, into: into)
+		end 'eachJoinedVariable'
+	end 'pauseJoinedVariables'
+
+	function pauseHolder(held ValueId, into PausedHolders)
+		let capability = self.capabilityOfValue(held)
+
+		if capability == ValueCapability.immutable 'alreadyReadOnly'
+			return
+		end 'alreadyReadOnly'
+
+		into.values.push(held)
+		into.capabilities.push(capability)
+		self.setValueCapability(held, capability: ValueCapability.paused)
+	end 'pauseHolder'
 
 	function resumeLentHolders(paused PausedHolders)
 		var position = paused.values.count()
@@ -5519,7 +5533,7 @@ extension Parser
 		end 'innermostFirst'
 	end 'resumeLentHolders'
 
-	function enterLentArm(roots LentArmRoots, scrutStart ElementIndex, scrutEnd ElementIndex) returns ElementIndex
+	function enterLentArm(roots LentArmRoots, scrutStart ElementIndex, scrutEnd ElementIndex, bindsPayloads bool) returns ElementIndex
 		let floor = self.bodyState.lentArmRoots.count()
 
 		if roots.isEmpty() 'noUniqueIsLent'
@@ -5530,15 +5544,27 @@ extension Parser
 
 		for index in 0 upto roots.values.count() 'eachRoot'
 			let value = try roots.values.get(index) otherwise panic("enterLentArm: values.get OOB at {index} below its own count")
-			let name = try roots.names.get(index) otherwise panic("enterLentArm: names.get OOB at {index} — the columns are pushed together")
+			self.pushLentArmRoot(value, name: try roots.names.get(index) otherwise panic("enterLentArm: names.get OOB at {index} — the columns are pushed together"), subject: subject)
 
-			self.bodyState.lentArmRoots.push(value)
-			self.bodyState.lentArmNames.push(name)
-			self.bodyState.lentArmSubjects.push(subject)
+			if not bindsPayloads 'noBindingViewsAJoinedVariable'
+				continue
+			end 'noBindingViewsAJoinedVariable'
+
+			let variables = try self.joinedVariablesOf(value) otherwise continue
+
+			for variable in variables 'eachJoinedVariable'
+				self.pushLentArmRoot(variable, name: EmptySourceText, subject: subject)
+			end 'eachJoinedVariable'
 		end 'eachRoot'
 
 		return floor
 	end 'enterLentArm'
+
+	function pushLentArmRoot(value ValueId, name immutable ByteArray, subject String)
+		self.bodyState.lentArmRoots.push(value)
+		self.bodyState.lentArmNames.push(name)
+		self.bodyState.lentArmSubjects.push(subject)
+	end 'pushLentArmRoot'
 
 	function openLentArmWindow(label immutable ByteArray, valueFloor ValueId)
 		let windows = self.regionFactsForWrite().windows
@@ -5961,19 +5987,14 @@ extension Parser
 			// unbranded arms wears none and fits any brand.
 			self.brandValue(phiId, brand: self.brandOf(firstGive) if joinedAlias.alias.isEmpty() else EmptySourceText)
 			self.carryMergeOrigin(phiId, arms: finalGives, anchor: matchTok)
-
-			for give in finalGives 'eachGive'
-				try self.requireNoUniqueAlias(give, action: "give", anchor: matchTok)
-			end 'eachGive'
-
 			try self.joinMergeCapability(phiId, arms: finalGives, func: func, anchor: matchTok)
 
 			// The phi owns the transferred give value (see the ownership-transfer block above), so it is an
 			// owned temp: `parseBinding`/the statement drain drops it once.
 			//
-			// ⚠ **"THE NEW SOLE OWNER" IS WHAT THIS COMMENT USED TO SAY, AND IT IS TRUE OF THE DROP AND FALSE OF
-			// THE ALLOCATION.** The phi is the only thing that will DROP the value, which is what the transfer
-			// block establishes; whether anything ELSE still owns the allocation is a question about the ARMS —
+			// ⚠ **THE PHI IS THE SOLE OWNER OF THE DROP, NOT OF THE ALLOCATION.** The phi is the only thing that
+			// will DROP the value, which is what the transfer block establishes; whether anything ELSE still
+			// owns the allocation is a question about the ARMS —
 			// `promoteBorrowedGive` promotes a borrowed give by `__mm_incref`, so `pick if c else h.ty` reaches
 			// here holding a box the struct field also holds. So the claim is asked of the edges
 			// (`mergedHeapExclusivity`), which is also the direction `joinMergeCapability` takes.
@@ -6315,10 +6336,15 @@ extension Parser
 	// else settles through `transferGiveToPhi` — a no-op for a borrowed or scalar give.
 	function settleArmGive(give ValueId, ownedFloor ElementIndex, exitBlock IrBlock, anchor Token) returns ValueId throws SourceParseError
 		if self.giveBorrowsIntoDyingRecords(give, ownedFloor: ownedFloor) 'borrowIntoDyingRecords'
-			return try self.promoteBorrowedMergeEdge(give, edgeBlock: exitBlock, anchor: anchor)
+			return try self.promoteBorrowedMergeEdge(give, edgeBlock: exitBlock, anchor: anchor, edge: PromotedEdge.mergeArm)
 		end 'borrowIntoDyingRecords'
 
-		// ⭐⭐ **AN ARM READING AN IMMUTABLE BINDING CO-OWNS IT — IT DOES NOT MOVE IT (⚖ 2026-08-04).**
+		if self.isAJoinOfVariables(give) and self.pendingTempsContain(give) 'aNestedJoin'
+			self.withdrawFromPendingTemps(give)
+			return give
+		end 'aNestedJoin'
+
+		// ⭐⭐ **AN ARM READING AN IMMUTABLE BINDING CO-OWNS IT — IT DOES NOT MOVE IT.**
 		// The arm's own edge takes a SECOND reference and the binding keeps the one it already owed, so both
 		// stay live and the box is released once by each. `emitIncref` in place rather than `__mm_retain` for
 		// the reason its header gives: the phi mints its own id, so no two BINDINGS come to share one — which
@@ -6514,7 +6540,7 @@ extension Parser
 	// scalar arm mixed with an owned aggregate/String give, so it is a parser invariant break.
 	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId throws SourceParseError
 		if self.borrowedValueOwesAHandoffReference(give) 'owesAReference'
-			return try self.promoteBorrowedMergeEdge(give, edgeBlock: arm.exitBlock, anchor: matchTok)
+			return try self.promoteBorrowedMergeEdge(give, edgeBlock: arm.exitBlock, anchor: matchTok, edge: PromotedEdge.mergeArm)
 		end 'owesAReference'
 
 		if self.valueIsDeferred(give) 'deferredCallError'
@@ -7958,18 +7984,14 @@ extension Parser
 		return valueIsAParameter(value, paramCount: func.paramCount) and self.signatures.namesAServiceMessage(func.name)
 	end 'valueIsAMessageParameter'
 
-	function regionPayloadCount(bindings PayloadBindingArray, layout EnumLayout) returns ElementIndex
+	function regionPayloadCount(bindings PayloadBindingArray, layout EnumLayout, consumedIsolatedUnion bool) returns ElementIndex
 		var count = 0 as ElementIndex
 
 		for binding in bindings 'each'
-			if binding.field.capability != ParamCapability.unmarked 'anIsolatedSlot'
-				continue
-			end 'anIsolatedSlot'
-
 			let declared = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 
-			if payloadClassIsManaged(class) and not tagIsByteRecord(maxonTypeTag(payloadValueTypeOf(class, declared: declared))) 'aRegionHolder'
+			if self.payloadHoldsItsOwnRegion(binding.field, valueType: payloadValueTypeOf(class, declared: declared), consumedIsolatedUnion: consumedIsolatedUnion) 'aRegionHolder'
 				count = count + 1
 			end 'aRegionHolder'
 		end 'each'
@@ -7977,11 +7999,20 @@ extension Parser
 		return count
 	end 'regionPayloadCount'
 
+	function payloadHoldsItsOwnRegion(field PayloadField, valueType MaxonType, consumedIsolatedUnion bool) returns bool
+		if field.capability != ParamCapability.unmarked or self.signatures.typeIsAValueType(valueType) 'notARegionHolder'
+			return false
+		end 'notARegionHolder'
+
+		return not consumedIsolatedUnion or not self.signatures.valueHoldsAUnique(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.artifact.typeNames)
+	end 'payloadHoldsItsOwnRegion'
+
 	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, standing ScrutineeStanding, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
 		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
-		let ownsItsRegion = self.valueIsLinear(scrutBox) and (self.valueIsAnOwnedIsolatedRegion(scrutBox) or (self.valueIsAMessageParameter(scrutBox) and self.valueTypeIsClosed(scrutBox)))
-		let loneRegionPayload = ownsItsRegion and self.regionPayloadCount(bindings, layout: layout) == 1
+		let consumedIsolatedUnion = not self.valueIsLinear(scrutBox) and standing.consumesAnIsolatedHolder()
+		let ownsItsRegion = consumedIsolatedUnion or (self.valueIsLinear(scrutBox) and (self.valueIsAnOwnedIsolatedRegion(scrutBox) or (self.valueIsAMessageParameter(scrutBox) and self.valueTypeIsClosed(scrutBox))))
+		let loneRegionPayload = ownsItsRegion and self.regionPayloadCount(bindings, layout: layout, consumedIsolatedUnion: consumedIsolatedUnion) == 1
 		let handedBack = self.signatures.isServiceSendError(layout.name)
 
 		for binding in bindings 'each'
@@ -8004,7 +8035,7 @@ extension Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordKeyOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
-			let regionPayload = ownsItsRegion and binding.field.capability == ParamCapability.unmarked and not self.valueIsAValueType(loaded)
+			let regionPayload = ownsItsRegion and self.payloadHoldsItsOwnRegion(binding.field, valueType: payloadValueTypeOf(class, declared: declared), consumedIsolatedUnion: consumedIsolatedUnion)
 
 			if regionPayload 'ownsItsOwnRegion'
 				self.setValueCapability(loaded, capability: ValueCapability.mutable)

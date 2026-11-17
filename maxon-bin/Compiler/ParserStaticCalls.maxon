@@ -1245,6 +1245,10 @@ extension Parser
 		end 'noPayload'
 
 		var argIndex = 0 as ParamCount
+		let argsStart = self.pos
+		let moveMark = self.uniqueMoveMark()
+		let writtenValues = ValueIdArray.create(0)
+		let writtenStarts = TokenIndexArray.create(0)
 
 		while true 'argLoop'
 			// The label token anchors an unknown/duplicate-label diagnostic; captured before `consumeArgLabel`
@@ -1278,10 +1282,13 @@ extension Parser
 			// cursor nothing pins between them; one binding makes it structural.
 			let afterArg = self.pos
 
-			try slotValues.set(slot, value: self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(labelTok), position: OperandSuccession.beforeComma)) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
+			let held = self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(labelTok), position: OperandSuccession.beforeComma)
+			try slotValues.set(slot, value: held) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try filled.set(slot, value: true) otherwise panic("parsePayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotBareLocal.set(slot, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parsePayloadArgs: slotBareLocal.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotAnchors.set(slot, value: afterArg) otherwise panic("parsePayloadArgs: slotAnchors.set OOB at slot {slot} — the columns are sized to the case's arity")
+			writtenValues.push(held)
+			writtenStarts.push(valueStart)
 
 			argIndex = argIndex + 1
 
@@ -1293,6 +1300,7 @@ extension Parser
 		end 'argLoop'
 
 		try self.consume(TokenKind.rightParen)
+		try self.requireNoUniqueNamedTwice(writtenValues, starts: writtenStarts, spanStart: argsStart, moveMark: moveMark, place: UniqueOperandPlace.casePayloads)
 	end 'parsePayloadArgs'
 
 	// The layout SLOT a payload argument fills. Argument 0 is positional (`consumeArgLabel` guaranteed it
@@ -5210,6 +5218,7 @@ extension Parser
 
 		// `messageSend`, unconditionally: a message is a declared method, so it always has parameter names to
 		// label with — no bare builtin can arrive through a handle.
+		let moveMark = self.uniqueMoveMark()
 		_ = try self.parseCallArgs(func, target: CallArgTarget.movedInto(callee), anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.messageSend) otherwise (refusal) 'argsRefused'
 			self.statement.pendingSendTimeout = SendTimeoutArgument.absent
 			throw refusal
@@ -5223,7 +5232,7 @@ extension Parser
 			try self.requireNoLinearArgumentIn(args, refusal: "a linear value is never sent with a `sendTimeout:`: a timed send waits for room in the mailbox, and a wait may never end, so the sender could neither hand the value over nor consume it. Send it without a timeout, and consume the value `mailboxFull` and `serviceStopped` hand back", anchor: memberTok)
 		end 'aTimedSend'
 
-		try self.checkSendArgumentCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, anchor: memberTok)
+		try self.checkSendArgumentCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, anchor: memberTok, moveMark: moveMark)
 
 		// A message's declared defaults are filled exactly as a direct call's are, through the same door, so
 		// `h.bump()` on a `bump(by int = 1)` sends the same request `h.bump(1)` does.

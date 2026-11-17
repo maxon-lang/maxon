@@ -24,6 +24,32 @@ def walk(node, visit):
         raise TypeError(f"walk: unexpected {type(node).__name__}")
 
 
+def var_names(node):
+    names = set()
+
+    def visit(n):
+        if isinstance(n, C.Var):
+            names.add(n.name)
+
+    walk(node, visit)
+    return names
+
+
+def unbind_unread_arms(prog):
+    out = copy.deepcopy(prog)
+    changed = []
+
+    def visit(n):
+        if isinstance(n, C.Match):
+            for arm in n.arms:
+                if arm.binds and not set(arm.binds) & var_names(arm.body):
+                    arm.binds = []
+                    changed.append(arm)
+
+    walk(out, visit)
+    return out, bool(changed)
+
+
 def names_of(node):
     found = set()
 

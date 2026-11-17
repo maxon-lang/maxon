@@ -6653,6 +6653,7 @@ extension Parser
 	function parseStatement(func IrFunction, block IrBlock, head StatementHead) returns IrBlock throws SourceParseError
 		let windowFloor = self.statementWindowFloor()
 		self.bodyState.operandOrder.enterStatement()
+
 		// A statement holding a block reads its head and floors after its nested statements parse.
 		let enclosingHead = self.bodyState.statementHead
 		let enclosingOpFloor = self.bodyState.statementOpFloor
@@ -7329,7 +7330,7 @@ extension Parser
 		let value = try self.parseBindingInitializer(func, block: block, kind: kind)
 		self.bodyState.recoveringInitializer = outerRecovering
 
-		try self.requireNoUniqueAlias(value, action: "bind '{String.from(nameTok.value)}' to", anchor: nameTok)
+		try self.requireNoUniqueAlias(value, message: uniqueAliasMessage("bind '{String.from(nameTok.value)}' to"), anchor: nameTok)
 		let bornFresh = try self.settleBindingCapability(value, rhsStart: rhsStart, nameTok: nameTok, readFloor: readFloor)
 
 		try self.requireVarNotBornFromABareNumber(value, kind: kind, anchor: self.tokenAt(rhsStart))
@@ -7909,7 +7910,7 @@ extension Parser
 				self.removeFromPendingTemps(boundValue)
 			end 'takeOwnership'
 		end 'trackOwned' else 'aBorrowedValue'
-			if boundBareLocal 'rebindsABorrowedName'
+			if boundBareLocal or self.isAJoinOfVariables(boundValue) 'rebindsABorrowedName'
 				self.noteLentUniqueMoved(boundValue, target: MoveTarget.rebound(nameTok.value))
 			end 'rebindsABorrowedName'
 		end 'aBorrowedValue'
@@ -7947,12 +7948,12 @@ extension Parser
 		return self.valueIsAUniqueStorageRead(value) or self.regionFactsForRead().lentUniques.contains(value)
 	end 'valueIsAUniqueAlias'
 
-	function requireNoUniqueAlias(value ValueId, action String, anchor Token) throws SourceParseError
+	function requireNoUniqueAlias(value ValueId, message String, anchor Token) throws SourceParseError
 		if not self.valueIsAUniqueAlias(value) 'noUniqueAliased'
 			return
 		end 'noUniqueAliased'
 
-		throw self.regionRefusal(ErrorCode.semanticUniqueValueRefused, message: uniqueAliasMessage(action), line: anchor.line, column: anchor.column)
+		throw self.regionRefusal(ErrorCode.semanticUniqueValueRefused, message: message, line: anchor.line, column: anchor.column)
 	end 'requireNoUniqueAlias'
 
 	function argumentNamesALocal(valueStart ElementIndex) returns bool
@@ -9349,7 +9350,7 @@ extension Parser
 	end 'rebindToAValueOwningNothing'
 
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName SourceBinding) throws SourceParseError
-		try self.requireNoUniqueAlias(value, action: "assign to '{String.from(nameTok.value)}'", anchor: nameTok)
+		try self.requireNoUniqueAlias(value, message: uniqueAliasMessage("assign to '{String.from(nameTok.value)}'"), anchor: nameTok)
 		let oldValue = binding.boundValue
 		let rhsWasBareLocal = rhsBareLocalName.isLocal()
 

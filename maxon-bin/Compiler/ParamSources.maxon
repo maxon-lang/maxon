@@ -216,6 +216,7 @@ enum HolderWalk
 	within
 	withinThroughResults
 	opaqueElementSources
+	joins
 end 'HolderWalk'
 
 type ParamSources
@@ -231,6 +232,7 @@ type ParamSources
 	var settledWithin as ParamMaskByValue
 	var settledThroughResults as ParamMaskByValue
 	var settledOpaqueElements as ParamMaskByValue
+	var settledJoins as ParamMaskByValue
 	var walking as ValueMarkSet
 	let loadedFrom as LoadedFromMap
 	// Walked only by `withinThroughResults`: a word payload widens the written side alone, so it cannot ride
@@ -247,7 +249,7 @@ type ParamSources
 		let captured = CapturedLoadMap.create()
 		let retainedFrom = RetainedValueMap.create()
 		scanParamAliases(ir, func: func, captured: captured, retainedFrom: retainedFrom)
-		return Self{project: project, ir: ir, signatures: signatures, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), settledWithin: ParamMaskByValue.create(), settledThroughResults: ParamMaskByValue.create(), settledOpaqueElements: ParamMaskByValue.create(), walking: ValueMarkSet.create(), loadedFrom: LoadedFromMap.create(), payloadHolderOf: LoadedFromMap.create(), definingCall: SettlingOpByValue.create(), incomingsOf: IncomingsByPhi.create(), derivationsIndexed: false, elementHolders: ParamMaskByValue.create(), elementHoldersIndexed: false, verdicts: verdicts}
+		return Self{project: project, ir: ir, signatures: signatures, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), settledWithin: ParamMaskByValue.create(), settledThroughResults: ParamMaskByValue.create(), settledOpaqueElements: ParamMaskByValue.create(), settledJoins: ParamMaskByValue.create(), walking: ValueMarkSet.create(), loadedFrom: LoadedFromMap.create(), payloadHolderOf: LoadedFromMap.create(), definingCall: SettlingOpByValue.create(), incomingsOf: IncomingsByPhi.create(), derivationsIndexed: false, elementHolders: ParamMaskByValue.create(), elementHoldersIndexed: false, verdicts: verdicts}
 	end 'of'
 
 	function carriesACapability(value ValueId) returns bool
@@ -380,9 +382,9 @@ type ParamSources
 		while not pending.isEmpty() 'towardTheHolders'
 			let current = self.rootOf(try pending.pop() otherwise panic("ParamSources.holdersReachedFrom: the pending list was tested non-empty"))
 
-			if seen.contains(current) 'alreadyWalked'
+			if seen.contains(current) or (walk == HolderWalk.joins and self.valueIsABorrowedElementRead(current)) 'notWalked'
 				continue
-			end 'alreadyWalked'
+			end 'notWalked'
 
 			seen.insert(current)
 
@@ -393,16 +395,21 @@ type ParamSources
 
 			mask = mask or self.maskOf(current)
 
-			if let holder = try self.loadedFrom.get(current) 'aFieldLoad'
-				pending.push(holder)
-			end 'aFieldLoad'
-
 			if let incomings = try self.incomingsOf.get(current) 'aJoin'
 				pending.append(incomings)
 			end 'aJoin'
 
+			if walk == HolderWalk.joins 'onlyThroughJoins'
+				continue
+			end 'onlyThroughJoins'
+
+			if let holder = try self.loadedFrom.get(current) 'aFieldLoad'
+				pending.push(holder)
+			end 'aFieldLoad'
+
 			match walk 'walk'
-				within then break
+				within or
+				joins then break
 				withinThroughResults then mask = mask or self.expandThroughPayloadsAndResults(current, into: pending)
 				opaqueElementSources then self.expandThroughCallArguments(current, into: pending)
 			end 'walk'
@@ -417,6 +424,7 @@ type ParamSources
 			within gives self.settledWithin
 			withinThroughResults gives self.settledThroughResults
 			opaqueElementSources gives self.settledOpaqueElements
+			joins gives self.settledJoins
 		end 'walk'
 	end 'settledHolders'
 
@@ -450,6 +458,10 @@ type ParamSources
 		for opIdx in self.ir.liveOpIndices(self.func) 'eachOp'
 			let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.writeSeeds: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
+			if let returned = try returnedResultValueOf(op) 'aReturnedValue'
+				self.noteReturnedValue(row, value: returned)
+			end 'aReturnedValue'
+
 			match slotReadOfOp(op, opIndex: opIdx) 'read'
 				store(addr, _, value) then self.noteStoredValue(row, addr: addr, value: value)
 				wordConstruct(payload) then self.noteWordUnionPayload(row, payload: payload)
@@ -481,10 +493,23 @@ type ParamSources
 	function noteMovedValue(row ParamWriteSeedRow, value ValueId, sources ParamPositionMask)
 		row.moved = row.moved or sources
 
-		if sources != NoParamPositions and self.valueMayHoldAUnique(value) 'mayMoveAUnique'
-			row.movedUnique = row.movedUnique or sources
+		if self.valueMayHoldAUnique(value) 'mayMoveAUnique'
+			let retainedSources = sources if self.rootOf(value) != value else NoParamPositions
+			row.movedUnique = row.movedUnique or retainedSources or self.holdersReachedFrom(value, walk: HolderWalk.joins)
 		end 'mayMoveAUnique'
 	end 'noteMovedValue'
+
+	function noteReturnedValue(row ParamWriteSeedRow, value ValueId)
+		if self.valueMayHoldAUnique(value) 'mayReturnAUnique'
+			row.movedUnique = row.movedUnique or self.holdersReachedFrom(value, walk: HolderWalk.joins)
+		end 'mayReturnAUnique'
+	end 'noteReturnedValue'
+
+	function valueIsABorrowedElementRead(value ValueId) returns bool
+		let opIdx = try self.settlingOpOf(value) otherwise return false
+		let parts = try directCallPartsOf(try self.ir.ops.get(opIdx) otherwise panic("ParamSources.valueIsABorrowedElementRead: ops.get OOB at {opIdx}")) otherwise return false
+		return borrowedElementReadCallee(parts.0)
+	end 'valueIsABorrowedElementRead'
 
 	// A one-payload union is a tagged word, so no store op records its payload; without this arm a parameter
 	// wrapped in one reads as kept by nothing.
@@ -582,6 +607,7 @@ type ParamSources
 		self.settledWithin = ParamMaskByValue.create()
 		self.settledThroughResults = ParamMaskByValue.create()
 		self.settledOpaqueElements = ParamMaskByValue.create()
+		self.settledJoins = ParamMaskByValue.create()
 	end 'forgetMasks'
 
 	function parameterBehind(value ValueId) returns ParamCount throws AbsentError

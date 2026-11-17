@@ -3825,6 +3825,28 @@ function singleBrandOrigin(value ValueId, key ByteArray) returns BrandOriginMap
 	return byValue
 end 'singleBrandOrigin'
 
+typealias JoinedVariableMap = Map with (ValueId, ValueIdArray)
+
+union JoinedVariableColumn
+	unwritten
+	entries(byMerge JoinedVariableMap)
+end 'JoinedVariableColumn'
+
+function withJoinedVariables(column JoinedVariableColumn, merged ValueId, variables ValueIdArray) returns JoinedVariableColumn
+	match column 'state'
+		unwritten then return JoinedVariableColumn.entries(singleJoinedVariables(merged, variables: variables))
+		entries(byMerge) then byMerge.upsert(merged, value: variables)
+	end 'state'
+
+	return column
+end 'withJoinedVariables'
+
+function singleJoinedVariables(merged ValueId, variables ValueIdArray) returns JoinedVariableMap
+	let byMerge = JoinedVariableMap.create()
+	byMerge.upsert(merged, value: variables)
+	return byMerge
+end 'singleJoinedVariables'
+
 typealias HandedCellTypeMap = Map with (ValueId, MaxonType)
 
 union HandedCellTypeColumn

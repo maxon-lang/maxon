@@ -8357,19 +8357,18 @@ extension Parser
 		return self.valueTypeIsClosed(value)
 	end 'valueIsAnOwnedClosedLinearParameter'
 
-	function valueCrossesWhole(value ValueId) returns bool
-		return self.valueIsAValueType(value) or not self.valueHoldsAUniqueRecord(value) or self.valueTypeIsClosed(value) or self.valueIsAnOwnedIsolatedRegion(value) or self.effectiveCapabilityOf(value) == ValueCapability.temporary or self.relyOnFreshLocal(value)
-	end 'valueCrossesWhole'
-
 	function requireCrossesWhole(value ValueId, text String, door CrossingDoor, anchor Token) throws SourceParseError
-		if self.valueCrossesWhole(value) 'wholeOrNoRegion'
+		if self.valueIsAValueType(value) or not self.valueHoldsAUniqueRecord(value) or self.valueTypeIsClosed(value) or self.valueIsAnOwnedIsolatedRegion(value) 'wholeOrNoRegion'
 			return
 		end 'wholeOrNoRegion'
 
-		if self.valueSettlesAfterParsing(value) 'aResultAssumedFresh'
-			self.fileResultUse(value, slot: ParamCapability.isolated, sends: false, judged: true, place: self.notWholeRegionMessage(value, text: text, door: door), line: anchor.line, column: anchor.column)
+		if self.effectiveCapabilityOf(value) == ValueCapability.temporary or self.relyOnFreshLocal(value) 'aCleanValue'
+			if self.valueSettlesAfterParsing(value) 'aResultAssumedFresh'
+				self.fileResultUse(value, slot: ParamCapability.isolated, sends: false, judged: true, place: self.notWholeRegionMessage(value, text: text, door: door), line: anchor.line, column: anchor.column)
+			end 'aResultAssumedFresh'
+
 			return
-		end 'aResultAssumedFresh'
+		end 'aCleanValue'
 
 		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: self.notWholeRegionMessage(value, text: text, door: door), line: anchor.line, column: anchor.column)
 	end 'requireCrossesWhole'
@@ -8616,6 +8615,14 @@ extension Parser
 		if self.valueIsAValueType(phi) 'nothingToJoin'
 			return
 		end 'nothingToJoin'
+
+		for arm in arms 'eachGivenArm'
+			for variable in self.variablesOperandMayBe(arm) 'eachVariableTheArmMayBe'
+				try self.requireNoUniqueAlias(variable, message: MergedUniqueAliasMessage, anchor: anchor)
+			end 'eachVariableTheArmMayBe'
+		end 'eachGivenArm'
+
+		self.noteJoinedVariables(phi, arms: arms)
 
 		var parameterArms = NoParamPositions
 		var parameterArmCount = 0 as ElementIndex
@@ -9693,7 +9700,7 @@ extension Parser
 
 	function admitStore(func IrFunction, slot ParamCapability, value ValueId, valueStart ElementIndex, place String, holder StoreHolder) throws SourceParseError
 		try self.requireNotAnAcquiredState(value, verb: "stored into '{place}'", anchor: self.tokenAt(valueStart))
-		try self.requireNoUniqueAlias(value, action: "store into '{place}'", anchor: self.tokenAt(valueStart))
+		try self.requireNoUniqueAlias(value, message: uniqueAliasMessage("store into '{place}'"), anchor: self.tokenAt(valueStart))
 		try self.requireByReferenceIsolatedStaysPut(func, value: value, at: self.tokenAt(valueStart))
 		let intoAHolder = self.storeHolderIsHeld(holder)
 
@@ -10204,7 +10211,7 @@ extension Parser
 			self.bodyState.returnsAnUnknownValue = true
 		end 'anUnknownResult'
 
-		try self.requireNoUniqueAlias(value, action: "return", anchor: self.tokenAt(retStart))
+		try self.requireNoUniqueAlias(value, message: uniqueAliasMessage("return"), anchor: self.tokenAt(retStart))
 		try self.requireNotAnAcquiredState(value, verb: "returned", anchor: self.tokenAt(retStart))
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: retStart, endIndex: self.pos, anchor: self.tokenAt(retStart))
 		let declared = self.bodyState.declaredReturnCapability

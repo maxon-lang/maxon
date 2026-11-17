@@ -1259,3 +1259,76 @@ end 'main'
 ```maxoncstderr
 error E3197: <fragment>:31:13: cannot write 'n' through 'o', which is read-only while 'the isolated value' is open
 ```
+
+<!-- test: a-consumed-isolated-union-hands-its-lone-payload-to-a-send -->
+`h` is an `isolated` `let` the `match` consumes, so its lone plain payload `d` is the whole of its region: the arm sends it, the service keeps and writes it, and no name in the sender reaches it again.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Data
+	var n as Integer
+	var label as String
+
+	static function create(n Integer) returns Self
+		return Self{n: n, label: "data {n}"}
+	end 'create'
+end 'Data'
+
+union Holder
+	empty
+	full(d Data)
+end 'Holder'
+
+type Keeper
+	var kept as Data
+
+	static function create() returns Self
+		return Self{kept: Data.create(0)}
+	end 'create'
+
+	export function take(d isolated Data) returns Integer
+		self.kept = merge d
+		self.kept.n = self.kept.n + 100
+		return self.kept.n
+	end 'take'
+
+	export function peek() returns String
+		return "{self.kept.label} {self.kept.n}"
+	end 'peek'
+end 'Keeper'
+
+function hand(svc Keeper.handle, n Integer) returns Integer
+	let h = Holder.full(Data.create(n)) as isolated Holder
+	var got = 0 as Integer
+
+	match h 'k'
+		empty then got = 0
+		full(d) then got = try await svc.take(d) otherwise 0
+	end 'k'
+
+	return got
+end 'hand'
+
+function main() returns ExitCode
+	let svc = spawn Keeper.create()
+
+	for i in 1 to 200 'each'
+		let got = hand(svc, n: i)
+		let seen = try await svc.peek() otherwise ""
+
+		if seen != "data {i} {got}" 'wrong'
+			print("mismatch at {i}: {seen}\n")
+			return 1
+		end 'wrong'
+	end 'each'
+
+	print("ok\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
+```

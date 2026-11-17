@@ -452,7 +452,8 @@ end 'takeIndex'
 ```
 
 `merge x` moves an `isolated` region into the current one, and the result is ordinary mutable data:
-`return merge box` returns an `isolated` parameter as a plain result. `swap` on a path that is not an
+`return merge box` returns an `isolated` parameter as a plain result. The moved region is a clean input of a
+call, so `freeze Settings.create(merge config)` freezes the call's result. `swap` on a path that is not an
 `isolated` field is **E3198**; `merge` of a value that is not `isolated`, and `freeze` of a value type, are
 **E3200**. The cases are in `specs/regions-modify.md` and `specs/regions-freeze.md`.
 
@@ -463,7 +464,7 @@ An `isolated` field filled in `modify`, written by a one-call open and taken out
 
 `type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`,
 whether `a` is a `let` or a `var` (**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
-callee that keeps its parameter takes the caller's variable. A parameter moves as a local does: after the
+callee that keeps or returns its parameter takes the caller's variable. A parameter moves as a local does: after the
 function binds it to a second name, stores it, or answers it (`Reply`), a later read of it on a path that
 follows, or the same move on the next lap of a loop, is **E3102**. `clone()` is **E3214** (`'Ticket' is unique and
 cannot be cloned`):
@@ -493,7 +494,25 @@ inside an arm (**E3214**), while a call that only reads it is accepted; move or 
 `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
 own a unique value there: one read from a field or an element, lent by a loop, a tuple or a `match`, or
 borrowed through a `mutable` parameter is **E3214**, and an owned one crosses only as the whole of its region
-([What crosses a message](/docs/language/async/#services--spawn)). The standard library's `Promise` is
+([What crosses a message](/docs/language/async/#services--spawn)).
+
+A `cond` (`a if c else b`), a `match` expression and a `try … otherwise <value>` merge are transparent to unique
+values: the merged value may be any unique variable it names. Bound, stored, returned, sent or passed to a
+parameter that keeps it, the merge moves every unique variable it may be, whichever arm ran, and a later read of
+any of them is **E3102**. Passed straight to a call, used as a `match` subject or used as a `for` source, it lends
+them, so each stays usable afterwards and is guarded as the bare name is (a `match` arm cannot hand the matched
+union to a callee that keeps it, and a `for` body cannot clear the array). A merge arm that is a unique value
+read out of a field or an element, or one lent by a loop, a tuple or a `match`, is **E3214** at the merge (`cannot
+join a unique value read out of a field or an element with another value`): the field or element goes on owning
+it. Apply the use inside each arm instead, as `f(t) if c else f(fresh)` does.
+
+One unique value named at two operands of one call, tuple, struct literal or case payload is **E3102**
+(``'q' is passed at two arguments of this call, and a unique value has one name; pass it once``; a tuple, a
+literal and a case say elements, fields and payloads): the operands would hold two names for one value. A merge
+that may be the value names it, and so does an operand that moves it after an earlier operand lent it, such as a
+nested call or tuple that keeps it or a closure that captures it. Name the value once.
+
+The standard library's `Promise` is
 unique, so is `Reply`, and so are the OS handle types (`TcpClient`,
 `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
 that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
@@ -583,7 +602,9 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
   it stands.** The `match` hands its payloads over as fresh owned values: the lone plain payload of its case goes
   where an `isolated` value goes (an `isolated` parameter or slot, `freeze`, `merge`), and inside an open `modify`
   window it belongs to the window's region, so the arm may write it, keep it in a call, or store it into the
-  window's data. The linear argument a failed send hands back is `isolated` too (`specs/regions-recover.md`).
+  window's data. A union that is not linear, held in an `isolated` `let` the `match` consumes, hands its payloads
+  out the same way, except a payload that holds a `unique` value. The linear argument a failed send hands back is
+  `isolated` too (`specs/regions-recover.md`).
 - **An owned linear value goes where an `isolated` value goes only when its type is closed.** An owned linear
   parameter or `consuming self` receiver goes to an `isolated` parameter, slot, declaration or result, a send or
   `merge` only when every field and payload in its type's closure is a value, `immutable`, `isolated`, a service

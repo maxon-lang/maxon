@@ -740,12 +740,13 @@ it, and it joins the specs the day the disagreement closes. A refusal of a linea
 decided after the target check, so its case carries `<!-- unsupported-targets: wasm32-wasi -->`.
 
 ```text
-python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa14]
+python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa22]
 ```
 
 The generator judges every program of the corpora with the model (the hand corpora and the minimal programs of the
 red teams that `--hands` and `--findings` name), reduces each to the declarations `main` reaches and judges the
-reduction again, translates it to Maxon (`mx_translate.py`), compiles every translation as a one-case spec in a
+reduction again, canonicalises it (a `match` arm binding its body never reads is dropped, and the model judges
+the program again, because Maxon refuses an unused binding), translates it to Maxon (`mx_translate.py`), compiles every translation as a one-case spec in a
 scratch directory with the compiler in this tree's slot (`--compiler` names another), sorts the results, writes
 `specs/model-*.md`, and runs the written specs once. It exits non-zero unless every written case passes and the
 harness ran as many cases as the files hold markers. `--work` names the scratch directory that keeps `report.md`
@@ -762,11 +763,14 @@ The report sorts every translated program:
 | model refuses, compiler accepts | a soundness candidate; the report gives the program, the model's rule and the model's oracle on the program as written |
 | model accepts, compiler refuses | a wrong refusal, or a rule the compiler has not followed the model to yet |
 | the compiler crashed or did not terminate | a defect; the report names the panic |
+| both accept, the program fails when it runs | a defect in the code the compiler emitted or in the translation; the report lists the case |
 | the model's oracle flags the accept | the model's own hole: the program is not pinned |
 | the translation is unfaithful | the compiler refused the translation for a reason that is not a capability rule (a name, an unused binding); the translator is wrong |
 
 A program the translator cannot express is skipped, and the report counts the skips by reason. The Maxon spelling
 of a construct decides the reason: a `match` arm holds one statement, an `Array` of `isolated` elements has no
-spelling, and generics, closures, coroutines, interfaces and `throw` are not translated. `rules.py` maps each
+spelling, a `swap` of a local or of a field that is not `isolated` has none either, and generics, closures,
+coroutines, interfaces and `throw` are not translated. `rules.py` maps each
 model rule to the diagnostics it is expected to produce and names the diagnostics that count as the compiler
-refusing for a capability reason at all; a refusal outside the expectation is pinned and noted in its prose.
+refusing for a capability reason at all; a refusal outside the expectation is pinned and noted in its prose. A
+refusal's pin omits the `MAXON_HASH_SEED` line the harness prints.

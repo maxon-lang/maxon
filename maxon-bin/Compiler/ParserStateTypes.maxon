@@ -7427,6 +7427,10 @@ type ScrutineeStanding
 		return self.solelyOwned and not self.slotsMayBeReadAgain
 	end 'ownsTheBoxAlone'
 
+	function consumesAnIsolatedHolder() returns bool
+		return self.heldIsolated and self.ownsTheBoxAlone()
+	end 'consumesAnIsolatedHolder'
+
 	// Sole ownership of the box says nothing about the payload's region: a plain union aliases (`let v = u`),
 	// so only an `isolated` holder owns its payloads. Pinned by the regions-match-lend spec.
 	function isolatedPayloadStanding(slot ParamCapability) returns IsolatedPayloadStanding
@@ -9160,6 +9164,7 @@ type FunctionBodyState
 	export var unresolvedMergeValues as ValueMarkColumn
 
 	export var movedBindingValues as ValueMarkColumn
+	export var uniqueMoves as ValueIdArray
 	export var capturedMoveValues as ValueMarkColumn
 	export var movedIntoCalls as MovedIntoCallMap
 	export var openKeptSites as OpenKeptSiteArray
@@ -9326,6 +9331,7 @@ type FunctionBodyState
 	export var cellEpochExclusivity as CellEpochExclusivityColumn
 	export var handedCellTypes as HandedCellTypeColumn
 	export var brandOrigins as BrandOriginColumn
+	export var joinedVariables as JoinedVariableColumn
 	export var capturedSlots as CapturedSlotColumn
 	export var handedBrands as HandedBrandColumn
 	export var callTrailerOps as CallTrailerSet
@@ -9364,6 +9370,7 @@ type FunctionBodyState
 			cellEpochExclusivity: CellEpochExclusivityColumn.unwritten,
 			handedCellTypes: HandedCellTypeColumn.unwritten,
 			brandOrigins: BrandOriginColumn.unwritten,
+			joinedVariables: JoinedVariableColumn.unwritten,
 			capturedSlots: CapturedSlotColumn.unwritten,
 			handedBrands: HandedBrandColumn.unwritten,
 			callTrailerOps: CallTrailerSet.create(),
@@ -9542,6 +9549,7 @@ type FunctionBodyState
 			mergedBindingValues: noValueMarks,
 			unresolvedMergeValues: noValueMarks,
 			movedBindingValues: noValueMarks,
+			uniqueMoves: ValueIdArray.create(0),
 			capturedMoveValues: noValueMarks,
 			movedIntoCalls: MovedIntoCallMap.create(),
 			openKeptSites: OpenKeptSiteArray.create(0),

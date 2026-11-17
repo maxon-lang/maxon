@@ -55,29 +55,39 @@ public type TlsServerOptions
 		settings.clientAuthentication = mode
 	end 'authenticateClients'
 
-	function listenerConfig() returns TlsServerConfig throws TlsError
-		let config = settings.clone()
+	function listenerConfig() returns isolated TlsServerConfig throws TlsError
+		let config = settings.clone() as isolated TlsServerConfig
 
-		config.cipherSuites = tlsEnabledSuites(config.cipherSuites, protocols: config.protocols)
+		modify config 'fill'
+			config.cipherSuites = tlsEnabledSuites(config.cipherSuites, protocols: config.protocols)
 
-		for root in clientRoots 'eachRoot'
-			let parsed = try X509.parse(root) otherwise throw TlsError.invalidCertificate
+			for root in clientRoots 'eachRoot'
+				let parsed = try X509.parse(root) otherwise throw TlsError.invalidCertificate
 
-			config.clientAuthorities.push(parsed.subject().der())
-		end 'eachRoot'
+				config.clientAuthorities.push(parsed.subject().der())
+			end 'eachRoot'
+		end 'fill'
 
 		return config
 	end 'listenerConfig'
 end 'TlsServerOptions'
 
+type TlsAcceptSettings
+	let config as TlsServerConfig
+	let clientRoots as ByteArrays
+	let handshakeDeadlineMs as SocketDeadlineMs
+	let verificationTime as TlsVerificationTime
+
+	static function create(config isolated TlsServerConfig, clientRoots ByteArrays, handshakeDeadlineMs SocketDeadlineMs, verificationTime TlsVerificationTime) returns Self
+		return Self{config: merge config, clientRoots: clientRoots, handshakeDeadlineMs: handshakeDeadlineMs, verificationTime: verificationTime}
+	end 'create'
+end 'TlsAcceptSettings'
+
 /// A listening socket. `accept()` returns once the TCP connection is accepted, and the stream runs
 /// its handshake on first use, so a client that stalls holds only its own stream.
 public type TlsListener
 	var listener as TcpListener
-	var config as TlsServerConfig
-	var clientRoots as ByteArrays
-	var handshakeDeadlineMs as SocketDeadlineMs
-	var verificationTime as TlsVerificationTime
+	let settings as immutable TlsAcceptSettings
 
 	/// Bind and listen; port `0` takes any free port.
 	public static function bind(host String, port NetworkPort, options TlsServerOptions) returns TlsListener throws TlsError
@@ -87,7 +97,7 @@ public type TlsListener
 			throw tlsNetworkFailure(failure)
 		end 'refused'
 
-		return TlsListener{listener: bound, config: config, clientRoots: options.clientRoots.clone(), handshakeDeadlineMs: options.handshakeDeadlineMs, verificationTime: options.verificationTime}
+		return TlsListener{listener: bound, settings: freeze TlsAcceptSettings.create(config, clientRoots: options.clientRoots.clone(), handshakeDeadlineMs: options.handshakeDeadlineMs, verificationTime: options.verificationTime)}
 	end 'bind'
 
 	/// The bound port.
@@ -102,11 +112,7 @@ public type TlsListener
 			throw tlsNetworkFailure(failure)
 		end 'refused'
 
-		let entropy = try TlsServerEntropy.fresh(config) otherwise throw TlsError.entropyUnavailable
-		let peer = TlsX509Peer.create(clientRoots.clone(), now: verificationTime.seconds(), purpose: X509Purpose.clientAuth)
-		let endpoint = try TlsServerHandshake.create(config.clone(), entropy: entropy, peer: peer) otherwise throw TlsError.invalidConfiguration
-
-		return TlsStream.unshaken(transport, endpoint: endpoint, peer: peer, deadlineMs: handshakeDeadlineMs)
+		return try TlsStream.accepting(transport, settings: settings)
 	end 'accept'
 
 	/// Make an `accept()` still waiting `milliseconds` after this call throw `timedOut`; `0` clears it.

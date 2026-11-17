@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from capmodel import cast as C
 
-from model_prune import walk
+from model_prune import var_names, walk
 
 KEYWORDS = {
     "and", "as", "async", "await", "bool", "break", "continue", "countof", "cstring", "default", "else", "end",
@@ -37,17 +37,6 @@ def strip_cap(ty):
     if isinstance(ty, C.TCap):
         return ty.cap, ty.ty
     return None, ty
-
-
-def var_names(node):
-    names = set()
-
-    def visit(n):
-        if isinstance(n, C.Var):
-            names.add(n.name)
-
-    walk(node, visit)
-    return names
 
 
 def assigned_names(node):
@@ -764,6 +753,7 @@ class Translator:
             return self.spawn_text(e)
         if isinstance(e, C.Swap):
             skip_unless(isinstance(e.target, C.FieldRead), "swap of a local")
+            skip_unless(strip_cap(self.type_of(e.target))[0] == "isolated", "swap of a field that is not isolated")
             return f"swap {self.expr(e.target)} with {self.expr(e.value)}"
         if isinstance(e, C.Freeze):
             return f"freeze {self.operand(e.expr)}"

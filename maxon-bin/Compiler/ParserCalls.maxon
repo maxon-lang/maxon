@@ -4430,6 +4430,7 @@ extension Parser
 
 		let labelRule = argLabelRuleForCallee(callee, shadowedByADeclaration: shadowedByADeclaration)
 		let receiverArgs = args.count()
+		let moveMark = self.uniqueMoveMark()
 		let places = try self.parseCallArgs(func, target: CallArgTarget.movedInto(callee) if serviceSite.isASpawn() else CallArgTarget.callee(callee), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: labelRule, constructorInstance: constructorInstance)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
@@ -4439,7 +4440,7 @@ extension Parser
 			try self.requireFirstArgLabelHasDefault(resolvedCallee, firstParam: receiverArgs as ParamCount, argLabels: argLabels, argRanges: argRanges, receiverArgs: receiverArgs)
 		end 'firstLabelNeedsADefault'
 
-		let opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor, spawning: CallSpawning.direct)
+		let opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor, spawning: CallSpawning.direct, moveMark: moveMark)
 
 		if serviceSite.isASpawn() 'aFactoryOnAnotherThread'
 			try self.checkCrossingArguments(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, firstSource: receiverArgs, door: CrossingDoor.spawn)
@@ -8302,7 +8303,7 @@ extension Parser
 		if let site = try self.filedIndexCallSite(value) 'itsCallSiteIsOnFile'
 			if self.currentBlockStillHoldsFiledOp(site) 'andTheBlockStillBearsItOut'
 				self.removeCurrentBlockOpAt(site.blockOpPos, siteMark: site.siteMark)
-				self.removeFromPendingTemps(value)
+				self.withdrawFromPendingTemps(value)
 			end 'andTheBlockStillBearsItOut'
 		end 'itsCallSiteIsOnFile'
 	end 'dropFoldedStringIndexCall'
@@ -9520,12 +9521,13 @@ extension Parser
 		// a declared function, so its callee always has parameter names — no bare builtin is reachable
 		// through this door, and the positional-argument regime would be answering for a callee that
 		// cannot arrive here.
+		let moveMark = self.uniqueMoveMark()
 		_ = try self.parseCallArgs(func, target: CallArgTarget.coroutine(target.name), anchor: target.anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.firstNamedIfDefaulted)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		let callee = try self.genericInstanceCallee(target.name, anchor: target.anchor, args: args, argLabels: argLabels, mint: target.mint)
 		try self.requireFirstArgLabelHasDefault(callee, firstParam: 0, argLabels: argLabels, argRanges: argRanges, receiverArgs: 0)
 
-		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: target.anchor, spawning: CallSpawning.spawned)
+		_ = try self.checkCallCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: ReceiverArg.none, anchor: target.anchor, spawning: CallSpawning.spawned, moveMark: moveMark)
 
 		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is
 		// the `async` keyword's, so E3073's caret lands on the first character of the text it quotes.

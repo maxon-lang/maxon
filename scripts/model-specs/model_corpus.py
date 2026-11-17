@@ -9,10 +9,13 @@ import re
 import sys
 from dataclasses import dataclass
 
-DEFAULT_RULESET = "core-m3w-fa14"
+DEFAULT_RULESET = "core-m3w-fa22"
 WORKERS = "3"
 
-HAND_FAMILIES = ("AB", "AC", "AD", "AE", "AF", "AG", "FA14")
+HAND_FAMILIES = (
+    "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM",
+    "FA14", "FA15", "FA16", "FA17", "FA18", "FA19", "FA20", "FA21", "FA22",
+)
 FINDING_FAMILIES = ("N", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG")
 
 SEPARATOR = re.compile(r"^---- (.*)$", re.MULTILINE)
@@ -60,25 +63,31 @@ def model_stamp(model_dir):
     return digest.hexdigest()
 
 
+HAND_CASE_PREFIX = "hand_"
+
+
+def separated_cases(label, paths):
+    cases = []
+    for path in paths:
+        parts = SEPARATOR.split(open(path, encoding="utf-8").read())
+        for ident, src in zip(parts[1::2], parts[2::2]):
+            cases.append(Case(label, path.replace(os.sep, "/"), ident.strip(), "", src.strip() + "\n"))
+    return cases
+
+
 def hand_cases(family):
     cases = []
-    for path in sorted(glob.glob(os.path.join(f"redteam{family}", "hand_*.py"))):
+    for path in sorted(glob.glob(os.path.join(f"redteam{family}", f"{HAND_CASE_PREFIX}*.py"))):
         module = f"redteam{family}.{os.path.basename(path)[:-3]}"
         for attack in importlib.import_module(module).ATTACKS:
             cases.append(Case(f"hand-{family}", f"{module}", attack.id, attack.note, attack.src))
-    return cases
+    hand_texts = sorted(glob.glob(os.path.join(f"redteam{family}", f"{HAND_CASE_PREFIX}*.txt")))
+    return cases + separated_cases(f"hand-{family}", hand_texts)
 
 
 def finding_cases(family):
-    cases = []
-    for path in sorted(glob.glob(os.path.join(f"redteam{family}", "*.txt"))):
-        text = open(path, encoding="utf-8").read()
-        parts = SEPARATOR.split(text)
-        if len(parts) == 1:
-            continue
-        for ident, src in zip(parts[1::2], parts[2::2]):
-            cases.append(Case(f"finding-{family}", path.replace(os.sep, "/"), ident.strip(), "", src.strip() + "\n"))
-    return cases
+    texts = sorted(glob.glob(os.path.join(f"redteam{family}", "*.txt")))
+    return separated_cases(f"finding-{family}", [path for path in texts if not os.path.basename(path).startswith(HAND_CASE_PREFIX)])
 
 
 def report_file(family):
@@ -136,8 +145,8 @@ def raw_verdict(src):
 CLEAN_TAG = "ACCEPT+CLEAN"
 
 
-def oracle_clean(cases):
+def oracle_tags(programs):
     from redteam38.judge38 import run
 
-    rows = run([(c.ident, c.src, "") for c in cases], 300, False)
-    return [row["tag"] == CLEAN_TAG for row in rows], [row["tag"] for row in rows]
+    rows = run([(ident, text, "") for ident, text in programs], 300, False)
+    return [row["tag"] for row in rows]

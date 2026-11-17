@@ -499,7 +499,9 @@ either side could write, because the two green threads may run at the same time 
   (see [Linear Types and Finalizers](/docs/language/regions/#linear-types-and-finalizers)). A `unique` value whose type holds a plain
   record, array, union, function value or interface value, and that is not fresh or declared `isolated`, is
   **E3200**: the message names the plain part, which the sender or another holder may still reach. Declare the part
-  `isolated`, pass a fresh value, or consume the value where it is.
+  `isolated`, pass a fresh value, or consume the value where it is. A call's result crosses only when the call's
+  inputs are clean ([Separate Regions](/docs/language/regions/#separate-regions-isolated)); a call given an input that is not clean is
+  **E3200** at the crossing.
 - An `immutable` argument must be frozen data: `freeze x.clone()`, a constant, a module-level `let`, or a
   `SharedValue` or registry read. It is **shared**: its graph is marked shared, so every count on it steps
   atomically, and neither side may write it. A mutable argument at an `immutable` parameter is **E3207**.

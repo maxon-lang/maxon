@@ -1226,7 +1226,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:21:28: cannot give a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
+error E3214: <fragment>:21:28: cannot join a unique value read out of a field or an element with another value: the field or element goes on owning it, and a unique value has one name; apply the use inside each arm instead, as `f(t) if c else f(fresh)` does
 ```
 
 <!-- test: a-let-bound-to-a-unique-tuple-element-read-is-refused -->
@@ -2801,4 +2801,1554 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:34:8: 'bump' needs a writable parameter 'h' at line 26; 'h' is read-only while 'each' is open
+```
+
+<!-- test: a-cond-of-lent-parameters-stored-keeps-the-then-arm -->
+`stash` stores a `cond` of its two unique parameters, so it keeps both, and the caller's `t` moves into the call.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kp
+	var k as Tk
+
+	static function create(k Tk) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Kp'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function stash(t Tk, t2 Tk, h Kp)
+	let u = (t if chosen(1) else t2)
+	h.k = u
+end 'stash'
+
+function main() returns ExitCode
+	let h = Kp.create(Tk.create(0))
+	let t = Tk.create(1)
+	stash(t, t2: Tk.create(2), h: h)
+	h.k.n = 5
+	return 0 if t.n == 5 else 1
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:34:14: use of moved value 't': its ownership moved to the parameter 't' of 'stash', which keeps it
+```
+
+<!-- test: a-cond-of-lent-parameters-stored-keeps-the-else-arm -->
+The `else` arm of the stored `cond` is kept as the `then` arm is, so the caller's `t` passed at `t2` moves into the call.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kp
+	var k as Tk
+
+	static function create(k Tk) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Kp'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function stash(t Tk, t2 Tk, h Kp)
+	h.k = t if chosen(0) else t2
+end 'stash'
+
+function main() returns ExitCode
+	let h = Kp.create(Tk.create(0))
+	let t = Tk.create(1)
+	stash(Tk.create(2), t2: t, h: h)
+	h.k.n = 5
+	return 0 if t.n == 5 else 1
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:33:14: use of moved value 't': its ownership moved to the parameter 't2' of 'stash', which keeps it
+```
+
+<!-- test: a-cond-of-unique-locals-passed-to-a-call-lends-them -->
+A `cond` handed straight to a call lends its operands for the call, so both stay usable afterwards.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function readN(t Tk) returns Num
+	return t.n
+end 'readN'
+
+function bump(t Tk)
+	t.n = t.n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let z = readN(q if chosen(1) else q2)
+	bump(q)
+	bump(q2)
+	print("{z} {q.n} {q2.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 3
+```
+
+<!-- test: a-cond-of-one-unique-local-passed-to-a-call-lends-it -->
+Both arms may name the same local: the call borrows it once.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function readN(t Tk) returns Num
+	return t.n
+end 'readN'
+
+function main() returns ExitCode
+	let q = Tk.create(4)
+	let z = readN(q if chosen(1) else q)
+	q.n = 5
+	print("{z} {q.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 5
+```
+
+<!-- test: a-cond-of-unique-locals-as-a-receiver-lends-them -->
+A `cond` that is the receiver of a call lends its operands for the call.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function doubled() returns Num
+		return self.n * 2
+	end 'doubled'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let z = (q if chosen(0) else q2).doubled()
+	q.n = 7
+	print("{z} {q.n} {q2.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 7 2
+```
+
+<!-- test: a-cond-of-unique-unions-as-a-match-subject-lends-them -->
+A `cond` that is a `match` subject lends its operands to the `match`, so both unions are matched again afterwards.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Slot
+	empty
+	filled(token Tk)
+end 'Slot'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function show(slot Slot)
+	match slot 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n}\n")
+	end 'which'
+end 'show'
+
+function main() returns ExitCode
+	let u = Slot.filled(Tk.create(1))
+	let w = Slot.filled(Tk.create(2))
+
+	match (u if chosen(1) else w) 'picked'
+		empty then print("none\n")
+		filled(token) then print("picked {token.n}\n")
+	end 'picked'
+
+	show(u)
+	show(w)
+	return 0
+end 'main'
+```
+```stdout
+picked 1
+1
+2
+```
+
+<!-- test: a-cond-of-unique-locals-bound-moves-both -->
+Binding a `cond` moves every unique local it names, whichever arm ran, so `q2` is moved.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let r = q if chosen(1) else q2
+	print("{r.n} {q2.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:16: use of moved value 'q2': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-cond-of-one-unique-local-bound-moves-it -->
+A `cond` that names one unique local in both arms moves it when bound: `r` would otherwise be a second name for `q`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let r = q if chosen(1) else q
+	r.n = 5
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:10: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-bound-cond-of-unique-locals-releases-the-other-arm -->
+The bound `cond` owns the chosen value and the other local is released, on either path.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kp
+	var k as Tk
+
+	static function create(k Tk) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Kp'
+
+function bound(flag bool) returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let r = q if flag else q2
+	return r.n
+end 'bound'
+
+function stored(flag bool) returns Num
+	let h = Kp.create(Tk.create(0))
+	let q = Tk.create(3)
+	let q2 = Tk.create(4)
+	h.k = q if flag else q2
+	return h.k.n
+end 'stored'
+
+function main() returns ExitCode
+	print("{bound(true)} {bound(false)} {stored(true)} {stored(false)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 3 4
+```
+
+<!-- test: a-cond-of-unique-locals-stored-moves-them -->
+Storing a `cond` into a field moves the unique locals it names.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Kp
+	var k as Tk
+
+	static function create(k Tk) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Kp'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let h = Kp.create(Tk.create(0))
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	h.k = q if chosen(1) else q2
+	h.k.n = 5
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:30:10: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-cond-of-unique-locals-passed-to-a-keeping-callee-moves-them -->
+A callee that keeps its parameter takes every unique local of the `cond` passed there.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias TkArray = Array with Tk
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function keep(t Tk, into TkArray)
+	into.push(t)
+end 'keep'
+
+function main() returns ExitCode
+	let kept = TkArray.create(0)
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	keep(q if chosen(1) else q2, into: kept)
+	print("{q2.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:10: use of moved value 'q2': its ownership moved to the parameter 't' of 'keep', which keeps it
+```
+
+<!-- test: a-unique-local-passed-beside-a-cond-of-it-is-refused -->
+The `cond` may be `q` itself, so passing `q` beside it would hand the callee two names for one unique value.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function total(a Tk, b Tk) returns Num
+	b.n = b.n + 1
+	return a.n + b.n
+end 'total'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	print("{total(q if chosen(1) else q2, b: q)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:24:43: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: a-nested-cond-of-unique-locals-passed-to-a-call-lends-them -->
+A `cond` in an arm of another is looked through: the call borrows all three locals.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function readN(t Tk) returns Num
+	return t.n
+end 'readN'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let q3 = Tk.create(3)
+	let z = readN(q if chosen(0) else (q2 if chosen(0) else q3))
+	q.n = 4
+	q2.n = 5
+	q3.n = 6
+	print("{z} {q.n} {q2.n} {q3.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 4 5 6
+```
+
+<!-- test: a-nested-cond-of-unique-locals-bound-moves-them-all -->
+Binding a `cond` whose arm is another `cond` moves every local either one names.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function pick(a bool, b bool) returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let q3 = Tk.create(3)
+	let r = q if a else (q2 if b else q3)
+	return r.n
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true, b: true)} {pick(false, b: true)} {pick(false, b: false)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 3
+```
+
+<!-- test: a-nested-cond-bound-leaves-no-local-usable -->
+`q3` is named only by the inner `cond`, and binding the outer one moves it too.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let q3 = Tk.create(3)
+	let r = q if chosen(1) else (q2 if chosen(1) else q3)
+	print("{r.n} {q3.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:16: use of moved value 'q3': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-try-fallback-of-a-unique-local-bound-moves-it -->
+Binding a value `try` whose fallback is a unique local moves the local, whichever edge ran: `r` would otherwise be a second name for `q`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function mk(n Num) returns Tk throws MkError
+	if n == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Tk.create(n)
+end 'mk'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let r = try mk(0) otherwise q
+	r.n = 5
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:10: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-try-fallback-of-a-unique-local-passed-to-a-call-lends-it -->
+A value `try` handed straight to a call lends its fallback for the call, so the local stays usable afterwards.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function mk(n Num) returns Tk throws MkError
+	if n == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Tk.create(n)
+end 'mk'
+
+function readN(t Tk) returns Num
+	return t.n
+end 'readN'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let z = readN(try mk(0) otherwise q)
+	let w = readN(try mk(7) otherwise q)
+	q.n = 5
+	print("{z} {w} {q.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 7 5
+```
+
+<!-- test: a-bound-try-fallback-of-a-unique-local-releases-it-on-either-edge -->
+The bound value `try` owns whichever value reached it, and the fallback local is released on both edges.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function mk(n Num) returns Tk throws MkError
+	if n == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Tk.create(n)
+end 'mk'
+
+function bound(n Num) returns Num
+	let q = Tk.create(1)
+	let r = try mk(n) otherwise q
+	return r.n
+end 'bound'
+
+function main() returns ExitCode
+	print("{bound(0)} {bound(7)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 7
+```
+
+<!-- test: a-unique-parameter-passed-beside-a-cond-of-it-is-refused -->
+A `cond` of two unique parameters may be `t` itself, so passing `t` beside it hands the callee two names for one unique value.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function total(a Tk, b Tk) returns Num
+	b.n = b.n + 1
+	return a.n + b.n
+end 'total'
+
+function g(t Tk, t2 Tk, c bool) returns Num
+	return total(t, b: t if c else t2)
+end 'g'
+
+function main() returns ExitCode
+	print("{g(Tk.create(1), t2: Tk.create(2), c: true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:18:21: 't' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: a-bound-cond-of-unique-parameters-moves-them -->
+Binding a `cond` of unique parameters moves them as `let u = t` moves `t`, so `t` is not read afterwards.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function g(t Tk, t2 Tk, c bool) returns Num
+	let u = (t if c else t2)
+	t.n = 3
+	return u.n
+end 'g'
+
+function main() returns ExitCode
+	print("{g(Tk.create(1), t2: Tk.create(2), c: true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:2: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-literal-naming-a-unique-local-after-a-cond-of-it-is-refused -->
+A tuple, a struct literal and a union case that name `q` after a `cond` that may be `q` would hold two names for one unique value.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Two
+	var a as Tk
+	var b as Tk
+
+	static function of(q Tk, q2 Tk, c bool) returns Self
+		return Self{a: q if c else q2, b: q}
+	end 'of'
+end 'Two'
+
+union Both
+	none
+	both(a Tk, b Tk)
+end 'Both'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function tuple() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let t = (q if chosen(1) else q2, q)
+	return t.0.n + t.1.n
+end 'tuple'
+
+function payloads() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+
+	match Both.both(q if chosen(1) else q2, b: q) 'made'
+		none then return 0
+		both(a, b) then return a.n + b.n
+	end 'made'
+end 'payloads'
+
+function main() returns ExitCode
+	let two = Two.of(Tk.create(1), q2: Tk.create(2), c: true)
+	print("{tuple()} {payloads()} {two.a.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:17:37: 'q' is named at two fields of this literal, and a unique value has one name; name it once
+error E3102: <fragment>:33:35: 'q' is named at two elements of this tuple, and a unique value has one name; name it once
+error E3102: <fragment>:41:45: 'q' is named at two payloads of this case, and a unique value has one name; name it once
+```
+
+<!-- test: a-literal-naming-a-unique-local-before-a-cond-of-it-is-refused -->
+The order does not matter: naming `q` first and the `cond` second is refused as well.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Two
+	var a as Tk
+	var b as Tk
+
+	static function of(q Tk, q2 Tk, c bool) returns Self
+		return Self{a: q, b: q if c else q2}
+	end 'of'
+end 'Two'
+
+union Both
+	none
+	both(a Tk, b Tk)
+end 'Both'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function tuple() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let t = (q, q if chosen(1) else q2)
+	return t.0.n + t.1.n
+end 'tuple'
+
+function payloads() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+
+	match Both.both(q, b: q if chosen(1) else q2) 'made'
+		none then return 0
+		both(a, b) then return a.n + b.n
+	end 'made'
+end 'payloads'
+
+function main() returns ExitCode
+	let two = Two.of(Tk.create(1), q2: Tk.create(2), c: true)
+	print("{tuple()} {payloads()} {two.a.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:17:24: 'q' is named at two fields of this literal, and a unique value has one name; name it once
+error E3102: <fragment>:33:14: 'q' is named at two elements of this tuple, and a unique value has one name; name it once
+error E3102: <fragment>:41:24: 'q' is named at two payloads of this case, and a unique value has one name; name it once
+```
+
+<!-- test: an-interpolated-cond-of-unique-locals-leaves-them-usable -->
+Interpolating a `cond` of unique locals reads them; it does not move them.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique implements Stringable
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function toString() returns String
+		return "tk{self.n}"
+	end 'toString'
+end 'Tk'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	print("{q if chosen(1) else q2} and {q2 if chosen(1) else q} then {q.n}\n")
+	q.n = 3
+	q2.n = 4
+	print("{q} {q2}\n")
+	return 0
+end 'main'
+```
+```stdout
+tk1 and tk2 then 1
+tk3 tk4
+```
+
+<!-- test: a-fresh-result-holding-a-unique-crosses-whole -->
+`fresh` builds the `Conn` it returns, so its result is the whole of its region and crosses to the service.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Data
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Data'
+
+type Conn
+	var tk as Tk
+	var data as Data
+
+	static function create(tk Tk, data Data) returns Self
+		return Self{tk: tk, data: data}
+	end 'create'
+end 'Conn'
+
+type Sink
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function take(c Conn) returns Integer
+		c.data.n = c.data.n + 100
+		self.total = self.total + c.tk.n + c.data.n
+		return self.total
+	end 'take'
+end 'Sink'
+
+function fresh(n Integer) returns Conn
+	let c = Conn.create(Tk.create(n), data: Data.create(n))
+	c.data.n = c.data.n + 1
+	return c
+end 'fresh'
+
+function main() returns ExitCode
+	let svc = spawn Sink.create()
+	let got = try await svc.take(fresh(1)) otherwise 0
+	let c = fresh(2)
+	let more = try await svc.take(c) otherwise 0
+	print("{got} {more}\n")
+	return 0
+end 'main'
+```
+```stdout
+103 208
+```
+
+<!-- test: a-result-sharing-a-part-with-the-sender-does-not-cross -->
+`sharing` returns a `Conn` holding the caller's `d`, so the local bound from it is not the whole of its region and does not cross.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type Data
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Data'
+
+type Conn
+	var tk as Tk
+	var data as Data
+
+	static function create(tk Tk, data Data) returns Self
+		return Self{tk: tk, data: data}
+	end 'create'
+end 'Conn'
+
+type Sink
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function take(c Conn) returns Integer
+		c.data.n = c.data.n + 100
+		self.total = self.total + c.tk.n + c.data.n
+		return self.total
+	end 'take'
+end 'Sink'
+
+function sharing(d Data) returns Conn
+	let c = Conn.create(Tk.create(1), data: d)
+	c.data.n = c.data.n + 1
+	return c
+end 'sharing'
+
+function main() returns ExitCode
+	let svc = spawn Sink.create()
+	let d = Data.create(5)
+	let c = sharing(d)
+	let got = try await svc.take(c) otherwise 0
+	d.n = 7
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:53:31: 'c' crosses to the service it is sent to only as the whole of its region, and 'Conn' is not closed: 'Conn.data' is a plain 'Data' that other code may still name. Declare 'data' `isolated`, pass a fresh value, or consume the value here
+```
+
+<!-- test: a-try-fallback-of-a-loop-element-is-refused -->
+A loop element stays owned by its array, so a value `try` whose fallback is one would give a second name to a unique value the array goes on owning, as `let r = t` would.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum MkError implements Error
+	none
+end 'MkError'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias TkArray = Array with Tk
+
+function mk(n Num) returns Tk throws MkError
+	if n == 0 'absent'
+		throw MkError.none
+	end 'absent'
+
+	return Tk.create(n)
+end 'mk'
+
+function main() returns ExitCode
+	let tokens = TkArray.create(0)
+	tokens.push(Tk.create(1))
+
+	for t in tokens 'each'
+		let r = try mk(0) otherwise t
+		r.n = 9
+	end 'each'
+
+	for t in tokens 'again'
+		print("{t.n}\n")
+	end 'again'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:31:11: cannot join a unique value read out of a field or an element with another value: the field or element goes on owning it, and a unique value has one name; apply the use inside each arm instead, as `f(t) if c else f(fresh)` does
+```
+
+<!-- test: a-cond-of-a-loop-element-and-a-fresh-value-is-refused -->
+The fresh arm makes the `cond` own its result, and the loop element's arm is still a second name for a value the array owns.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias TkArray = Array with Tk
+
+function main() returns ExitCode
+	let tokens = TkArray.create(0)
+	tokens.push(Tk.create(1))
+
+	for t in tokens 'each'
+		let r = t if t.n == 1 else Tk.create(5)
+		r.n = 9
+	end 'each'
+
+	for t in tokens 'again'
+		print("{t.n}\n")
+	end 'again'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:19:13: cannot join a unique value read out of a field or an element with another value: the field or element goes on owning it, and a unique value has one name; apply the use inside each arm instead, as `f(t) if c else f(fresh)` does
+```
+
+<!-- test: a-unique-operand-a-later-operand-moves-is-refused -->
+A later argument that moves a unique value an earlier one already passed — through a nested tuple, a call that keeps it, a closure that captures it, or a `cond` — would hand the callee two names for one unique value.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Reader = function() returns Num
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function plus(o One) returns Num
+		return self.n + o.x.n
+	end 'plus'
+end 'Tk'
+
+type One
+	var x as Tk
+
+	static function of(x Tk) returns Self
+		return Self{x: x}
+	end 'of'
+end 'One'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function total(a Tk, b (Tk, Num)) returns Num
+	return a.n + b.0.n + b.1
+end 'total'
+
+function sum(a Tk, b One) returns Num
+	return a.n + b.x.n
+end 'sum'
+
+function run(t Tk, f Reader) returns Num
+	return t.n + f()
+end 'run'
+
+function tupleArgument() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	return total(q, b: (q if chosen(1) else q2, 1))
+end 'tupleArgument'
+
+function keptArgument() returns Num
+	let q = Tk.create(1)
+	return sum(q, b: One.of(q))
+end 'keptArgument'
+
+function keptCond() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	return sum(q, b: One.of(q if chosen(1) else q2))
+end 'keptCond'
+
+function condBesideKept() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	return sum(q if chosen(1) else q2, b: One.of(q))
+end 'condBesideKept'
+
+function captured() returns Num
+	let q = Tk.create(1)
+	return run(q, f: function() gives q.n)
+end 'captured'
+
+function receiver() returns Num
+	let q = Tk.create(1)
+	return q.plus(One.of(q))
+end 'receiver'
+
+function parameterTuple(p Tk, p2 Tk) returns Num
+	return total(p, b: (p if chosen(1) else p2, 1))
+end 'parameterTuple'
+
+function parameterKept(p Tk) returns Num
+	return sum(p, b: One.of(p))
+end 'parameterKept'
+
+function main() returns ExitCode
+	let z = tupleArgument() + keptArgument() + keptCond() + condBesideKept() + captured() + receiver() + parameterTuple(Tk.create(1), p2: Tk.create(2)) + parameterKept(Tk.create(1))
+	print("{z}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:44:22: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:49:26: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:55:26: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:61:47: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:66:36: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:71:23: 'q' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:75:22: 'p' is passed at two arguments of this call, and a unique value has one name; pass it once
+error E3102: <fragment>:79:26: 'p' is passed at two arguments of this call, and a unique value has one name; pass it once
+```
+
+<!-- test: a-literal-whose-nested-operand-moves-a-unique-operand-is-refused -->
+A field, an element or a payload naming `q` beside a nested literal or call that moves `q` is refused where the nested one names it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+type One
+	var x as Tk
+
+	static function of(x Tk) returns Self
+		return Self{x: x}
+	end 'of'
+end 'One'
+
+type Two
+	var a as Tk
+	var b as One
+
+	static function of(q Tk, q2 Tk, c bool) returns Self
+		return Self{a: q, b: One.of(q if c else q2)}
+	end 'of'
+end 'Two'
+
+union Both
+	none
+	both(a Tk, b (Tk, Num))
+end 'Both'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function nestedCond() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+	let t = (q, (q if chosen(1) else q2, 1))
+	return t.0.n + t.1.0.n
+end 'nestedCond'
+
+function nestedTuple() returns Num
+	let q = Tk.create(1)
+	let t = (q, (q, 1))
+	return t.0.n + t.1.0.n
+end 'nestedTuple'
+
+function payloads() returns Num
+	let q = Tk.create(1)
+	let q2 = Tk.create(2)
+
+	match Both.both(q, b: (q if chosen(1) else q2, 1)) 'made'
+		none then return 0
+		both(a, b) then return a.n + b.0.n
+	end 'made'
+end 'payloads'
+
+function main() returns ExitCode
+	let two = Two.of(Tk.create(1), q2: Tk.create(2), c: true)
+	print("{nestedCond()} {nestedTuple()} {payloads()} {two.a.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:25:31: 'q' is named at two fields of this literal, and a unique value has one name; name it once
+error E3102: <fragment>:41:15: 'q' is named at two elements of this tuple, and a unique value has one name; name it once
+error E3102: <fragment>:47:15: 'q' is named at two elements of this tuple, and a unique value has one name; name it once
+error E3102: <fragment>:55:25: 'q' is named at two payloads of this case, and a unique value has one name; name it once
+```
+
+<!-- test: a-cond-of-unique-unions-as-a-match-subject-lends-each-to-the-arms -->
+A `match` over a `cond` lends every union the `cond` names to its arms, as a `match` over one of them does, so an arm cannot hand `u` to a callee that keeps it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+union Slot
+	empty
+	filled(token Tk)
+end 'Slot'
+
+type Keeper
+	var held as Slot
+
+	static function create() returns Self
+		return Self{held: Slot.empty}
+	end 'create'
+
+	function keep(s Slot)
+		self.held = s
+	end 'keep'
+end 'Keeper'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function main() returns ExitCode
+	let k = Keeper.create()
+	let u = Slot.filled(Tk.create(1))
+	let w = Slot.filled(Tk.create(2))
+
+	match (u if chosen(1) else w) 'picked'
+		empty then print("empty\n")
+		filled(token) then k.keep(u)
+	end 'picked'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:40:24: cannot pass 'u' to parameter 's' of 'Keeper.keep': it keeps a unique value, and 'u' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: a-cond-of-unique-arrays-as-a-loop-source-keeps-each-read-only -->
+A loop over a `cond` holds every array the `cond` names, as a loop over one of them does, so the body cannot clear `xs`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias Tks = Array with Tk
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function filled(n Num) returns Tks
+	let xs = Tks.create(0)
+	xs.push(Tk.create(n))
+	return xs
+end 'filled'
+
+function main() returns ExitCode
+	let xs = filled(1)
+	let ys = filled(2)
+
+	for e in (xs if chosen(1) else ys) 'each'
+		print("{e.n}\n")
+		xs.clear()
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:30:3: 'clear' needs a writable receiver at line 306; 'xs' is read-only while 'each' is open
+```
+
+<!-- test: a-try-fallback-beside-a-unique-element-read-is-refused -->
+A `try` whose result is an element read out of an array of unique values and whose fallback is fresh would give the merge a second name for the element the array still owns.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Token is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+typealias Tokens = Array with Token
+
+function main() returns ExitCode
+	let xs = Tokens.create(0)
+	xs.push(Token.create(1))
+	let k = try xs.get(0) otherwise Token.create(9)
+	k.n = 4
+	print("{k.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:17:10: cannot join a unique value read out of a field or an element with another value: the field or element goes on owning it, and a unique value has one name; apply the use inside each arm instead, as `f(t) if c else f(fresh)` does
+```
+
+<!-- test: a-try-fallback-of-a-matched-payload-handed-to-a-keeping-call-moves-it -->
+A `try` whose fallback is a payload the arm binds, handed to a call that keeps it, moves the payload out of the union as handing over the payload itself does, so the union is not read again.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Token is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	filled(token Token)
+end 'Slot'
+
+enum MakeError implements Error
+	none
+end 'MakeError'
+
+type Keeper
+	var held as Token
+
+	static function create() returns Self
+		return Self{held: Token.create(0)}
+	end 'create'
+
+	function keep(t Token)
+		self.held = t
+	end 'keep'
+end 'Keeper'
+
+function mk(n Num) returns Token throws MakeError
+	if n == 0 'absent'
+		throw MakeError.none
+	end 'absent'
+
+	return Token.create(n)
+end 'mk'
+
+function show(s Slot)
+	match s 'which'
+		empty then print("empty\n")
+		filled(token) then print("{token.n}\n")
+	end 'which'
+end 'show'
+
+function main() returns ExitCode
+	let k = Keeper.create()
+	let s = Slot.filled(Token.create(3))
+
+	match s 'which'
+		empty then print("empty\n")
+		filled(t) then k.keep(try mk(0) otherwise t)
+	end 'which'
+
+	show(s)
+	print("{k.held.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:57:7: use of moved value 't': its ownership moved to the parameter 't' of 'Keeper.keep', which keeps it
+```
+
+<!-- test: a-field-path-over-a-cond-lends-every-holder-the-cond-names -->
+A loop over a field read through a `cond`, and a `match` on one, hold every holder the `cond` names read-only, whichever arm ran, as reading the field through one holder does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+typealias Tks = Array with Tk
+
+union Slot
+	empty
+	filled(token Tk)
+end 'Slot'
+
+type Holder
+	var xs as Tks
+	var u as Slot
+
+	static function create(n Num) returns Self
+		let xs = Tks.create(0)
+		xs.push(Tk.create(n))
+		return Self{xs: xs, u: Slot.filled(Tk.create(n))}
+	end 'create'
+end 'Holder'
+
+function chosen(n Num) returns bool
+	return n != 0
+end 'chosen'
+
+function reset(h Holder)
+	h.u = Slot.empty
+end 'reset'
+
+function loopThen() returns Num
+	let h = Holder.create(1)
+	let g = Holder.create(2)
+
+	for e in (h if chosen(1) else g).xs 'each'
+		let o = try h.xs.pop() otherwise Tk.create(0)
+		e.n = o.n + 2
+	end 'each'
+
+	return 0
+end 'loopThen'
+
+function loopElse() returns Num
+	let h = Holder.create(1)
+	let g = Holder.create(2)
+
+	for e in (h if chosen(0) else g).xs 'each'
+		let o = try g.xs.pop() otherwise Tk.create(0)
+		e.n = o.n + 2
+	end 'each'
+
+	return 0
+end 'loopElse'
+
+function matchThen() returns Num
+	let h = Holder.create(1)
+	let g = Holder.create(2)
+
+	match (h if chosen(1) else g).u 'which'
+		empty then return 0
+		filled(token) then reset(h)
+	end 'which'
+
+	return 1
+end 'matchThen'
+
+function matchElse() returns Num
+	let h = Holder.create(1)
+	let g = Holder.create(2)
+
+	match (h if chosen(0) else g).u 'which'
+		empty then return 0
+		filled(token) then g.u = Slot.empty
+	end 'which'
+
+	return 1
+end 'matchElse'
+
+function main() returns ExitCode
+	print("{loopThen()} {loopElse()} {matchThen()} {matchElse()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:43:19: 'pop' needs a writable receiver at line 246; the argument is read-only while 'each' is open
+error E3207: <fragment>:55:19: 'pop' needs a writable receiver at line 246; the argument is read-only while 'each' is open
+error E3207: <fragment>:68:28: 'reset' needs a writable parameter 'h' at line 35; 'h' is read-only while 'which' is open
+error E3197: <fragment>:80:22: cannot write 'u' through 'g', which is read-only while 'which' lends a unique value out of it
 ```

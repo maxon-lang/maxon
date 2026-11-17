@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the `specs/model-*.md` cases from the capmodel corpora.
 
-    python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa14]
+    python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa22]
 
 The phases, in order: judge each program with the model; reduce it to what `main` reaches and re-judge; translate
 it to Maxon; compile every translation as a spec case in a scratch directory; sort the results; write the cases
@@ -34,8 +34,9 @@ from spec_writer import SpecCase, spec_text  # noqa: E402
 DIAGNOSTIC = re.compile(r"error (E\d{4}):")
 WORKER_PANIC = re.compile(r"last step started: compiling (\S+?)/\S+[^\n]*\n(panic at [^\n]*)")
 ACTUAL_MARKER = "    actual:   "
-EXPECTED_MARKER = "\n    expected: "
+HASH_PIN_LINE = re.compile(r"^\s*(?:program: )?MAXON_HASH_SEED=\S+ MAXON_HASH_TIER=\S+\s*$", re.MULTILINE)
 CRASH_MARKERS = ("DIED", "panic at")
+PROGRAM_STDERR = "child stderr:"
 SUCCEEDED = "compilation succeeded"
 AGREEING = ("agree-accept", "agree-refuse", "agree-refuse-other-code")
 MAX_NAME_LENGTH = 80
@@ -118,6 +119,10 @@ def judged(run, case):
     import model_prune
 
     prog, verdict = mc.check(case.src, run.args.ruleset)
+    if prog is not None:
+        unbound, changed = model_prune.unbind_unread_arms(prog)
+        if changed:
+            prog, verdict = mc.check(render.render(unbound), run.args.ruleset)
     if prog is None:
         return "the model cannot parse it", None
     if not verdict.accepted and verdict.rule == WELL_FORMEDNESS_RULE:
@@ -244,7 +249,9 @@ def environment_failures(run):
 
 def actual_text(reason):
     marker = reason.find(ACTUAL_MARKER)
-    return reason[marker + len(ACTUAL_MARKER):].strip() if marker >= 0 else ""
+    if marker < 0:
+        return ""
+    return HASH_PIN_LINE.sub("", reason[marker + len(ACTUAL_MARKER):]).strip()
 
 
 def classify(run, entry, result):
@@ -254,7 +261,8 @@ def classify(run, entry, result):
         entry.bucket = "agree-accept"
         return
     entry.codes = tuple(sorted(set(DIAGNOSTIC.findall(reason))))
-    if any(m in reason for m in CRASH_MARKERS):
+    compiler_output = reason.split(PROGRAM_STDERR)[0]
+    if any(m in compiler_output for m in CRASH_MARKERS):
         entry.bucket = "crash"
     elif TIMED_OUT in reason:
         entry.bucket = "diverges"
@@ -275,7 +283,7 @@ def judge_with_oracle(run):
     accepted = [e for e in run.entries if e.bucket == "agree-accept"]
     missing = [e for e in accepted if "oracle|" + cache_key(run, e.case) not in run.cache]
     if missing:
-        _, tags = mc.oracle_clean([e.case for e in missing])
+        tags = mc.oracle_tags([(e.case.ident, e.model_text) for e in missing])
         for entry, tag in zip(missing, tags):
             run.cache["oracle|" + cache_key(run, entry.case)] = tag
     for entry in accepted:
@@ -286,7 +294,7 @@ def judge_with_oracle(run):
     for entry in [e for e in run.entries if e.bucket == "soundness-candidate"]:
         key = "raw|" + cache_key(run, entry.case)
         if key not in run.cache:
-            run.cache[key] = mc.raw_verdict(entry.case.src)
+            run.cache[key] = mc.raw_verdict(entry.model_text)
         entry.raw_oracle = run.cache[key]
     save_cache(run)
 

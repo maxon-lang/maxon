@@ -1173,6 +1173,14 @@ export enum ErrorCode
 	// One promise, or one value of an opaque type parameter, passed at two arguments of one call whose
 	// parameters take it is refused at the second argument, naming the binding written there: the first
 	// argument already moved it. Pass it at one argument.
+	// One `unique` value named at two operands of one call, tuple, struct literal or case payload is refused at
+	// the repeat (`'q' is passed at two arguments of this call`; a tuple, a literal and a case say elements,
+	// fields and payloads): the operands would hold two names for one value. A `cond`, a `match` expression or
+	// a `try … otherwise` value that may be the `unique` value names it, and so does an operand that moves it
+	// after an earlier operand lent it, such as a nested call or tuple that keeps it or a closure that captures
+	// it. Name the value once.
+	// Binding, storing, returning or sending a `cond`, a `match` expression or a `try … otherwise` value moves
+	// every `unique` variable it may be, whichever arm ran, so a later read of any of them is refused.
 	// The variable a `match` arm lends a unique payload from is refused to a callee that writes through it, in a
 	// call that also names a binding of the arm: the binding views the matched value, and a unique value has one
 	// name. The receiver, a call through a function value and a call through an interface method are judged the
@@ -2307,7 +2315,9 @@ export enum ErrorCode
 	// another thread (a send or `spawn` argument, a reply, a failed send's hand-back) only as the whole of its
 	// region: a fresh expression, an `isolated` variable or an owned `unique` or linear value of a closed type.
 	// One whose type holds a plain part is refused, naming the part: declare it `isolated`, pass a fresh value,
-	// or consume the value where it is. Declare the local `as isolated T`, or pass a copy.
+	// or consume the value where it is. A call's result crosses only when the call's inputs are clean, so a
+	// call given an input that is not clean is refused at the crossing. Declare the local `as isolated T`, or
+	// pass a copy.
 	semanticIsolatedRecoverNeedsCleanInputs = "E3200"
 
 	// One call or statement opens a second region, or mixes in mutable data of the current one. A statement
@@ -2462,6 +2472,12 @@ export enum ErrorCode
 	// name, the record whose field is matched, or an operand of a `cond` scrutinee) is not moved, copied,
 	// stored, captured or passed to a parameter that keeps it inside an arm. Do that before or after the
 	// `match`; an arm may still read the union through a parameter the callee only reads.
+	// A `cond`, a `match` expression and a `try … otherwise` value are transparent to unique values: bound,
+	// stored, returned, sent or passed to a parameter that keeps it, one moves every unique variable it may
+	// be, and passed straight to a call or used as a `match` subject or a `for` source it lends them. A merge
+	// arm that is a unique value read out of a field or an element, or lent by a loop, a tuple or a `match`,
+	// is refused at the merge, because the merge would give it a second name: apply the use inside each arm
+	// instead, as `f(t) if c else f(fresh)` does.
 	semanticUniqueValueRefused = "E3214"
 
 	// A type argument breaks a bound on a generic type's type parameter. `where T is sendable` takes a value,

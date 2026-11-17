@@ -328,7 +328,7 @@ union ServerListener
 		end 'which'
 	end 'scheme'
 
-	function accept() returns HttpTransport throws HttpServerError
+	function accept() returns isolated HttpTransport throws HttpServerError
 		match self 'which'
 			plain(listener) then return try plainConnectionFrom(listener)
 			secure(listener) then return try secureConnectionFrom(listener)
@@ -404,7 +404,7 @@ public type HttpServer
 		while true 'nextConnection'
 			let transport = try self.nextTransport()
 			let policy = self.connectionPolicy()
-			let arrival = try policy.arrive(transport, owner: ExchangeOwner.taken)
+			let arrival = try policy.arrive(merge transport, owner: ExchangeOwner.taken)
 
 			match arrival 'arrival'
 				ready(exchange) then return exchange
@@ -413,7 +413,7 @@ public type HttpServer
 		end 'nextConnection'
 	end 'accept'
 
-	function nextTransport() returns HttpTransport throws HttpServerError
+	function nextTransport() returns isolated HttpTransport throws HttpServerError
 		if self.closed 'alreadyClosed'
 			throw HttpServerError.listenerClosed
 		end 'alreadyClosed'
@@ -749,7 +749,7 @@ function longerRetryThan(previous HttpAcceptRetryMs) returns HttpAcceptRetryMs
 	return previous * AcceptRetryGrowth
 end 'longerRetryThan'
 
-function plainConnectionFrom(listener TcpListener) returns HttpTransport throws HttpServerError
+function plainConnectionFrom(listener TcpListener) returns isolated HttpTransport throws HttpServerError
 	let connection = try listener.accept() otherwise (cause) 'noConnection'
 		throw listenerFaultOf(cause)
 	end 'noConnection'
@@ -757,13 +757,17 @@ function plainConnectionFrom(listener TcpListener) returns HttpTransport throws 
 	return HttpTransport.plain(connection)
 end 'plainConnectionFrom'
 
-function secureConnectionFrom(listener TlsListener) returns HttpTransport throws HttpServerError
-	let stream = try listener.accept() otherwise (error) 'noConnection'
+function secureConnectionFrom(listener TlsListener) returns isolated HttpTransport throws HttpServerError
+	let secured = try secureTransportFrom(listener) otherwise (error) 'noConnection'
 		throw secureListenerFault(error)
 	end 'noConnection'
 
-	return HttpTransport.secure(stream)
+	return secured
 end 'secureConnectionFrom'
+
+function secureTransportFrom(listener TlsListener) returns isolated HttpTransport throws TlsError
+	return HttpTransport.secure(try listener.accept())
+end 'secureTransportFrom'
 
 function plainAcceptDeadline(listener TcpListener, milliseconds SocketDeadlineMs) throws HttpServerError
 	try listener.setAcceptDeadline(milliseconds) otherwise 'noListener'
