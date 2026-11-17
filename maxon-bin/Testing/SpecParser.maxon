@@ -2767,11 +2767,9 @@ end 'parseProgramArgs'
 // Parts joined by `LineSeparator`, with no leading and no trailing copy of it.
 //
 // The suite accumulates separated text in several places, among them a spec's fenced blocks
-// (`readFence`, below) and a worker's whole stderr (`drainChildStderr`, SpecWorkerPool). Those two
-// are UNBOUNDED in their input: a fence is a whole test program, a drain is everything a crashed
-// child said. So the accumulator is a `StringBuilder`, because a `String` owns exactly the bytes it
-// holds and its `append` recopies all of them (stdlib/String.maxon), making a join Θ(n²) in its own
-// output.
+// (`readFence`, below), which are UNBOUNDED in their input: a fence is a whole test program. So the
+// accumulator is a `StringBuilder`, because a `String` owns exactly the bytes it holds and its
+// `append` recopies all of them (stdlib/String.maxon), making a join Θ(n²) in its own output.
 //
 // `hasPart` is NOT `out.isEmpty()`. A first part that is itself EMPTY leaves the builder empty and must
 // still be separated from the part after it — a spec fence opening on a blank line is ordinary — so

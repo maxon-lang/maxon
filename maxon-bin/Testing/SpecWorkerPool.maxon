@@ -135,16 +135,9 @@
 //   and every other spec in the run still reports.
 //
 // ============================================================================================
-// TWO THINGS THIS POOL DELIBERATELY DOES NOT DO
+// ONE THING THIS POOL DELIBERATELY DOES NOT DO
 // ============================================================================================
 //
-// * The STDERR DRAIN IS SYNCHRONOUS, at shutdown. Draining it continuously from an `async` GT
-//   leaks one MM allocation per worker (the Promise box and the GT's arg buffer never return to
-//   the slab). See `shutdownAndDrainStderr`. ⚠ **THAT IS ALSO WHY THE BREADCRUMB IS ON STDOUT AND
-//   NOT ON STDERR.** Nothing reads a worker's stderr until it dies or shuts down, so a line per
-//   compile there would fill a pipe nobody is draining — hundreds of them per worker — and block
-//   the worker inside a write. On stdout it rides a stream the worker's `WorkerOutput` service is
-//   already reading line by line, and the drain is the one place that needs it.
 // * NO RETRY, EVER. A dead worker's job is FAILED, not re-run. See `deadJobResults`.
 
 // --- The CLI the pool speaks -----------------------------------------------------------------
@@ -341,6 +334,13 @@ let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
 let WorkerShutdownTimeoutMs = 30 * MillisecondsPerSecond
 
 let WorkerHelloDeadlineMs = 60 * MillisecondsPerSecond
+
+let WorkerStderrKeptBytes = 64 * 1024
+
+typealias DiscardedLineTally = int(0 to u64.max)
+
+let DeadWorkerSilence = "(the worker wrote nothing to stderr before dying)"
+let FailedWorkerSilence = "(the worker wrote nothing to stderr)"
 
 let AsciiLowerN = 0x6E
 
@@ -686,10 +686,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 		end 'eachJobKind'
 
 		if not ran 'unknownJob'
-			// Surface it on stderr — where the parent's shutdown drain will forward it — and still
-			// print the READY this loop now owes. Silently dropping the line would deadlock the
-			// parent instead of diagnosing it.
-			printError("spec worker: unknown job line: '{job}'\n")
+			panic("spec worker: unknown job line: '{job}'")
 		end 'unknownJob'
 
 		print("{WorkerReadyMarker}\n")
@@ -698,28 +695,21 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 	return SucceededExit
 end 'runPersistentWorker'
 
-// ⛔⛔ **A WORKER'S STDERR IS AN UNDRAINED PIPE, SO THE COMPILER'S LOG CHANNEL HAS TO BE OFF INSIDE
-// ONE.**
+// ⛔⛔ **WHAT A WORKER WRITES TO STDERR WHILE IT RUNS IS A HARNESS ERROR OF THE RUN, SO THE COMPILER'S
+// LOG CHANNEL HAS TO BE OFF INSIDE ONE.**
 //
 // The compiler's log level defaults to INFO, so every successful build writes
 // `[CMP] INFO: Wrote N bytes of code to …` to stderr on its way out. In process that is the WORKER's
-// stderr, which NOTHING reads until that worker dies or the pool shuts down (`shutdownAndDrainStderr`;
-// the synchronous drain is itself deliberate — see this file's header). A worker compiles several
-// hundred programs in a full suite, enough to fill a 64 KiB pipe, and a worker blocked inside a stderr
-// write holds its spec until the pool terminates it.
+// stderr, which the parent reads throughout and reports when the worker then exits cleanly.
 //
-// ⇒ The channel is SILENCED rather than drained. Draining continuously leaks one allocation per
-// worker, and this output has no reader in a worker under any design — it is
-// per-compile chatter about files the harness itself named and immediately deletes. ERROR is KEPT,
-// because the one moment a worker's stderr is read IS its post-mortem, and an error line is exactly
-// what that reader wants.
+// ⇒ The channel is SILENCED below ERROR. This output is per-compile chatter about files the harness
+// itself named and immediately deletes. ERROR is KEPT, because a dead worker's stderr IS its
+// post-mortem, and an error line is exactly what that reader wants.
 //
-// ⚠ **THE INVARIANT THIS RESTORES IS THE ONE THE PROTOCOL NOTE AT THE TOP OF THIS FILE ALREADY STATES
-// ABOUT STDOUT, APPLIED TO STDERR: a worker writes to stderr only when it is DYING.** Anything added
-// to a per-test path that writes there — a `printError` outside a diagnostic capture, a new `Log.error`
-// in the compile pipeline — reintroduces exactly this deadlock, and its symptom is the progress bound
-// firing rather than a stack trace: a worker blocked inside a write says nothing, which is exactly the
-// state that bound reads as a stopped worker.
+// ⚠ **THE INVARIANT IS THE ONE THE PROTOCOL NOTE AT THE TOP OF THIS FILE STATES ABOUT STDOUT, APPLIED
+// TO STDERR: a worker writes to stderr only when it is DYING.** Anything added to a per-test path that
+// writes there — a `printError` outside a diagnostic capture, a new `Log.error` in the compile
+// pipeline — turns every run that reaches it red.
 function silenceCompilerLogging()
 	Log.setLevel(LogLevel.error)
 end 'silenceCompilerLogging'
@@ -769,12 +759,9 @@ end 'runSpecJob'
 // would name the last thing that FINISHED, which is precisely not what a post-mortem wants — and the
 // silence it is supposed to interrupt is the step's own duration.
 //
-// ⚠ **IT IS ON STDOUT, NOT STDERR.** Draining a worker's stderr continuously from a green thread
-// leaks one MM allocation per worker, which is why stderr is drained only at shutdown
-// (`shutdownAndDrainStderr`). With
-// nothing reading stderr during a run, a line per step would fill that pipe (hundreds of lines per
-// worker) and BLOCK the worker inside a write, which is a deadlock rather than a diagnostic. Stdout is
-// already drained line by line by the very green thread that needs this line.
+// ⚠ **IT IS ON STDOUT, NOT STDERR.** A line on a living worker's stderr is a harness error
+// (`silenceCompilerLogging`), and stdout is drained line by line by the very green thread that needs
+// this record to say what a dead worker was doing.
 //
 // It is EXPORTED because the runner emits it and the pool decodes it: one spelling, in the file that
 // owns the wire.
@@ -1298,12 +1285,20 @@ typealias SpokeCellArray = Array with SpokeCell
 // it. The cost is one clock read per line, against ~2 lines per test.
 function drainResultsThunk(output WorkerOutput.handle, spoke SpokeCell) returns StringArray throws SubprocessError
 	let drained = try await output.drain(spoke) otherwise panic("drainResultsThunk: a worker's output reader stopped while the pool still held its handle")
+	return try linesOfDrain(drained)
+end 'drainResultsThunk'
 
+function keptStderrThunk(errors WorkerOutput.handle) returns StringArray throws SubprocessError
+	let drained = try await errors.kept() otherwise panic("keptStderrThunk: a worker's stderr reader stopped while the pool still held its handle")
+	return try linesOfDrain(drained)
+end 'keptStderrThunk'
+
+function linesOfDrain(drained isolated WorkerDrain) returns StringArray throws SubprocessError
 	match drained 'drained'
 		lines(collected) then return merge collected
 		unreadable(reason) then throw SubprocessError.ioFailed(reason)
 	end 'drained'
-end 'drainResultsThunk'
+end 'linesOfDrain'
 
 union WorkerDrain
 	lines(lines isolated StringArray)
@@ -1318,10 +1313,96 @@ end 'WorkerDrainStep'
 
 type WorkerOutput
 	var reader as ChildOutputReader
+	var keptLines as isolated StringArray
+	var keptBytes = 0 as BytePos
+	var discarded = 0 as DiscardedLineTally
+	var midDiscardedLine = false
+	var failure = StatedText.unstated
 
 	static function create(reader isolated ChildOutputReader) returns WorkerOutput
-		return Self{reader: merge reader}
+		return Self{reader: merge reader, keptLines: StringArray.create(0)}
 	end 'create'
+
+	// Reads to the end of the stream after it stops keeping: an unread pipe blocks the worker inside a
+	// write.
+	export function keepToEnd()
+		while true 'lineLoop'
+			let read = try self.reader.readLineWithin(StreamMessageCap) otherwise (e) 'unread'
+				self.failure = StatedText.stated(e.displayReason())
+				return
+			end 'unread'
+
+			match read 'read'
+				line(text) then self.keep(text)
+				ended then return
+				pastTheCap then self.discardPastTheCap()
+			end 'read'
+		end 'lineLoop'
+
+		panic("WorkerOutput.keepToEnd: the loop above is only left by `return`")
+	end 'keepToEnd'
+
+	export function kept() returns isolated WorkerDrain
+		match self.failure 'failure'
+			stated(reason) then return WorkerDrain.unreadable(reason)
+			unstated then return WorkerDrain.lines(self.takeKept())
+		end 'failure'
+	end 'kept'
+
+	function keep(text String)
+		if self.midDiscardedLine 'continuation'
+			self.midDiscardedLine = false
+
+			return
+		end 'continuation'
+
+		let bytes = text.byteLength() + LineSeparator.byteLength()
+
+		if self.discarded == 0 and self.keptBytes + bytes <= WorkerStderrKeptBytes 'withinTheCap'
+			modify self.keptLines 'keeping'
+				self.keptLines.push(text)
+			end 'keeping'
+
+			self.keptBytes = self.keptBytes + bytes
+			return
+		end 'withinTheCap'
+
+		self.discarded = self.discarded + 1
+	end 'keep'
+
+	function discardPastTheCap()
+		let dropped = try self.reader.readBytes(self.reader.unreadBytes()) otherwise panic("WorkerOutput.discardPastTheCap: bytes already buffered are handed out without a read")
+		let bytes = merge dropped
+		var linesBegun = 0 as DiscardedLineTally
+		var atLineStart = false
+
+		for byte in bytes 'eachByte'
+			if atLineStart 'beginsLine'
+				linesBegun = linesBegun + 1
+			end 'beginsLine'
+
+			atLineStart = byte == LineFeedByte
+		end 'eachByte'
+
+		if not self.midDiscardedLine 'beginsInTheDropped'
+			linesBegun = linesBegun + 1
+		end 'beginsInTheDropped'
+
+		self.discarded = self.discarded + linesBegun
+		self.midDiscardedLine = not atLineStart
+	end 'discardPastTheCap'
+
+	function takeKept() returns isolated StringArray
+		if self.discarded > 0 'somethingDiscarded'
+			let summary = "({self.discarded} more line(s) past the first {WorkerStderrKeptBytes} bytes were read and not kept)"
+
+			modify self.keptLines 'summing'
+				self.keptLines.push(summary)
+			end 'summing'
+		end 'somethingDiscarded'
+
+		return swap self.keptLines with StringArray.create(0)
+	end 'takeKept'
 
 	export function drain(spoke SpokeCell) returns isolated WorkerDrain
 		let lines = StringArray.create(0) as isolated StringArray
@@ -1355,28 +1436,27 @@ function drainStepOf(read LineRead, lines StringArray) returns WorkerDrainStep
 	end 'read'
 end 'drainStepOf'
 
-union OverdueHeard
+union WorkerHeard
 	nothing
 	lines(text String)
-	unreadable(reason String)
-	unseen(reason String)
-end 'OverdueHeard'
+	unheard(why String)
+end 'WorkerHeard'
 
 union WorkerHello
 	ready
 	said(line String)
 	endedSilent
 	unreadable(reason String)
-	overdue(heard OverdueHeard)
+	overdue(heard WorkerHeard, stderr WorkerHeard)
 end 'WorkerHello'
 
-function overdueHeardFrom(drain DrainPromise) returns OverdueHeard
+function heardFrom(drain DrainPromise) returns WorkerHeard
 	let lines = try await drain otherwise (e) 'unreadable'
-		return OverdueHeard.unreadable(e.displayReason())
+		return WorkerHeard.unheard("what it wrote could not be read ({e.displayReason()})")
 	end 'unreadable'
 
 	if lines.count() == 0 'saidNothing'
-		return OverdueHeard.nothing
+		return WorkerHeard.nothing
 	end 'saidNothing'
 
 	let said = TextJoiner.create()
@@ -1385,17 +1465,46 @@ function overdueHeardFrom(drain DrainPromise) returns OverdueHeard
 		said.push(line)
 	end 'eachLine'
 
-	return OverdueHeard.lines(said.build())
-end 'overdueHeardFrom'
+	return WorkerHeard.lines(said.build())
+end 'heardFrom'
 
-function overdueAccount(heard OverdueHeard) returns String
+// An unconfirmed end cancels the read, never awaits it: a descendant still holding the pipe would hang
+// the parent.
+function heardAfterTree(tree TreeEnd, drain DrainPromise) returns WorkerHeard
+	match tree 'tree'
+		ended then return heardFrom(drain)
+		survived or
+		unconfirmed then break
+	end 'tree'
+
+	drain.cancel()
+
+	return WorkerHeard.unheard("ending its process tree was not confirmed ({tree.displayReason()}), so what it wrote was not read")
+end 'heardAfterTree'
+
+function overdueAccount(heard WorkerHeard) returns String
 	return match heard 'heard'
 		nothing gives "it said nothing within {WorkerHelloDeadlineMs} ms"
 		lines(text) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms; it said '{text}'"
-		unreadable(reason) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms, and its output could not be read afterwards ({reason})"
-		unseen(reason) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms, and ending its process tree was not confirmed ({reason}), so what it said was not read"
+		unheard(why) gives "it did not say {WorkerReadyMarker} within {WorkerHelloDeadlineMs} ms, and {why}"
 	end 'heard'
 end 'overdueAccount'
+
+function stderrAccount(heard WorkerHeard, silence String) returns String
+	return match heard 'heard'
+		nothing gives silence
+		lines(text) gives text
+		unheard(why) gives "({why})"
+	end 'heard'
+end 'stderrAccount'
+
+function noteCleanExitStderr(workerId WorkerId, heard WorkerHeard, harnessErrors StringArray)
+	match heard 'heard'
+		nothing then return
+		lines(text) then harnessErrors.push("{HarnessErrorPrefix}spec worker {workerId} wrote to stderr while running: {text}")
+		unheard(why) then harnessErrors.push("{HarnessErrorPrefix}spec worker {workerId} exited cleanly, and its stderr was not heard: {why}")
+	end 'heard'
+end 'noteCleanExitStderr'
 
 function helloAfterDrain(drain DrainPromise) returns WorkerHello
 	let lines = try await drain otherwise (e) 'unreadable'
@@ -1513,25 +1622,6 @@ function recordLinesOf(lines StringArray) returns StringArray
 	return records
 end 'recordLinesOf'
 
-// Everything a (now-exited) worker left in its stderr pipe, joined. Shared by the clean-shutdown
-// path and the crash-abort path so both consume stderr the same way.
-//
-// ONLY EVER CALLED ON A CHILD THAT HAS EXITED, and that is what makes it terminate: the write end
-// of the pipe is closed, so the reads hand back what was buffered and then EOF. Called on a live
-// worker it would block until that worker exited. It stops on EOF or on the first read error — a
-// read error here means the handle is already gone, and there is nothing left to say about a worker
-// whose pipe we can no longer read.
-function drainChildStderr(reader ChildOutputReader) returns String
-	let out = TextJoiner.create()
-
-	while true 'lineLoop'
-		let line = try reader.readInputLine() otherwise break
-		out.push(line)
-	end 'lineLoop'
-
-	return out.build()
-end 'drainChildStderr'
-
 // ============================================================================================
 // THE WORKER HANDLE
 // ============================================================================================
@@ -1540,7 +1630,7 @@ type PersistentWorkerHandle
 	export var child as StreamingSubprocess
 	export let workerId as WorkerId
 	export let output as WorkerOutput.handle
-	export var errorReader as ChildOutputReader
+	let errors as WorkerOutput.handle
 
 	// Spawn the child without waiting for its WORKER_READY hello: the caller fires all N spawns before
 	// draining the hellos, so the workers' process creation and runtime init overlap.
@@ -1582,8 +1672,10 @@ type PersistentWorkerHandle
 		let stdout = try child.takeStdout()
 		let stderr = try child.takeStderr()
 		let output = spawn WorkerOutput.create(stdout)
+		let errors = spawn WorkerOutput.create(stderr)
+		try errors.keepToEnd() otherwise panic("spawnNoWait: a service spawned one line above has an open mailbox with room in it")
 
-		return Self{child: child, workerId: workerId, output: output, errorReader: merge stderr}
+		return Self{child: child, workerId: workerId, output: output, errors: errors}
 	end 'spawnNoWait'
 
 	// Drain the startup hello. Pairs with `spawnNoWait`'s two-phase startup.
@@ -1595,17 +1687,17 @@ type PersistentWorkerHandle
 	function awaitReady() throws SubprocessError
 		match self.hello() 'hello'
 			ready then return
-			said(line) then try self.refuseHello("expected {WorkerReadyMarker}, got '{line}'")
-			endedSilent then try self.refuseHello("its stdout ended before it said {WorkerReadyMarker}")
-			unreadable(reason) then try self.refuseHello(reason)
-			overdue(heard) then try self.refuseHello(overdueAccount(heard))
+			said(line) then try self.refuseHello("expected {WorkerReadyMarker}, got '{line}'", stderr: self.heardOnStderr())
+			endedSilent then try self.refuseHello("its stdout ended before it said {WorkerReadyMarker}", stderr: self.heardOnStderr())
+			unreadable(reason) then try self.refuseHello(reason, stderr: self.heardOnStderr())
+			overdue(heard, stderr) then try self.refuseHello(overdueAccount(heard), stderr: stderr)
 		end 'hello'
 	end 'awaitReady'
 
-	function refuseHello(why String) throws SubprocessError
+	function refuseHello(why String, stderr WorkerHeard) throws SubprocessError
 		child.release()
 
-		throw SubprocessError.ioFailed("worker {workerId} startup: {why}")
+		throw SubprocessError.ioFailed("worker {workerId} startup: {why}\n{stderrAccount(stderr, silence: FailedWorkerSilence)}")
 	end 'refuseHello'
 
 	function hello() returns WorkerHello
@@ -1618,7 +1710,9 @@ type PersistentWorkerHandle
 					break
 				end 'arrivedAtTheDeadline'
 
-				return WorkerHello.overdue(self.heardAfterEndingTheTree(drain))
+				let tree = child.endTree()
+
+				return WorkerHello.overdue(heardAfterTree(tree, drain: drain), stderr: self.stderrAfter(tree))
 			end 'deadlineReached'
 
 			sleep(PollYieldMs)
@@ -1627,58 +1721,38 @@ type PersistentWorkerHandle
 		return helloAfterDrain(drain)
 	end 'hello'
 
-	function heardAfterEndingTheTree(drain DrainPromise) returns OverdueHeard
-		let tree = child.endTree()
+	function stderrAfter(tree TreeEnd) returns WorkerHeard
+		return heardAfterTree(tree, drain: async keptStderrThunk(errors.clone()))
+	end 'stderrAfter'
 
-		match tree 'tree'
-			ended then return overdueHeardFrom(drain)
-			survived or
-			unconfirmed then break
-		end 'tree'
-
-		drain.cancel()
-
-		return OverdueHeard.unseen(tree.displayReason())
-	end 'heardAfterEndingTheTree'
+	function heardOnStderr() returns WorkerHeard
+		return self.stderrAfter(child.endTree())
+	end 'heardOnStderr'
 
 	function sendJob(jobLine String) throws SubprocessError
 		try child.writeStdinLine(jobLine)
 	end 'sendJob'
 
-	// EXIT, close stdin, wait, drain stderr, release. Returns the child's exit code, which the
-	// caller must inspect: 101 is the leak gate.
-	//
-	// The stderr drain is SYNCHRONOUS, after `wait()`, and that is not an oversight. Draining it
-	// continuously from an `async` GT leaks one MM allocation per worker — the Promise box and the
-	// GT's argument buffer never return to the slab. By the time we get here the child has
-	// exited, so its write end is closed: the read loop consumes what the pipe buffered and then
-	// sees EOF. A worker emits nothing on stderr on the happy path, so deferring the drain costs
-	// nothing and cannot fill the pipe.
-	//
-	// A FAILED shutdown releases the handle TOO, and it must: `shutdownPool` merely reports that
-	// error and moves on to the next worker, so a handle abandoned here would be an OS handle held
-	// for the rest of the run — in a parent that is itself leak-gated. The stderr drain is skipped
-	// on that path: it terminates only because the child has EXITED, and a shutdown that failed is
-	// exactly the case where we cannot say that it has.
-	function shutdownAndDrainStderr() returns ExitInt throws SubprocessError
-		let code = try requestExitAndWait() otherwise (e) 'shutdownFailed'
-			child.release()
-			throw e
-		end 'shutdownFailed'
-
-		let stderr = drainChildStderr(errorReader)
-
-		if not stderr.isEmpty() 'workerSpoke'
-			printError("{stderr}\n")
-		end 'workerSpoke'
-
+	function shutDown() returns (WorkerLeaving, WorkerHeard)
+		let leaving = self.leave()
+		// Heard before `release`: hearing ends the tree through this handle, and a released one
+		// addresses whatever process next takes the slot.
+		let heard = self.heardOnStderr()
 		child.release()
-		return code
-	end 'shutdownAndDrainStderr'
+
+		return (leaving, heard)
+	end 'shutDown'
+
+	function leave() returns WorkerLeaving
+		let code = try requestExitAndWait() otherwise (e) 'refused'
+			return WorkerLeaving.refused(e.displayReason())
+		end 'refused'
+
+		return WorkerLeaving.exited(code)
+	end 'leave'
 
 	// Ask the worker to leave, close its stdin so an unresponsive one still sees EOF, and wait for
-	// it. Split out from the above so that BOTH of its throwing calls land on one failure path, and
-	// that path can release the handle before it rethrows.
+	// it. Split out from `leave` so that BOTH of its throwing calls land on one failure path.
 	//
 	// ⚠ THE WAIT CARRIES A DEADLINE, and it is the same argument the dispatch loop's watchdog rests
 	// on, applied to the one blocking wait that sits OUTSIDE that loop. `child.wait()`
@@ -1774,13 +1848,7 @@ end 'abortOnDeadWorker'
 // print it and both need the empty case named: "the worker said nothing" and "nobody looked" read
 // identically on a stream, and only one of them is true.
 function deadWorkerStderr(handle PersistentWorkerHandle) returns String
-	let stderr = drainChildStderr(handle.errorReader)
-
-	if stderr.isEmpty() 'silent'
-		return "(the worker wrote nothing to stderr before dying)"
-	end 'silent'
-
-	return stderr
+	return stderrAccount(handle.heardOnStderr(), silence: DeadWorkerSilence)
 end 'deadWorkerStderr'
 
 // ⭐⭐ **ONE FAIL PER TEST THE DEAD WORKER NEVER REPORTED — the recovery a dead worker owes, in one place.**
@@ -2588,9 +2656,9 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// A worker that died mid-job was replaced, so `shutdownPool` reports only on the survivors. The two
 	// tallies are disjoint by construction and both must fail the suite: a death is not a test result,
 	// but it is never a thing a green run may contain.
-	let failedWorkers = shutdownPool(workers) + deadWorkers
-	let results = concatBuckets(buckets)
 	let harnessErrors = concatHarnessErrors(harnessBuckets)
+	let failedWorkers = shutdownPool(workers, harnessErrors: harnessErrors) + deadWorkers
+	let results = concatBuckets(buckets)
 	settleRunWorkingDir(harnessErrors)
 
 	// The indicator covers EVERY test this run reported, or it is not an indicator of this run. Each
@@ -2887,28 +2955,50 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	try busy.set(slot, value: true) otherwise panic("sendAndDrain: busy.set({slot}) is in bounds by construction")
 end 'sendAndDrain'
 
-// EXIT every worker, wait for it, forward whatever it left on stderr, release its handle — and
-// count the ones that exited NON-ZERO. Releasing is not optional: a leaked handle is a leaked OS
+// EXIT every worker, wait for it, release its handle — and count the ones that exited NON-ZERO. A
+// failed worker's stderr is printed as its post-mortem; a clean one's is a harness error. Releasing is not optional: a leaked handle is a leaked OS
 // process slot.
-function shutdownPool(workers PersistentWorkerHandleArray) returns WorkerTally
+function shutdownPool(workers PersistentWorkerHandleArray, harnessErrors StringArray) returns WorkerTally
 	var failed = 0 as WorkerTally
 
 	for i in 0 upto workers.count() 'eachWorker'
-		let code = try (try workers.get(i) otherwise panic("shutdownPool: workers.get({i}) is in bounds by construction")).shutdownAndDrainStderr() otherwise (e) 'shutdownFailed'
-			printError("error: spec worker {i} did not shut down cleanly: {e.displayReason()}\n")
-			failed = failed + 1
-			continue
-		end 'shutdownFailed'
+		let workerId = (try workers.get(i) otherwise panic("shutdownPool: workers.get({i}) is in bounds by construction")).workerId
+		let (leaving, heard) = (try workers.get(i) otherwise panic("shutdownPool: workers.get({i}) is in bounds by construction")).shutDown()
+		let failure = leavingFailure(workerId, leaving: leaving)
 
-		if not exitSucceeded(code as ExitCode) 'nonZeroExit'
-			let leakHint = " — the leak gate: this worker's compiles leaked memory" if isLeakDetectedExit(code as ExitCode) else ""
-			printError("error: spec worker {i} exited with code {code}{leakHint}\n")
+		match failure 'failure'
+			stated(sentence) then printError("{sentence}\n{stderrAccount(heard, silence: FailedWorkerSilence)}\n")
+			unstated then noteCleanExitStderr(workerId, heard: heard, harnessErrors: harnessErrors)
+		end 'failure'
+
+		if failure.isStated() 'leftUncleanly'
 			failed = failed + 1
-		end 'nonZeroExit'
+		end 'leftUncleanly'
 	end 'eachWorker'
 
 	return failed
 end 'shutdownPool'
+
+union WorkerLeaving
+	exited(code ExitInt)
+	refused(reason String)
+end 'WorkerLeaving'
+
+function leavingFailure(workerId WorkerId, leaving WorkerLeaving) returns StatedText
+	return match leaving 'leaving'
+		exited(code) gives exitFailure(workerId, code: code)
+		refused(reason) gives StatedText.stated("error: spec worker {workerId} did not shut down cleanly: {reason}")
+	end 'leaving'
+end 'leavingFailure'
+
+function exitFailure(workerId WorkerId, code ExitInt) returns StatedText
+	if exitSucceeded(code as ExitCode) 'exitedCleanly'
+		return StatedText.unstated
+	end 'exitedCleanly'
+
+	let leakHint = " — the leak gate: this worker's compiles leaked memory" if isLeakDetectedExit(code as ExitCode) else ""
+	return StatedText.stated("error: spec worker {workerId} exited with code {code}{leakHint}")
+end 'exitFailure'
 
 // The next idle slot at or after `cursor`, wrapping. Round-robin rather than always-from-zero, so
 // the pool does not pin its work to the low-numbered workers. Both scans below sweep all `poolSize`

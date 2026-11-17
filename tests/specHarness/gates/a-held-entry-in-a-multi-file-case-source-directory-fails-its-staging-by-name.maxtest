@@ -1,0 +1,62 @@
+#if os(Windows)
+	let HeldSourceRootName = ".spec-tmp"
+	let HeldSourceSpecName = "heldsource"
+	let HeldSourceTestName = "heldsource.multi"
+	let HeldSourceDirSuffix = ".src"
+	let HeldSourceFileName = "held-before-staging.txt"
+	let HeldSourceMarkerName = "first-pass.txt"
+	let HeldSourceProgramOutput = "the multi-file case compiled and ran"
+
+	test 'an entry held in the source directory of a multi-file case fails its staging by name and the case never compiles'
+		let staged = stagedGateFixture()
+		let sourceDir = staged.join(HeldSourceRootName).join(HeldSourceSpecName).join("{HeldSourceTestName}{HeldSourceDirSuffix}")
+		let held = sourceDir.join(HeldSourceFileName)
+		let marker = sourceDir.join(HeldSourceMarkerName)
+
+		Expect.isTrue(Directory.create(sourceDir), message: "the gate could not create {sourceDir.toString()}")
+		File.writeText(marker, content: "nothing holds this file\n")
+		File.writeText(held, content: "a process holds this file without delete sharing for the whole run\n")
+
+		let run = runHoldingPastRemoval([SpecTestCommandWord, staged.toString()], staged: staged, environment: Environment.inherit, held: held, marker: marker, release: HolderRelease.afterTheRun, what: "`{SpecTestCommandWord}` at {staged.toString()}")
+		let said = everythingSaid(run.output)
+		let broken = StringArray.create(0)
+		let label = testLabel(HeldSourceSpecName, testName: HeldSourceTestName)
+		let verdict = failVerdictPrefix(label)
+
+		match run.markerRemoval 'firstPass'
+			removedAt then break
+			stayed then broken.push("the run never removed {marker.toString()}, which nothing holds, so it never emptied {sourceDir.toString()} before staging the case")
+		end 'firstPass'
+
+		if run.holderExit != 0 'holderFailed'
+			broken.push("the file holder {run.holderPid} exited {run.holderExit} once it was released, so the file may not have been held for the whole run")
+		end 'holderFailed'
+
+		var namedFailures = 0 as CaseTally
+
+		for line in said.split(LineFeed) 'eachLine'
+			if line.startsWith(verdict) and line.contains(HeldSourceFileName) 'failsByName'
+				namedFailures = namedFailures + 1
+			end 'failsByName'
+		end 'eachLine'
+
+		if namedFailures != 1 'notFailedByName'
+			broken.push("'{label}' must FAIL once with its staging refused, naming {held.toString()}, which another process held for the whole run. Expected one line opening '{verdict}' and naming the file, and the run said:\n{said}\n")
+		end 'notFailedByName'
+
+		if said.contains(passVerdictLine(label)) 'passedOverTheLeftover'
+			broken.push("'{label}' PASSED, so it was compiled and run in a directory still holding what the harness could not remove. The run said:\n{said}\n")
+		end 'passedOverTheLeftover'
+
+		if said.contains(HeldSourceProgramOutput) 'programRan'
+			broken.push("the case's program printed '{HeldSourceProgramOutput}', so it was compiled and run though its staging could not empty its source directory. The run said:\n{said}\n")
+		end 'programRan'
+
+		if run.output.exitCode() == SuccessExitCode 'failureDidNotCount'
+			broken.push("the run exited {SuccessExitCode} with a case whose staging was refused. It said:\n{said}\n")
+		end 'failureDidNotCount'
+
+		discardStagedDir(staged)
+		requireNothingBroken(broken, headline: "a multi-file case whose source directory holds an entry held past the wait")
+	end 'an entry held in the source directory of a multi-file case fails its staging by name and the case never compiles'
+#endif

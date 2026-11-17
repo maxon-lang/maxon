@@ -979,7 +979,9 @@ not hold a release version ends the run with its error and exit 2.
 path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, or for a
 test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
 its generated sources out of every ordinary build. [`maxon lint --tests`](#maxon-lint) stages the same
-program in `.maxon/lint/`.
+program in `.maxon/lint/`. The run empties the build's `staged/` directory before it stages into it; an
+entry it cannot remove there refuses the run with
+`test: could not remove <paths> from <directory>, so nothing was staged into it`, exit 2, and no test runs.
 
 **The lint rules.** The test binary is compiled as `maxon build` compiles a program, so the
 [lint rules](#maxon-lint) are left to `maxon lint --tests`, which checks this same program.
@@ -3561,10 +3563,20 @@ and rejected, summed over the run. The next line, `batch claims: <n> case(s) ask
 <n> time(s)`, counts the cases whose declared and mentioned names were read to batch them, and the times
 the workers read the standard library's names for those passes, summed over the run.
 
-A spec's shared batch program that the harness cannot build for a reason of the environment, or cannot
-isolate the breaking case of within its budget of trial builds, prints a `harness error:` line on stderr
-after the report, naming the cases that ran alone. Their own results decide them, and the run
-exits **1** even when every case passed.
+A problem that belongs to no case prints a `harness error:` line on stderr after the report, and the run
+exits **1** even when every case passed:
+
+- a spec's shared batch program that the harness cannot build for a reason of the environment, or cannot
+  isolate the breaking case of within its budget of trial builds; the line names the cases that ran alone,
+  and their own results decide them;
+- an entry the run could not remove from a spec's shared library tiers before its cases ran, or from the
+  spec's scratch directory when they finished:
+  `harness error: spec '<spec>': could not remove <paths> from <directory>, <consequence>`;
+- a worker that wrote to its stderr while it ran and then exited cleanly:
+  `harness error: spec worker <n> wrote to stderr while running: <text>`.
+
+A case whose staging directory holds an entry the run cannot remove fails, naming the entry, and is not
+compiled.
 
 **The hash seed and tier.** A run draws one hash seed and hands it to every program it starts as
 `MAXON_HASH_SEED`, with a `MAXON_HASH_TIER`, so each run hashes, and orders its maps, differently. The tier

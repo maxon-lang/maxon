@@ -34,7 +34,11 @@ function copiedTiers(tierRoot FilePath, sourceStdlib FilePath, sourceRuntime Fil
 		throw TierStagingError.refused("could not create source-tier directory {tierRoot.toString()}")
 	end 'noRoot'
 
-	emptyScratchDirectory(tierRoot)
+	let stuck = Directory.removeContents(tierRoot, waitForBusy: JustRunFileBusyWait)
+
+	if not stuck.isEmpty() 'leftovers'
+		throw TierStagingError.refused(unremovedEntriesText(stuck, from: tierRoot, emptying: ScratchEmptying.staging))
+	end 'leftovers'
 
 	let staged = try StagedTierDirs.beneath(tierRoot)
 

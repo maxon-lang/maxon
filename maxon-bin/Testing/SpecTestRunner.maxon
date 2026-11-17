@@ -1016,7 +1016,7 @@ function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatt
 		throw CompileError.directoryNotFound(tempDir.path)
 	end 'noTempDir'
 
-	clearSharedTiers(tempDir, tests: tests)
+	let harnessErrors = clearSharedTiers(tempDir, tests: tests, specName: specName)
 
 	let exeExtension = executableExtension(effectiveTarget.os)
 	let specDirName = specDir.filename()
@@ -1061,11 +1061,13 @@ function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatt
 
 	spliceRemintedBlocks(specPath, parsedText: parsed.text, reminted: reminted)
 
+	harnessErrors.append(batch.harnessErrors)
+
 	// Last: reruns, the batched-failure diagnosis and the verdicts read this directory up to here, and
 	// whatever is written into it after this stays on disk.
-	emptyScratchDirectory(tempDir)
+	harnessErrors.append(scratchHarnessErrors(specName, stuck: Directory.removeContents(tempDir, waitForBusy: JustRunFileBusyWait), from: tempDir, emptying: ScratchEmptying.spent))
 
-	return SpecRun.create(results, cpu: cpu, batch: performed.tally, harnessErrors: batch.harnessErrors)
+	return SpecRun.create(results, cpu: cpu, batch: performed.tally, harnessErrors: harnessErrors)
 end 'runOneSpec'
 
 function noteFailedBatched(failed TestRunIndexArray, reasons BatchedFailureMap, pending PendingRun, at ElementIndex, observations RunObservationArray, effectiveTarget Target)
@@ -3050,9 +3052,8 @@ end 'missingRuntimeReason'
 // along at the end.
 //
 // The directory is RECONSTRUCTED, never inherited. A `.maxon` left behind by an earlier version of
-// this test would join the build silently and change what the test MEANS — and "the instrument died
-// on its own leftovers" is a failure this project has already had twice. Whatever this
-// run did not write, this run removes.
+// this test would join the build silently and change what the test MEANS. Whatever this run did not
+// write, this run removes, and an entry it cannot remove fails the staging.
 function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) returns StagingResult
 	let paths = FragmentPathMappingArray.create(0)
 	let written = FilePathArray.create(0)
@@ -3074,7 +3075,11 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) r
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
 	end 'noTestDir'
 
-	emptyScratchDirectory(testDir)
+	let stuck = Directory.removeContents(testDir, waitForBusy: JustRunFileBusyWait)
+
+	if not stuck.isEmpty() 'leftovers'
+		return StagingResult.failed(unremovedEntriesText(stuck, from: testDir, emptying: ScratchEmptying.staging))
+	end 'leftovers'
 
 	// Separate from `written` on purpose: tier staging appends its own files to that list below, and a
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
@@ -3312,14 +3317,16 @@ function stageSharedTiers(tempDir FilePath, sourceStdlib FilePath, sourceRuntime
 	return staged
 end 'stageSharedTiers'
 
-function clearSharedTiers(tempDir FilePath, tests SpecTestArray)
+function clearSharedTiers(tempDir FilePath, tests SpecTestArray, specName String) returns StringArray
 	for test in tests 'eachTest'
 		if test.compilesAsLibrary() 'aCaseSharesTheTiers'
-			emptyScratchDirectory(sharedTierRoot(tempDir))
+			let tierRoot = sharedTierRoot(tempDir)
 
-			return
+			return scratchHarnessErrors(specName, stuck: Directory.removeContents(tierRoot, waitForBusy: JustRunFileBusyWait), from: tierRoot, emptying: ScratchEmptying.sharedTiers)
 		end 'aCaseSharesTheTiers'
 	end 'eachTest'
+
+	return StringArray.create(0)
 end 'clearSharedTiers'
 
 // The phrases a staged-section refusal carries beyond the name the spec wrote: which marker it is, what
@@ -3435,11 +3442,42 @@ end 'applyOverlaySections'
 // rather than silently stacked on top of the first. A Set because membership is the only question.
 typealias StagedSectionNameSet = Set with String
 
-function emptyScratchDirectory(dir FilePath)
-	for stuck in Directory.removeContents(dir, waitForBusy: JustRunFileBusyWait) 'eachStuck'
-		printError("error: could not remove {stuck.toString()}, which is in the scratch directory {dir.toString()} a spec run stages into\n")
+enum ScratchEmptying
+	staging
+	sharedTiers
+	spent
+
+	// Pinned by the a-run-refuses-to-stage-over-an-entry-it-cannot-remove case and by the specHarness
+	// gate on an unremovable entry in the shared tiers.
+	function consequence() returns String
+		return match self 'emptying'
+			staging gives "so nothing was staged into it"
+			sharedTiers gives "so the spec's library-tier cases may compile against what an earlier run left there"
+			spent gives "which holds spent scratch"
+		end 'emptying'
+	end 'consequence'
+end 'ScratchEmptying'
+
+function unremovedEntriesText(stuck FilePathArray, from FilePath, emptying ScratchEmptying) returns String
+	let paths = StringArray.create(stuck.count(), zeroed: false)
+
+	for entry in stuck 'eachStuck'
+		paths.push(entry.toString())
 	end 'eachStuck'
-end 'emptyScratchDirectory'
+
+	return "could not remove {joinedWith(paths, separator: NameListSeparator)} from {from.toString()}, {emptying.consequence()}"
+end 'unremovedEntriesText'
+
+function scratchHarnessErrors(specName String, stuck FilePathArray, from FilePath, emptying ScratchEmptying) returns StringArray
+	let errors = StringArray.create(0)
+
+	if stuck.isEmpty() 'nothingLeft'
+		return errors
+	end 'nothingLeft'
+
+	errors.push("{HarnessErrorPrefix}spec '{specName}': {unremovedEntriesText(stuck, from: from, emptying: emptying)}")
+	return errors
+end 'scratchHarnessErrors'
 
 // Would writing this `// --- file:` name stay inside the test's scratch directory? Enforced at the
 // WRITE rather than at the parse, because the write is where the escape would actually happen.
@@ -4140,7 +4178,12 @@ type GuestSuiteCapture
 	end 'replay'
 
 	function discard()
-		emptyScratchDirectory(self.directory)
+		let stuck = Directory.removeContents(self.directory, waitForBusy: JustRunFileBusyWait)
+
+		if not stuck.isEmpty() 'leftovers'
+			printError("error: {unremovedEntriesText(stuck, from: self.directory, emptying: ScratchEmptying.spent)}\n")
+		end 'leftovers'
+
 		try Directory.delete(self.directory) otherwise ignore
 	end 'discard'
 end 'GuestSuiteCapture'
@@ -4786,11 +4829,6 @@ function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specNa
 	for execution in executions 'eachExecution'
 		observations.push(batchObservationFor(execution.key, launcher: launcher, batchDir: batchDir, launch: launch))
 	end 'eachExecution'
-
-	// The captures have been read into the observations, so what is on disk is spent. Removed for
-	// `cleanup`'s reason and with the same best-effort rule: nothing downstream depends on it, but a
-	// suite that leaves three files per test behind is a suite whose scratch tree grows without bound.
-	emptyScratchDirectory(batchDir)
 
 	return observations
 end 'runGuestBatch'

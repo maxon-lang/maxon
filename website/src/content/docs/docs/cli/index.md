@@ -982,7 +982,9 @@ not hold a release version ends the run with its error and exit 2.
 path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, or for a
 test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
 its generated sources out of every ordinary build. [`maxon lint --tests`](#maxon-lint) stages the same
-program in `.maxon/lint/`.
+program in `.maxon/lint/`. The run empties the build's `staged/` directory before it stages into it; an
+entry it cannot remove there refuses the run with
+`test: could not remove <paths> from <directory>, so nothing was staged into it`, exit 2, and no test runs.
 
 **The lint rules.** The test binary is compiled as `maxon build` compiles a program, so the
 [lint rules](#maxon-lint) are left to `maxon lint --tests`, which checks this same program.

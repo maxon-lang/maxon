@@ -935,11 +935,6 @@ function environmentErrors(reason String, affected TestRunIndexArray, tests Spec
 	return errors
 end 'environmentErrors'
 
-function discardBatchLeftovers(tempDir FilePath, ordinal ElementIndex, exeExtension String)
-	emptyScratchDirectory(batchSourceRoot(tempDir, ordinal: ordinal))
-	discardBuild(FilePathArray.create(0), exePath: batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension))
-end 'discardBatchLeftovers'
-
 function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchOutcome
 	var remaining = members.clone()
 	let refusals = BatchRefusalMap.create()
@@ -1035,7 +1030,7 @@ function indexesJoined(first TestRunIndexArray, following TestRunIndexArray) ret
 end 'indexesJoined'
 
 function unbuildableOutcome(build BatchBuild, reason String, affected TestRunIndexArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, exeExtension String, tests SpecTestArray) returns BatchOutcome
-	discardBatchLeftovers(tempDir, ordinal: ordinal, exeExtension: exeExtension)
+	discardBuild(FilePathArray.create(0), exePath: batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension))
 	return BatchOutcome.create(build, refusals: refusals, harnessErrors: environmentErrors(reason, affected: affected, tests: tests))
 end 'unbuildableOutcome'
 

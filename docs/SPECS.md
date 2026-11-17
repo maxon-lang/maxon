@@ -504,7 +504,11 @@ end 'main'
 ### Staged files and diagnostic paths
 
 A case compiles from a scratch directory under `<spec dir>/.spec-tmp/`, which `.gitignore` covers. Each
-spec has its own, `.spec-tmp/<spec>/`, which the run empties and keeps when that spec's cases finish. A
+spec has its own, `.spec-tmp/<spec>/`, which the run empties and keeps when that spec's cases finish. An
+entry the run cannot remove from it then, or from the spec's shared library tiers before its cases run, is
+a `harness error: spec '<spec>': could not remove <paths> from <directory>, …` line on stderr after the
+report, and the run exits 1. A case whose staging directory holds an entry the run cannot remove fails,
+naming the entry, and is not compiled. A
 ```maxoncstderr block names the case's file as `<spec directory>/<spec>/<test>.maxon:<line>:<column>` — for
 a case in `specs/arrays.md` named `push`, `specs/arrays/push.maxon:3:5` — or by the placeholder
 `<fragment>:3:5`. Whichever spelling an expectation uses, the harness rewrites it and the compiler's
@@ -560,6 +564,10 @@ reads them again only when a case's library files or build settings differ. The 
 cache's, `batch claims: <n> case(s) asked, library names read <n> time(s)`, counts those passes and the
 times the library's names were read, summed over its workers.
 
+A worker that writes to its stderr while it runs and then exits cleanly gives the run a
+`harness error: spec worker <n> wrote to stderr while running: <text>` line on stderr after the report,
+and the run exits 1. A worker that dies has its stderr printed with the report of its death.
+
 ### Batched runs
 
 A default run compiles a spec's plain run cases into the fewest programs whose cases can share a program
@@ -593,7 +601,7 @@ the generated entry file, say), the harness bisects the remaining cases by trial
 budget, until it has isolated each case that breaks the program. An isolated case that fails alone keeps its
 own compile error and gains a note that it broke the batch program its siblings share, naming any case it
 conflicted with; every other case is judged by its own run, in a program built without the isolated ones.
-A program the harness cannot build for a reason of the environment (a staging directory it cannot create, a
+A program the harness cannot build for a reason of the environment (a staging directory it cannot create or empty, a
 missing standard library or runtime, a driver failure), and a spent trial budget, leave every case involved
 to its own run alone. Each such program prints one `harness error:` line on stderr, after the report,
 naming those cases and the cause, and the run exits 1 even when every case passed. Output outside the markers belongs to no single case: a

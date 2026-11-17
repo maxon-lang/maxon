@@ -1,0 +1,41 @@
+let UnremovableStagingCase = "a-run-refuses-to-stage-over-an-entry-it-cannot-remove"
+let UnremovableStagingTestName = "the test that never runs when its staging is refused"
+let UnremovableStagingBuildDirName = "test"
+let UnremovableStagingTreeDirName = "staged"
+let UnremovableStagingLockedDirName = "locked"
+let UnremovableStagingFileName = "unremovable.txt"
+let UnremovableStagingRefusalPrefix = "test: could not remove "
+let UnremovableStagingRefusalWording = "so nothing was staged into it"
+let UnremovableStagingExitCode = 2
+
+test 'a run refuses to stage its tests into a directory holding an entry it cannot remove, naming the entry'
+	let caseDir = fixtureDir("{FixturesDir}/{UnremovableStagingCase}")
+	let lockedDir = caseDir.join(ProjectProductsDirName).join(UnremovableStagingBuildDirName).join(UnremovableStagingTreeDirName).join(UnremovableStagingLockedDirName)
+	let stray = lockedDir.join(UnremovableStagingFileName)
+
+	Expect.isTrue(Directory.create(lockedDir), message: "the gate could not create {lockedDir.toString()}")
+	File.writeText(stray, content: "a file whose removal the host refuses\n")
+	lockAgainstRemoval(stray)
+
+	let what = "the '{UnremovableStagingCase}' case"
+	let run = try runCompiler(fixtureArgv(caseDir, caseName: UnremovableStagingCase), environment: pinnedHashEnvironment()) otherwise (failure) 'notSpawned'
+		unlockForRemoval(stray)
+		panic("{spawnFailureMessage(what, failure: failure)}")
+	end 'notSpawned'
+
+	unlockForRemoval(stray)
+	discardStagedDir(lockedDir)
+
+	let report = "{run.stdout}{run.stderr}"
+	var refusals = 0 as FixtureCaseTally
+
+	for line in withoutCarriageReturns(run.stderr).split(LineFeed) 'eachLine'
+		if line.startsWith(UnremovableStagingRefusalPrefix) and line.contains(UnremovableStagingFileName) and line.contains(UnremovableStagingRefusalWording) 'refusesByName'
+			refusals = refusals + 1
+		end 'refusesByName'
+	end 'eachLine'
+
+	Expect.equal(refusals, expected: 1, message: "the run must refuse once to stage its tests, as `{UnremovableStagingRefusalPrefix}<entry> from <staging directory>, {UnremovableStagingRefusalWording}` naming {stray.toString()}. It printed: {report}")
+	Expect.equal(run.exitCode(), expected: UnremovableStagingExitCode, message: "a run whose staging was refused ran nothing and exits {UnremovableStagingExitCode}. It printed: {report}")
+	Expect.isFalse(run.stdout.contains(UnremovableStagingTestName), message: "the run reported `{UnremovableStagingTestName}`, so it compiled and ran its tests over what it could not remove. It printed: {report}")
+end 'a run refuses to stage its tests into a directory holding an entry it cannot remove, naming the entry'

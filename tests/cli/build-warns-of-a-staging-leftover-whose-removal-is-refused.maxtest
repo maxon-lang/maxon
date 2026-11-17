@@ -6,15 +6,6 @@ let RefusedLeftoverName = "stray.debris"
 let RefusedLeftoverContent = "a file whose removal the host refuses\n"
 let RefusedLeftoverWarning = "could not be removed from the staging directory"
 
-#if os(Windows)
-	let AttribToolName = "attrib"
-	let AttribSetReadOnly = "+R"
-	let AttribClearReadOnly = "-R"
-#else
-	let RemoveWriteWords = "a-w"
-	let RestoreWriteWords = "u+w"
-#endif
-
 test 'a build warns of a staging leftover whose removal is refused when it is no image the build moved aside'
 	let dir = freshCaseDir(RefusedLeftoverCaseDirName)
 	let output = dir.join("{RefusedLeftoverStem}{executableSuffix()}")
@@ -28,14 +19,14 @@ test 'a build warns of a staging leftover whose removal is refused when it is no
 	Expect.isTrue(Directory.create(held), message: "could not create {held.toString()}.")
 	writeStagedFile(stray, content: RefusedLeftoverContent)
 
-	refuseRemovalOf(stray)
+	lockAgainstRemoval(stray)
 
 	let build = try runCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"]) otherwise (failure) 'notSpawned'
-		allowRemovalOf(stray)
+		unlockForRemoval(stray)
 		panic("{spawnFailureMessage(CompilerUnderTestName, failure: failure)}")
 	end 'notSpawned'
 
-	allowRemovalOf(stray)
+	unlockForRemoval(stray)
 
 	Expect.equal(build.exitCode(), expected: 0, message: "a build beside a staging leftover whose removal the host refuses did not succeed. It said: {build.stdout}{build.stderr}")
 	Expect.contains(build.stderr, needle: RefusedLeftoverWarning, message: "the build did not warn that a staging leftover could not be removed. It said: {build.stdout}{build.stderr}")
@@ -43,23 +34,3 @@ test 'a build warns of a staging leftover whose removal is refused when it is no
 
 	discardStagedDir(dir)
 end 'a build warns of a staging leftover whose removal is refused when it is no image the build moved aside'
-
-function refuseRemovalOf(stray FilePath)
-	#if os(Windows)
-		_ = runSystemTool(AttribToolName, arguments: [AttribSetReadOnly, stray.toString()], what: "making {stray.toString()} read-only")
-	#else
-		let inside = try stray.parent() otherwise panic("a staged leftover always has a directory")
-
-		_ = runSystemTool("chmod", arguments: [RemoveWriteWords, inside.toString()], what: "making {inside.toString()} unwritable")
-	#endif
-end 'refuseRemovalOf'
-
-function allowRemovalOf(stray FilePath)
-	#if os(Windows)
-		_ = runSystemTool(AttribToolName, arguments: [AttribClearReadOnly, stray.toString()], what: "making {stray.toString()} writable")
-	#else
-		let inside = try stray.parent() otherwise panic("a staged leftover always has a directory")
-
-		_ = runSystemTool("chmod", arguments: [RestoreWriteWords, inside.toString()], what: "making {inside.toString()} writable")
-	#endif
-end 'allowRemovalOf'

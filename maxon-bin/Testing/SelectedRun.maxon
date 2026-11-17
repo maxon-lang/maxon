@@ -132,7 +132,12 @@ type GeneratedBuild
 			throw TestStagingError.refused("could not create the staging directory {stagingRoot.toString()}")
 		end 'noStagingRoot'
 
-		emptyScratchDirectory(stagingRoot)
+		let stuck = Directory.removeContents(stagingRoot, waitForBusy: JustRunFileBusyWait)
+
+		if not stuck.isEmpty() 'leftovers'
+			throw TestStagingError.refused(unremovedEntriesText(stuck, from: stagingRoot, emptying: ScratchEmptying.staging))
+		end 'leftovers'
+
 		return Self{root: stagingRoot, buildTargets: MaxonSourcePathArray.create(0), compilerWrittenSources: CompilerWrittenSourceArray.create(0), stagedSourceOrigins: StagedSourceOriginArray.create(0)}
 	end 'begin'
 

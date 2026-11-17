@@ -1,0 +1,63 @@
+let LockedTiersSpecName = "lockedtiers"
+let LockedTiersTestName = "lockedtiers.library"
+let LockedTiersScratchRootName = ".spec-tmp"
+let LockedTiersRootName = "__shared__.tiers"
+let LockedTiersLockedDirName = "locked"
+let LockedTiersFileName = "unremovable.txt"
+let LockedTiersSpecWording = "spec '{LockedTiersSpecName}'"
+let LockedTiersClearWording = "library-tier cases may compile against what an earlier run left there"
+let LockedTiersProgramOutput = "the library-tier case compiled and ran"
+
+test 'an entry the host refuses to remove from the shared tiers is a harness error of the spec and fails the library case by name'
+	let staged = stagedGateFixture()
+	let lockedDir = staged.join(LockedTiersScratchRootName).join(LockedTiersSpecName).join(LockedTiersRootName).join(LockedTiersLockedDirName)
+	let stray = lockedDir.join(LockedTiersFileName)
+
+	if not Directory.create(lockedDir) 'noLockedDir'
+		panic("spec-harness tests: the gate could not run - could not create {lockedDir.toString()}")
+	end 'noLockedDir'
+
+	writeStagedFile(stray, content: "a file whose removal the host refuses\n")
+	lockAgainstRemoval(stray)
+
+	let run = runSpecTest(staged, includeNetwork: false)
+
+	unlockForRemoval(stray)
+	discardStagedDir(staged)
+
+	let said = everythingSaid(run)
+	let broken = StringArray.create(0)
+	let label = testLabel(LockedTiersSpecName, testName: LockedTiersTestName)
+	let verdict = failVerdictPrefix(label)
+
+	var harnessErrors = 0 as CaseTally
+	var namedFailures = 0 as CaseTally
+
+	for line in said.split(LineFeed) 'eachLine'
+		if line.contains(HarnessErrorMarker) and line.contains(LockedTiersSpecWording) and line.contains(LockedTiersClearWording) and line.contains(LockedTiersFileName) 'reportedForTheSpec'
+			harnessErrors = harnessErrors + 1
+		end 'reportedForTheSpec'
+
+		if line.startsWith(verdict) and line.contains(LockedTiersFileName) 'failsByName'
+			namedFailures = namedFailures + 1
+		end 'failsByName'
+	end 'eachLine'
+
+	if harnessErrors != 1 'clearNotReportedOnce'
+		broken.push("the run must report once, as a '{HarnessErrorMarker}' line naming {LockedTiersSpecWording} and {stray.toString()} and saying '{LockedTiersClearWording}', that clearing the spec's shared tiers left that file; it reported it {harnessErrors} time(s). It said:\n{said}\n")
+	end 'clearNotReportedOnce'
+
+	if namedFailures != 1 'notFailedByName'
+		broken.push("'{label}' must FAIL once with its staging refused, naming {stray.toString()}. Expected one line opening '{verdict}' and naming the file, and the run said:\n{said}\n")
+	end 'notFailedByName'
+
+	if said.contains(LockedTiersProgramOutput) 'programRan'
+		broken.push("the case's program printed '{LockedTiersProgramOutput}', so it was compiled and run against tiers staged over what the harness could not remove. The run said:\n{said}\n")
+	end 'programRan'
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a harness error in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "shared tiers holding an entry the host refuses to remove")
+end 'an entry the host refuses to remove from the shared tiers is a harness error of the spec and fails the library case by name'

@@ -37,6 +37,16 @@ let RemovalRefusalWording = "could not remove "
 	public let PosixShellPath = "/bin/sh"
 #endif
 
+#if os(Windows)
+	let ReadOnlyToolName = "attrib"
+	let ReadOnlySetFlag = "+R"
+	let ReadOnlyClearFlag = "-R"
+#else
+	let PermissionToolName = "chmod"
+	let WriteRemovedWords = "a-w"
+	let WriteRestoredWords = "u+w"
+#endif
+
 public let CompilerUnderTestName = "the compiler under test"
 
 public function runIn(executable Executable, arguments StringArray, staged FilePath, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, deadline WaitDeadline = WaitDeadline.none) returns CollectedOutput throws SubprocessError
@@ -94,6 +104,26 @@ public function backdatedToTheYear2000(path FilePath)
 		_ = runSystemTool(PosixTouchName, arguments: [PosixTouchTimeFlag, PosixYear2000Stamp, path.toString()], what: "setting the modified time of {path.toString()}")
 	#endif
 end 'backdatedToTheYear2000'
+
+public function lockAgainstRemoval(entry FilePath)
+	#if os(Windows)
+		_ = runSystemTool(ReadOnlyToolName, arguments: [ReadOnlySetFlag, entry.toString()], what: "making {entry.toString()} read-only")
+	#else
+		let inside = try entry.parent() otherwise panic("the gate could not run — {entry.toString()} has no directory to make unwritable")
+
+		_ = runSystemTool(PermissionToolName, arguments: [WriteRemovedWords, inside.toString()], what: "making {inside.toString()} unwritable")
+	#endif
+end 'lockAgainstRemoval'
+
+public function unlockForRemoval(entry FilePath)
+	#if os(Windows)
+		_ = runSystemTool(ReadOnlyToolName, arguments: [ReadOnlyClearFlag, entry.toString()], what: "making {entry.toString()} writable")
+	#else
+		let inside = try entry.parent() otherwise panic("the gate could not run — {entry.toString()} has no directory to make writable")
+
+		_ = runSystemTool(PermissionToolName, arguments: [WriteRestoredWords, inside.toString()], what: "making {inside.toString()} writable")
+	#endif
+end 'unlockForRemoval'
 
 public function buildArguments(source FilePath, output FilePath, extraArguments StringArray) returns StringArray
 	let arguments = StringArray.create(0)

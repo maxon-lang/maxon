@@ -1,0 +1,62 @@
+#if os(Windows)
+	let HeldScratchRootName = ".spec-tmp"
+	let HeldScratchSpecName = "heldscratch"
+	let HeldScratchFileName = "held-past-the-wait.txt"
+	let HeldScratchMarkerName = "first-pass.txt"
+	let HeldScratchSpecWording = "spec '{HeldScratchSpecName}'"
+	let HeldScratchWorkerStderrWording = "wrote to stderr while running"
+	let HeldScratchBareReportPrefix = "error: could not remove "
+
+	test 'a file of a spec scratch directory held past the wait is a harness error naming the file and the spec'
+		let staged = stagedGateFixture()
+		let scratch = staged.join(HeldScratchRootName).join(HeldScratchSpecName)
+		let held = scratch.join(HeldScratchFileName)
+		let marker = scratch.join(HeldScratchMarkerName)
+
+		Expect.isTrue(Directory.create(scratch), message: "the gate could not create {scratch.toString()}")
+		File.writeText(marker, content: "nothing holds this file\n")
+		File.writeText(held, content: "a process holds this file without delete sharing for the whole run\n")
+
+		let run = runHoldingPastRemoval([SpecTestCommandWord, staged.toString()], staged: staged, environment: Environment.inherit, held: held, marker: marker, release: HolderRelease.afterTheRun, what: "`{SpecTestCommandWord}` at {staged.toString()}")
+		let said = everythingSaid(run.output)
+		let broken = StringArray.create(0)
+
+		match run.markerRemoval 'firstPass'
+			removedAt then break
+			stayed then broken.push("the run never removed {marker.toString()}, which nothing holds, so it never emptied {scratch.toString()}, the scratch directory of a spec it ran")
+		end 'firstPass'
+
+		if run.holderExit != 0 'holderFailed'
+			broken.push("the file holder {run.holderPid} exited {run.holderExit} once it was released, so the file may not have been held for the whole run")
+		end 'holderFailed'
+
+		collectNotPassed(said, specName: HeldScratchSpecName, testNames: ["{HeldScratchSpecName}.passes"], broken: broken)
+
+		var routed = 0 as CaseTally
+
+		for line in said.split(LineFeed) 'eachLine'
+			if line.contains(HarnessErrorMarker) and line.contains(HeldScratchSpecWording) and line.contains(HeldScratchFileName) 'routedReport'
+				routed = routed + 1
+			end 'routedReport'
+
+			if line.contains(HeldScratchWorkerStderrWording) 'workerStderr'
+				broken.push("the run reported a worker's stderr instead of a harness error of the spec: {line}")
+			end 'workerStderr'
+
+			if line.startsWith(HeldScratchBareReportPrefix) 'bareReport'
+				broken.push("the run printed a removal it could not make as a bare stderr line: {line}")
+			end 'bareReport'
+		end 'eachLine'
+
+		if routed != 1 'notReportedOnce'
+			broken.push("the run must report {held.toString()}, held for the whole run, as exactly one '{HarnessErrorMarker}' line naming {HeldScratchSpecWording} and the file; it printed {routed}. It said:\n{said}\n")
+		end 'notReportedOnce'
+
+		if run.output.exitCode() == SuccessExitCode 'failureDidNotCount'
+			broken.push("the run exited {SuccessExitCode} though it could not empty the scratch directory of a spec it ran. It said:\n{said}\n")
+		end 'failureDidNotCount'
+
+		discardStagedDir(staged)
+		requireNothingBroken(broken, headline: "a run's report of a spec scratch file held past the emptying's wait")
+	end 'a file of a spec scratch directory held past the wait is a harness error naming the file and the spec'
+#endif

@@ -1,0 +1,53 @@
+let LockedBatchSpecName = "lockedbatch"
+let LockedBatchScratchRootName = ".spec-tmp"
+let LockedBatchSourceRootName = "__batch0.src"
+let LockedBatchLockedDirName = "locked"
+let LockedBatchFileName = "unremovable.txt"
+let LockedBatchUnbuiltText = "the batch program could not be built ("
+
+test 'an entry the host refuses to remove from the batch source root refuses the batch program by name and its cases run alone'
+	let staged = stagedGateFixture()
+	let lockedDir = staged.join(LockedBatchScratchRootName).join(LockedBatchSpecName).join(LockedBatchSourceRootName).join(LockedBatchLockedDirName)
+	let stray = lockedDir.join(LockedBatchFileName)
+
+	if not Directory.create(lockedDir) 'noLockedDir'
+		panic("spec-harness tests: the gate could not run - could not create {lockedDir.toString()}")
+	end 'noLockedDir'
+
+	writeStagedFile(stray, content: "a file whose removal the host refuses\n")
+	lockAgainstRemoval(stray)
+
+	let run = runSpecTest(staged, includeNetwork: false)
+
+	unlockForRemoval(stray)
+	discardStagedDir(staged)
+
+	let said = everythingSaid(run)
+	let broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: LockedBatchSpecName, testNames: ["{LockedBatchSpecName}.first", "{LockedBatchSpecName}.second", "{LockedBatchSpecName}.third"], broken: broken)
+	collectMissingSummary(said, expected: "3 passed, 0 failed", broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(0, programs: 0, alone: 3), broken: broken)
+
+	var refusals = 0 as CaseTally
+
+	for line in said.split(LineFeed) 'eachLine'
+		if line.contains(HarnessErrorMarker) and line.contains(LockedBatchUnbuiltText) and line.contains(LockedBatchFileName) 'refusesByName'
+			refusals = refusals + 1
+		end 'refusesByName'
+	end 'eachLine'
+
+	if refusals != 1 'notRefusedOnce'
+		broken.push("the run must say once, as a '{HarnessErrorMarker}' line opening '{LockedBatchUnbuiltText}' and naming {stray.toString()}, that it could not stage the batch program where it could not remove that file; it said so {refusals} time(s). It said:\n{said}\n")
+	end 'notRefusedOnce'
+
+	if said.contains(BatchingChecksMissedThisCase) or said.contains(BrokeTheBatchProgram) 'aCaseWasBlamed'
+		broken.push("a case was blamed for a failure that belongs to no case. The run said:\n{said}\n")
+	end 'aCaseWasBlamed'
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a harness error in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a batch source root holding an entry the host refuses to remove")
+end 'an entry the host refuses to remove from the batch source root refuses the batch program by name and its cases run alone'
