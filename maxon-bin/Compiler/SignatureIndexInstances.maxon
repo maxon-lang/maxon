@@ -1407,7 +1407,7 @@ extension ProgramSignatures
 			let declared = declaredCapabilityAt(capabilities, position: i as ParamCount)
 			let element = try elements.get(i) otherwise panic("canonicalTupleCapabilities: elements.get OOB at {i} below count {elements.count()}")
 
-			if declared == ParamCapability.immutable and self.typeIsAValueType(element) 'aVacuousCapability'
+			if declared == ParamCapability.immutable and self.typeIsAValueType(element, from: self.typeNames) 'aVacuousCapability'
 				canonical.push(ParamCapability.unmarked)
 				continue
 			end 'aVacuousCapability'
@@ -1418,7 +1418,7 @@ extension ProgramSignatures
 		return canonical
 	end 'canonicalTupleCapabilities'
 
-	function typeIsAValueType(t MaxonType) returns bool
+	function typeIsAValueType(t MaxonType, from TypeNameInterner) returns bool
 		let tag = maxonTypeTag(t)
 
 		if tagIsByteRecord(tag) or typeIsPromiseStorage(self, t: t) 'aValueByKind'
@@ -1433,7 +1433,7 @@ extension ProgramSignatures
 			return true
 		end 'namesNoAggregate'
 
-		return RecordKindWritability.of(self).namesAnImmutableAggregate(tag, nameId: typeNameIdOf(t), from: self.typeNames)
+		return RecordKindWritability.of(self).namesAnImmutableAggregate(tag, nameId: typeNameIdOf(t), from: from)
 	end 'typeIsAValueType'
 
 	function tupleLayoutNameOf(elements MaxonTypeArray, instanceBrands NameRoster, capabilities ParamCapabilityArray, declFilePath FilePath) returns immutable ByteArray
