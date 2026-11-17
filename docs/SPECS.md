@@ -740,7 +740,7 @@ it, and it joins the specs the day the disagreement closes. A refusal of a linea
 decided after the target check, so its case carries `<!-- unsupported-targets: wasm32-wasi -->`.
 
 ```text
-python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa22]
+python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa24]
 ```
 
 The generator judges every program of the corpora with the model (the hand corpora and the minimal programs of the

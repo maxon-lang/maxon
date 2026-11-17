@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the `specs/model-*.md` cases from the capmodel corpora.
 
-    python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa22]
+    python scripts/model-specs/generate.py --model <capmodel checkout> [--ruleset core-m3w-fa24]
 
 The phases, in order: judge each program with the model; reduce it to what `main` reaches and re-judge; translate
 it to Maxon; compile every translation as a spec case in a scratch directory; sort the results; write the cases

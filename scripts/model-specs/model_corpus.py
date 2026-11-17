@@ -9,12 +9,12 @@ import re
 import sys
 from dataclasses import dataclass
 
-DEFAULT_RULESET = "core-m3w-fa22"
+DEFAULT_RULESET = "core-m3w-fa24"
 WORKERS = "3"
 
 HAND_FAMILIES = (
-    "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM",
-    "FA14", "FA15", "FA16", "FA17", "FA18", "FA19", "FA20", "FA21", "FA22",
+    "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO",
+    "FA14", "FA15", "FA16", "FA17", "FA18", "FA19", "FA20", "FA21", "FA22", "FA23", "FA24",
 )
 FINDING_FAMILIES = ("N", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG")
 
