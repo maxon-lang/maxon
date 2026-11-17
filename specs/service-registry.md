@@ -3701,3 +3701,507 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3102: <fragment>:16:18: use of moved value 'fresh': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: a-shared-value-alias-declared-in-a-generic-type-over-a-concrete-element -->
+A `SharedValue` alias a generic type's body declares is judged by its own element, here a scalar.
+```maxon
+type Maker uses T
+	typealias TallyCell = SharedValue with Tally
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function through(n Tally) returns Tally
+		let cell = TallyCell.create(n)
+
+		return cell.current()
+	end 'through'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.through(7)}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.a-shared-value-over-an-unbounded-type-parameter -->
+A `SharedValue` whose element is a type parameter of the enclosing type is judged against that parameter's
+bound, at the alias: no share walk can be chosen for a `T` nothing bounds.
+```maxon
+type Maker uses T
+	typealias TCell = SharedValue with T
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:3:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-a-sendable-type-parameter-is-not-built -->
+With the bound the alias is still refused: a `SharedValue` is built over a concrete type only.
+```maxon
+type Maker uses T where T is sendable
+	typealias TCell = SharedValue with T
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:3:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker`, and a `SharedValue` cannot be built over a type parameter — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Write the alias over a concrete type
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-bounded-isolated -->
+An `isolated` bound is not the `sendable` one.
+```maxon
+type Maker uses T where T is isolated
+	typealias TCell = SharedValue with T
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:3:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-is-refused-though-a-method-above-it-builds-one -->
+The alias is judged where it is declared, whatever the body wrote above it.
+```maxon
+type Maker uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function through() returns T
+		let cell = TCell.create(self.item)
+
+		return cell.current()
+	end 'through'
+
+	typealias TCell = SharedValue with T
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.through()}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:15:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-an-interfaces-type-parameter -->
+An interface's type parameter takes no `sendable` bound, so the alias is written over a concrete type.
+```maxon
+interface Holder uses Element
+	typealias Cell = SharedValue with Element
+
+	function only() returns Element
+end 'Holder'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:3:19: `Element` cannot be a registry value or a `SharedValue`: it is a type parameter of `Holder`, and a `SharedValue` cannot be built over a type parameter — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Write the alias over a concrete type
+```
+
+<!-- test: error.a-shared-value-over-an-interfaces-type-parameter-in-its-extension -->
+```maxon
+interface Holder uses Element
+	function only() returns Element
+end 'Holder'
+
+extension Holder
+	typealias Cell = SharedValue with Element
+end 'Holder'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:7:19: `Element` cannot be a registry value or a `SharedValue`: it is a type parameter of `Holder`, and a `SharedValue` cannot be built over a type parameter — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Write the alias over a concrete type
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-whose-instantiation-is-unwalkable -->
+The alias is refused where it is declared, before any instantiation is looked at.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Step = function(Tally) returns Tally
+interface Shape
+	function area() returns Tally
+end 'Shape'
+type Stepper implements Shape
+	export let step as Step
+	static function create(step Step) returns Self
+		return Self{step: step}
+	end 'create'
+	function area() returns Tally
+		return self.step(1)
+	end 'area'
+end 'Stepper'
+type Door
+	var seen as Tally
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+	export function look(n Tally)
+		self.seen = self.seen + n
+	end 'look'
+end 'Door'
+type Holder
+	export let shape as Shape
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+type Maker uses T
+	typealias TCell = SharedValue with T
+	static function cell(x T) returns Tally
+		let c = TCell.create(x)
+		_ = c
+		return 1
+	end 'cell'
+end 'Maker'
+typealias HolderMaker = Maker with Holder
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+	print("{HolderMaker.cell(Holder.create(Stepper.create(function(n Tally) gives n + 1)))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:32:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-is-refused-though-an-extension-above-it-builds-one -->
+A use the compiler reads before the declaration builds nothing: the alias's own refusal is the one report.
+```maxon
+extension Maker
+	function through() returns T
+		let cell = TCell.create(self.item)
+
+		return cell.current()
+	end 'through'
+end 'Maker'
+
+type Maker uses T
+	typealias TCell = SharedValue with T
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.through()}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:11:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-in-an-extension-of-its-type -->
+An extension of a generic type declares the alias over that type's parameter, and the bound is the type's.
+```maxon
+type Bag uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Bag'
+
+extension Bag
+	typealias TCell = SharedValue with T
+end 'Bag'
+
+typealias TallyBag = Bag with Tally
+
+function main() returns ExitCode
+	let bag = TallyBag.create(1)
+	print("{bag.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:11:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Bag` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Bag`
+```
+
+<!-- test: error.a-shared-value-over-a-container-instance -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Cells = SharedValue with Array with Integer
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:3:19: `Array with int` cannot be a registry value or a `SharedValue`: it is neither a record, a `String`, a handle nor a scalar — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: error.a-shared-value-over-a-container-instance-declared-in-a-generic-type -->
+The same element is judged the same way where a generic type's body declares the alias.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Maker uses T
+	typealias Cells = SharedValue with Array with Integer
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias IntegerMaker = Maker with Integer
+
+function main() returns ExitCode
+	let maker = IntegerMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:5:20: `Array with int` cannot be a registry value or a `SharedValue`: it is neither a record, a `String`, a handle nor a scalar — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-is-refused-though-a-parameter-above-it-is-published-to -->
+A value typed by the alias builds nothing either, whichever member is asked of it.
+```maxon
+type Maker uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function put(c TCell)
+		c.publish(self.item)
+	end 'put'
+
+	typealias TCell = SharedValue with T
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:13:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-is-refused-though-a-parameter-above-it-is-read -->
+```maxon
+type Maker uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function take(c TCell) returns T
+		return c.current()
+	end 'take'
+
+	typealias TCell = SharedValue with T
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:13:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-nested-in-another-alias -->
+The element is judged wherever an alias writes the `SharedValue`, here as another alias's argument.
+```maxon
+type Maker uses T
+	typealias Cells = Array with SharedValue with T
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:3:31: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```
+
+<!-- test: a-shared-value-alias-in-an-interface-extension-over-another-alias-of-it -->
+An interface extension's `SharedValue` alias over a concrete element, named through a sibling alias, is
+built on each conformer.
+```maxon
+typealias Count = int(0 to u64.max)
+
+interface Tagged
+	function tag() returns Count
+end 'Tagged'
+
+export extension Tagged
+	typealias Small = int(0 to 9)
+	typealias SmallCell = SharedValue with Small
+
+	function cellTag() returns Small
+		let c = SmallCell.create(3 as Small)
+
+		return c.current()
+	end 'cellTag'
+end 'Tagged'
+
+type Box implements Tagged
+	export var v as Count
+
+	static function create() returns Self
+		return Self{v: 2}
+	end 'create'
+
+	function tag() returns Count
+		return self.v
+	end 'tag'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	print("{b.cellTag()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: error.a-shared-value-over-a-type-parameter-is-refused-though-another-file-uses-its-values -->
+Another file's use of the alias waits on the declaring file's refusal and reports nothing of its own.
+```maxon
+// --- file: maker.maxon
+type Maker uses T
+	typealias TCell = SharedValue with T
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Maker'
+
+typealias TallyMaker = Maker with Tally
+typealias Tally = int(0 to u64.max)
+
+// --- file: main.maxon
+extension Maker
+	function put(c TCell)
+		c.publish(self.item)
+	end 'put'
+
+	function take(c TCell) returns T
+		return c.current()
+	end 'take'
+end 'Maker'
+
+function main() returns ExitCode
+	let maker = TallyMaker.create(1)
+	print("{maker.item}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:4:20: `T` cannot be a registry value or a `SharedValue`: it is a type parameter of `Maker` that is not bounded `sendable` — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches. Declare `where T is sendable` on `Maker`
+```

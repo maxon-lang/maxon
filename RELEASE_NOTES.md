@@ -695,6 +695,12 @@ release's version as its heading when the release is cut.
   `FileRenameError` that lists every case is no longer exhaustive (E2026).
   Fix: add an arm for `alreadyExists`.
 
+- Inside a `type`, a nested typealias shadows a file-scope typealias of the same name in a static call
+  (`Items.create(…)`) and a construction (`Items from […]`) as well as in a type position. A program that
+  reached the file-scope alias there reads the nested one: it is refused (E3004 `call to undefined function`,
+  E2004 `Undefined variable`) or builds the nested alias's type.
+  Fix: rename one of the two aliases.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

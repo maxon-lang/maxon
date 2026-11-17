@@ -992,7 +992,9 @@ end 'main'
 
 `SharedValue with T` is a value key's slot created at run time: one live value that every holder of the cell
 reads. `T` follows the value-key rule, or is a `String`, a service handle or a scalar
-([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise).
+([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). `T` is a concrete type: a
+`SharedValue` over a type parameter of the enclosing type or interface, also as a nested argument
+(`Array with SharedValue with T`), is E3171 at that `SharedValue`.
 
 ```maxon
 typealias Count = int(0 to 1000)

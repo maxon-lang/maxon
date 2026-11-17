@@ -5381,6 +5381,21 @@ extension ProgramSignatures
 		return self.resolveArgList(entry.args, count: entry.argCount, cursor: cursor, remap: remap)
 	end 'resolveGenericArgs'
 
+	export function declaredAliasFirstArgument(entry GenericAliasEntry, from TypeNameInterner) returns MaxonType
+		let adopted = GenericArgNodeArray.create(entry.args.count(), zeroed: false)
+
+		for node in entry.args 'eachNode'
+			let carried = match node 'node'
+				leaf(argType) gives GenericArgNode.leaf(self.adoptTypeFrom(argType, from: from))
+				instanceHeader gives node
+			end 'node'
+
+			adopted.push(carried)
+		end 'eachNode'
+
+		return self.resolveArgNode(adopted, cursor: ArgCursor.create(), remap: TypeIdRemap.unmoved())
+	end 'declaredAliasFirstArgument'
+
 	// Resolve `count` consecutive pre-order arg nodes from `nodes` at `cursor`, advancing it past each — the
 	// ONE loop the top-level alias args and a nested instance's args share (they differ only in whether the
 	// cursor is fresh or their parent's). A nested instance is interned before the outer arg that holds it.

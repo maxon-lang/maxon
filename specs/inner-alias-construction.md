@@ -974,3 +974,127 @@ end 'main'
 ```exitcode
 6
 ```
+
+### An inner alias SHADOWS a file-scope alias of the same name at every door
+
+Inside the type that declares it, the inner alias is the one reading of its name: in type position, in a
+static call and in `<Alias> from [...]`. Each refusal below is the one the same body gets with no
+file-scope alias beside it.
+
+<!-- test: error.an-inner-alias-shadows-a-file-scope-alias-at-the-static-door -->
+```maxon
+typealias Wide = int(0 to 99)
+typealias Items = Array with Wide
+
+type Plain
+	typealias Items = int(0 to 9)
+
+	export var n as Items
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function made() returns ExitCode
+		let made = Items.create(0)
+
+		return made.count() as ExitCode
+	end 'made'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create()
+	let wide = Items from [4, 5]
+	print("{wide.count()}\n")
+	return p.made()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:15:20: call to undefined function 'Plain.Items.create'
+```
+
+<!-- test: error.an-inner-ranged-alias-has-no-static-create -->
+```maxon
+type Plain
+	typealias Items = int(0 to 9)
+
+	export var n as Items
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function made() returns ExitCode
+		let made = Items.create(0)
+
+		return made.count() as ExitCode
+	end 'made'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create()
+	return p.made()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:12:20: call to undefined function 'Plain.Items.create'
+```
+
+<!-- test: error.an-inner-alias-shadows-a-file-scope-alias-at-the-from-door -->
+```maxon
+typealias Wide = int(0 to 99)
+typealias Items = Array with Wide
+
+type Plain
+	typealias Items = int(0 to 9)
+
+	export var n as Items
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function made() returns ExitCode
+		let made = Items from [1, 2]
+
+		return made.count() as ExitCode
+	end 'made'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create()
+	let wide = Items from [4, 5]
+	print("{wide.count()}\n")
+	return p.made()
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:15:14: Undefined variable 'Items'
+```
+
+<!-- test: error.an-inner-ranged-alias-takes-no-from -->
+```maxon
+type Plain
+	typealias Items = int(0 to 9)
+
+	export var n as Items
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function made() returns ExitCode
+		let made = Items from [1, 2]
+
+		return made.count() as ExitCode
+	end 'made'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create()
+	return p.made()
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:12:14: Undefined variable 'Items'
+```

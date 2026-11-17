@@ -836,7 +836,7 @@ extension Parser
 			return false
 		end 'notAFromConstruction'
 
-		return self.aliasDenotesARefusedInstance(self.constructionHeadName())
+		return self.aliasDenotesARefusedInstance(self.innerAliasKeyOrName(self.constructionHeadName()))
 	end 'atRefusedInstanceConstruction'
 
 	function constructionHeadName() returns immutable ByteArray
@@ -5568,8 +5568,23 @@ extension Parser
 			self.recordInnerAliasName(member)
 		end 'eachMember'
 
-		self.pos = bodyStart
 		self.collectsWithSites = true
+		try self.readExtensionBodyAliases(bodyStart, pass: ExtensionAliasPass.spellings) otherwise panic("noteExtensionBodyGenericSpellings: the spellings pass steps over every alias it cannot read, so it refuses nothing")
+
+		self.closeTypeParamScope()
+		self.drainGenericWithSitesInto(index)
+	end 'noteExtensionBodyGenericSpellings'
+
+	function judgeInterfaceExtensionAliases(header ExtensionHeader, bodyStart ElementIndex) throws SourceParseError
+		if not extensionTargetIsAnInterface(header.target) 'aTypeExtensionJudgesItsAliasesInItsBody'
+			return
+		end 'aTypeExtensionJudgesItsAliasesInItsBody'
+
+		try self.readExtensionBodyAliases(bodyStart, pass: ExtensionAliasPass.sharedValueVerdicts(header.nameTok.value, params: extensionTargetParamNames(header.target)))
+	end 'judgeInterfaceExtensionAliases'
+
+	function readExtensionBodyAliases(bodyStart ElementIndex, pass ExtensionAliasPass) throws SourceParseError
+		self.pos = bodyStart
 		var depth = 1 as BlockDepth
 
 		while not self.isEof() 'walk'
@@ -5580,11 +5595,7 @@ extension Parser
 			end 'opensAMethod'
 
 			if depth == 1 and self.atTypeAliasDeclaration() 'aNestedAlias'
-				try self.readExtensionNestedAliasForSpellings() otherwise 'unreadable'
-					self.advance()
-					continue
-				end 'unreadable'
-
+				try self.readExtensionBodyAlias(pass)
 				continue
 			end 'aNestedAlias'
 
@@ -5596,10 +5607,38 @@ extension Parser
 				break
 			end 'closesTheDeclaration'
 		end 'walk'
+	end 'readExtensionBodyAliases'
 
-		self.closeTypeParamScope()
-		self.drainGenericWithSitesInto(index)
-	end 'noteExtensionBodyGenericSpellings'
+	function readExtensionBodyAlias(pass ExtensionAliasPass) throws SourceParseError
+		match pass 'pass'
+			spellings then self.readExtensionAliasSpellings()
+			sharedValueVerdicts(interfaceName, params) then try self.judgeAliasOverInterfaceParameters(interfaceName, params: params)
+		end 'pass'
+	end 'readExtensionBodyAlias'
+
+	function readExtensionAliasSpellings()
+		try self.readExtensionNestedAliasForSpellings() otherwise 'unreadable'
+			self.advance()
+		end 'unreadable'
+	end 'readExtensionAliasSpellings'
+
+	function judgeAliasOverInterfaceParameters(interfaceName ByteArray, params immutable NameRoster) throws SourceParseError
+		var at = pastDeclarationModifiers(self.tokens, index: self.pos) + TypeAliasHeadTokenCount
+
+		while self.kindAt(at) != TokenKind.eof and not tokenKindIsSkippedLayout(self.kindAt(at)) 'eachRightHandToken'
+			if self.writesASharedValueOverAParameterAt(at, params: params) 'overAParameter'
+				throw self.typeParameterShareRefusal(typeParamTokenFor(interfaceName, paramName: self.tokenAt(at + 2).value), anchor: self.tokenAt(at))
+			end 'overAParameter'
+
+			at = at + 1
+		end 'eachRightHandToken'
+
+		self.pos = at
+	end 'judgeAliasOverInterfaceParameters'
+
+	function writesASharedValueOverAParameterAt(at ElementIndex, params immutable NameRoster) returns bool
+		return self.kindAt(at) == TokenKind.identifier and self.tokenAt(at).value.equals(SharedValueTypeName) and self.kindAt(at + 1) == TokenKind.with and self.kindAt(at + 2) == TokenKind.identifier and params.contains(self.tokenAt(at + 2).value)
+	end 'writesASharedValueOverAParameterAt'
 
 	function readExtensionNestedAliasForSpellings() throws SourceParseError
 		let visibility = try self.consumeOptionalVisibility()
@@ -7295,9 +7334,49 @@ extension Parser
 		end 'walk'
 	end 'requireShareableRegistryValue'
 
-	function requireShareableSharedValue(aliasName ByteArray, baseTok Token) throws SourceParseError
-		let element = self.sharedValueElementType(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.job.path))
+	function requireShareableSharedValue(entry GenericAliasEntry, baseTok Token) throws SourceParseError
+		try self.requireShareableSharedValueElement(self.resolvedSlotType(self.signatures.declaredAliasFirstArgument(entry, from: self.artifact.typeNames)), baseTok: baseTok)
+	end 'requireShareableSharedValue'
 
+	function requireSharedValueOverNoTypeParameter(element MaxonType, baseTok Token) throws SourceParseError
+		if elementBuildsNoSharedValue(element) 'aTypeParameter'
+			throw self.typeParameterShareRefusal(typeParamIdOf(element), anchor: baseTok)
+		end 'aTypeParameter'
+	end 'requireSharedValueOverNoTypeParameter'
+
+	function requireNestedSharedValueOverNoTypeParameter(nodes GenericArgNodeArray, baseTok Token) throws SourceParseError
+		let element = try nodes.get(0) otherwise panic("requireNestedSharedValueOverNoTypeParameter: a nested `SharedValue` read no argument — `parseGenericArgNodes` reads at least one")
+
+		match element 'element'
+			leaf(argType) then try self.requireSharedValueOverNoTypeParameter(argType, baseTok: baseTok)
+			instanceHeader then return
+		end 'element'
+	end 'requireNestedSharedValueOverNoTypeParameter'
+
+	function typeParameterShareRefusal(param TypeParamId, anchor Token) returns SourceParseError
+		let owner = try self.signatures.typeParamOwnerOf(param) otherwise panic("typeParameterShareRefusal: type-parameter token {param} names no declaration's parameter — `parseTypeReference` minted it for a parameter in scope")
+		let subject = String.from(owner.paramName)
+		let ownerName = String.from(owner.declaringTypeName)
+
+		if self.signatures.structDeclaresTypeParams(owner.declaringTypeName) and not self.typeParameterIsSendable(owner) 'theOwnerCanBoundIt'
+			return self.shareRefusalError(subject, door: ShareDoor.registryValue, reason: "it is a type parameter of `{ownerName}` that is not bounded `{String.from(SendableBoundWord)}`", anchor: anchor, route: ShareRefusalRoute.boundSendable(owner.paramName, owner: owner.declaringTypeName))
+		end 'theOwnerCanBoundIt'
+
+		return self.shareRefusalError(subject, door: ShareDoor.registryValue, reason: "it is a type parameter of `{ownerName}`, and a `{String.from(SharedValueTypeName)}` cannot be built over a type parameter", anchor: anchor, route: ShareRefusalRoute.overAConcreteType)
+	end 'typeParameterShareRefusal'
+
+	function typeParameterIsSendable(owner TypeParamOwner) returns bool
+		for bound in self.signatures.structRegionBounds(owner.declaringTypeName) 'eachBound'
+			if bound.typeParamIndex == owner.position and bound.kind == RegionBoundKind.sendable 'boundsThisParameter'
+				return true
+			end 'boundsThisParameter'
+		end 'eachBound'
+
+		return false
+	end 'typeParameterIsSendable'
+
+	function requireShareableSharedValueElement(element MaxonType, baseTok Token) throws SourceParseError
+		try self.requireSharedValueOverNoTypeParameter(element, baseTok: baseTok)
 		let tag = maxonTypeTag(element)
 
 		if tagIsByteRecord(tag) or not self.signatures.typeIsManagedFor(element, from: self.artifact.typeNames, readerFilePath: self.job.path) 'anImmutableWordOrString'
@@ -7318,7 +7397,7 @@ extension Parser
 		end 'aNamedType'
 
 		throw self.shareRefusalError(self.displayTypeNameOf(tag, nameId: typeNameIdOf(element)), door: ShareDoor.registryValue, reason: "it is neither a record, a `String`, a handle nor a scalar", anchor: baseTok)
-	end 'requireShareableSharedValue'
+	end 'requireShareableSharedValueElement'
 
 	function requireRegistryValueDeclared(typeName ByteArray, anchor Token) throws SourceParseError
 		match self.signatures.structFor(typeName, readerFilePath: self.job.path) 'declared'
@@ -7327,8 +7406,8 @@ extension Parser
 		end 'declared'
 	end 'requireRegistryValueDeclared'
 
-	function shareRefusalError(subject String, door ShareDoor, reason String, anchor Token) returns SourceParseError
-		return SourceParseError.registryRefused(ErrorCode.registryValueNotShareable, explanation: shareRefusalMessage(subject, door: door, reason: reason, route: ShareRefusalRoute.ownGraph), line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
+	function shareRefusalError(subject String, door ShareDoor, reason String, anchor Token, route ShareRefusalRoute = ShareRefusalRoute.ownGraph) returns SourceParseError
+		return SourceParseError.registryRefused(ErrorCode.registryValueNotShareable, explanation: shareRefusalMessage(subject, door: door, reason: reason, route: route), line: anchor.line, column: anchor.column, notes: PositionedNoteArray.create(0))
 	end 'shareRefusalError'
 
 	function parseDefaultInitializer(declaration DefaultDeclaration, returnType MaxonType) throws SourceParseError
@@ -7800,7 +7879,7 @@ extension Parser
 
 		match form 'form'
 			functionAlias then try self.readFunctionAliasForm(writtenTok, nameTok: nameTok, functionOut: functionOut, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
-			genericAlias then try self.readGenericAliasForm(writtenTok, nameTok: nameTok, genericOut: genericOut, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
+			genericAlias then try self.readGenericAliasForm(writtenTok, nameTok: nameTok, genericOut: genericOut, visibility: visibility)
 			tupleAlias then try self.readTupleAliasForm(nameTok, tupleOwner: tupleOwner, visibility: visibility)
 			rangedAlias then try self.readRangedAliasForm(writtenTok, nameTok: nameTok, rangedOut: rangedOut, tupleOwner: tupleOwner, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
 			structType or
@@ -7842,7 +7921,7 @@ extension Parser
 		self.pushNamespaceQualifiedFunctionAlias(functionOut, alias: functionAlias, writtenName: writtenTok.value)
 	end 'readFunctionAliasForm'
 
-	function readGenericAliasForm(writtenTok Token, nameTok Token, genericOut GenericAliasSink, recordFunctionSignature bool, visibility Visibility) throws SourceParseError
+	function readGenericAliasForm(writtenTok Token, nameTok Token, genericOut GenericAliasSink, visibility Visibility) throws SourceParseError
 		// A GENERIC-INSTANCE typealias — `IntBox = Box with Integer`. Recognized by a base
 		// identifier followed by `with`. It records its own registry (`GenericAliasEntry`), not the
 		// ranged one, and (in the REAL parse) checks the instantiation's arity and managed arguments.
@@ -7859,8 +7938,8 @@ extension Parser
 		let entry = try self.readGenericInstanceAlias(nameTok, visibility: visibility)
 		try self.requireTypeNameNotCompilerOwned(writtenTok, declares: DeclaredTypeMeaning.genericInstance(entry.baseName, args: entry.args, argCount: entry.argCount))
 
-		if recordFunctionSignature and entry.baseName.equals(SharedValueTypeName) 'aSharedValueInstance'
-			try self.requireShareableSharedValue(nameTok.value, baseTok: baseTok)
+		if self.isTheReportingWalk and entry.baseName.equals(SharedValueTypeName) 'aSharedValueInstance'
+			try self.requireShareableSharedValue(entry, baseTok: baseTok)
 		end 'aSharedValueInstance'
 
 		match genericOut 'sink'
@@ -7904,7 +7983,7 @@ extension Parser
 
 		let spelled = try self.parseTypeReference(BarePrimitiveVoice.asAType)
 		let tag = maxonTypeTag(spelled)
-		let overAGenericAlias = tag == ValueTypeTag.genericInstance and targetTok.kind == TokenKind.identifier and self.signatures.isAliasOfFormFor(targetTok.value, readerFilePath: self.job.path, wanted: FormAliasKind.generic)
+		let overAGenericAlias = tag == ValueTypeTag.genericInstance and targetTok.kind == TokenKind.identifier and self.namesAGenericAlias(targetTok.value, readerFilePath: self.job.path)
 
 		if tag != ValueTypeTag.named and tag != ValueTypeTag.structRef and not overAGenericAlias 'notARecordName'
 			throw self.capabilityAliasTargetRefusal(capabilityTok)
@@ -7920,7 +7999,7 @@ extension Parser
 
 	function capabilityAliasTarget(spelled MaxonType, targetTok Token, overAGenericAlias bool) returns immutable ByteArray
 		if overAGenericAlias 'theAliasName'
-			return targetTok.value
+			return self.innerAliasKeyOrName(targetTok.value)
 		end 'theAliasName'
 
 		return try self.artifact.typeNames.nameOf(typeNameIdOf(spelled)) otherwise panic("capabilityAliasTarget: the record type just read carries an id that is not in this file's interner")
@@ -9314,6 +9393,11 @@ extension Parser
 			let subBaseName = self.canonicalGenericBaseNameInThisFile(base.denoted)
 			let subNodes = GenericArgNodeArray.create(0)
 			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.signatures.genericArgSlotOf(subBaseName))
+
+			if self.isTheReportingWalk and subBaseName.equals(SharedValueTypeName) 'aNestedSharedValue'
+				try self.requireNestedSharedValueOverNoTypeParameter(subNodes, baseTok: base.anchor)
+			end 'aNestedSharedValue'
+
 			self.noteGenericSpelling(base, baseName: subBaseName, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, shape: subQualified if subQualified.qualifiesArgs() else subSize))
 			nodes.append(subNodes)
@@ -10302,3 +10386,14 @@ extension Parser
 		return false
 	end 'atDeclarationBodyEnd'
 end 'Parser'
+
+function elementBuildsNoSharedValue(element MaxonType) returns bool
+	return maxonTypeTag(element) == ValueTypeTag.typeParameter
+end 'elementBuildsNoSharedValue'
+
+union ExtensionAliasPass
+	spellings
+	sharedValueVerdicts(interfaceName immutable ByteArray, params immutable NameRoster)
+end 'ExtensionAliasPass'
+
+let TypeAliasHeadTokenCount = 3

@@ -163,7 +163,7 @@ extension Parser
 		end 'aFormOtherThanAMember'
 
 		let nameReader = self.typeNameReaderAt(memberIndex - TokensPerQualifierSegment)
-		let aliasName = self.genericAliasKeyFor(baseTok.value)
+		let aliasName = self.innerAliasKeyOrName(baseTok.value)
 		let namesAStruct = self.signatures.containsStructFor(baseTok.value, readerFilePath: nameReader)
 
 		if not namesAStruct and self.staticBaseKindOf(baseTok.value) == StaticBaseKind.declaredName and not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: nameReader, wanted: FormAliasKind.generic) 'notATypeBase'
@@ -246,16 +246,20 @@ extension Parser
 			declaredName then break
 		end 'kind'
 
+		if let instance = try self.writtenGenericAliasInstance(baseTok.value, readerFilePath: nameReader) 'aGenericAlias'
+			return self.genericAliasMemberRefusal(baseTok, memberTok: memberTok, instance: instance, nameReader: nameReader, written: self.writtenSpellingOfMemberAt(baseIndex + TokensPerQualifierSegment))
+		end 'aGenericAlias'
+
 		let form = try self.signatures.declaredFormOf(baseTok.value, readerFilePath: nameReader) otherwise return self.undeclaredBaseRefusal(baseTok, memberTok: memberTok)
 
 		return match form 'form'
 			interfaceType gives memberThroughABaseThatNamesNoValue(base, noun: "an interface", memberTok: memberTok)
-			structType gives undeclaredStaticMember(baseTok, memberTok: memberTok)
+			structType or
+			genericAlias gives undeclaredStaticMember(baseTok, memberTok: memberTok)
 			enumType gives memberOfABaseWithNoSuchMember(base, noun: "an enum", memberTok: memberTok)
 			unionType gives memberOfABaseWithNoSuchMember(base, noun: "a union", memberTok: memberTok)
 			rangedAlias gives memberOfABaseWithNoSuchMember(base, noun: "a ranged alias", memberTok: memberTok)
 			functionAlias gives memberOfABaseWithNoSuchMember(base, noun: "a function type alias", memberTok: memberTok)
-			genericAlias gives self.genericAliasMemberRefusal(baseTok, memberTok: memberTok, nameReader: nameReader, written: self.writtenSpellingOfMemberAt(baseIndex + TokensPerQualifierSegment))
 			tupleAlias gives memberOfABaseWithNoSuchMember(base, noun: "a tuple alias", memberTok: memberTok)
 		end 'form'
 	end 'nonBoundMemberRefusal'
@@ -268,8 +272,8 @@ extension Parser
 		return SourceParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 	end 'undeclaredBaseRefusal'
 
-	function genericAliasMemberRefusal(aliasTok Token, memberTok Token, nameReader FilePath, written String) returns SourceParseError
-		let instanceBase = self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(self.genericAliasKeyFor(aliasTok.value), readerFilePath: nameReader))
+	function genericAliasMemberRefusal(aliasTok Token, memberTok Token, instance GenericInstanceId, nameReader FilePath, written String) returns SourceParseError
+		let instanceBase = self.signatures.genericInstanceBaseName(instance)
 
 		if self.namesTopLevelBinding(qualifiedMethodName(instanceBase, methodName: memberTok.value)) 'aStaticOfTheBase'
 			return missingStaticMember("'{written}' is a static of '{String.from(instanceBase)}', which is read through the type itself: write '{String.from(instanceBase)}.{String.from(memberTok.value)}'", anchor: memberTok)
@@ -2458,15 +2462,7 @@ extension Parser
 		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
 		// and refuse its two arguments against `Array.create()`'s none. That is the measured red:
 		// `E2010 Expected ')' but got 'integer literal'`.
-		// ⚠ **AN ALIAS TO THE BUFFER REACHES THIS DOOR TOO, AND LEAVING IT OUT REPRODUCED THE VERY RED THE
-		// PARAGRAPH ABOVE DESCRIBES.** `stdlib/Character.maxon:172` writes `ByteMemory.create(1, 1)` over its
-		// own `typealias ByteMemory = __ManagedMemory with Byte`, and a qualifier test that matched only the
-		// literal spelling sent it to `parseArrayStaticCall` — `E2010 Expected ')' but got '1'`, the same
-		// measured shape one line down, arrived at through the alias instead of through the arm order.
-		// `aliasDenotesBufferSurface` is the existing answer to "does this spelling denote the buffer?" and is
-		// already what `typeSpellingAtDenotesBuffer` asks in the other position, so this is that one
-		// question asked here rather than a second test of it.
-		if self.spellingDenotesBufferSurface(typeName, nameReader: nameReader) 'managedMemoryStatic'
+		if typeName.equals(ManagedMemoryTypeName) 'managedMemoryStatic'
 			return CompilerOwnedStaticSurface.handle(HandleSurface.memory)
 		end 'managedMemoryStatic'
 
@@ -2494,8 +2490,12 @@ extension Parser
 		// the identical failure one category over: `typealias IntPair = Pair with ExitCode` then
 		// `IntPair.create(9)`, refused for a field access on `unknown`. Two rosters of "which containers
 		// does this compiler own", and two keys for one alias, are the same duplication in two columns.
-		if self.signatures.isAliasOfFormFor(aliasName, readerFilePath: nameReader, wanted: FormAliasKind.generic) 'containerAliasStatic'
-			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: nameReader)
+		if let aliasGiid = try self.genericAliasInstanceAtKey(aliasName, readerFilePath: nameReader) 'containerAliasStatic'
+			// An alias to the buffer is bound to an `Array` instance, so it is asked before the container arms:
+			// past them `ByteMemory.create(1, 1)` reaches `parseArrayStaticCall` and `Array.create()`'s none.
+			if self.signatures.aliasDenotesBufferSurface(aliasName, readerFilePath: nameReader) 'anAliasOfTheBuffer'
+				return CompilerOwnedStaticSurface.handle(HandleSurface.memory)
+			end 'anAliasOfTheBuffer'
 
 			if self.signatures.instanceBaseIsSharedValue(aliasGiid) 'sharedValueStatic'
 				return CompilerOwnedStaticSurface.sharedValue(aliasGiid)
@@ -2695,7 +2695,8 @@ extension Parser
 	end 'containerStaticOf'
 
 	function denotedStaticCallee(aliasName ByteArray, member ByteArray, nameReader FilePath) returns immutable ByteArray
-		return qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: nameReader), methodName: member)
+		let instance = try self.genericAliasInstanceAtKey(aliasName, readerFilePath: nameReader) otherwise return qualifiedMethodName(aliasName, methodName: member)
+		return qualifiedMethodName(self.signatures.genericInstanceBaseName(instance), methodName: member)
 	end 'denotedStaticCallee'
 
 	function arrayStaticKind(member ByteArray, aliasName ByteArray, nameReader FilePath) returns ArrayStaticKind
@@ -3187,13 +3188,13 @@ extension Parser
 		end 'aRegistryCall'
 
 		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
-		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
+		// (`Plain.IntPair`) — and every alias-driven decision this routine makes reads THIS name rather than
 		// the written token:** the builtin-container interception below, the base a static mangles onto
-		// (`denotedGenericBaseName`), the instance a constructor builds (`constructorInstanceOf`), and the type
+		// (`denotedStaticCallee`), the instance a constructor builds (`constructorInstanceOf`), and the type
 		// its result adopts (`retypeGenericAliasConstructorResult`). Which registration a written name denotes
-		// is `genericAliasKeyFor`'s alone — recognizing the inner spelling here and dropping it for the other
-		// three is exactly how one call site comes to hold two readings of one alias.
-		let aliasName = self.genericAliasKeyFor(typeTok.value)
+		// is `innerAliasKeyOrName`'s alone — recognizing the inner spelling here and dropping it for the
+		// others is exactly how one call site comes to hold two readings of one alias.
+		let aliasName = self.innerAliasKeyOrName(typeTok.value)
 
 		if self.aliasDenotesARefusedInstance(aliasName) 'aRefusedInstance'
 			return try self.deferredUnresolvedMemberResult(func)
@@ -3218,9 +3219,9 @@ extension Parser
 		return tag == ValueTypeTag.genericInstance and self.defersOnRefusedInstance(nameId as GenericInstanceId)
 	end 'namesARefusedInstance'
 
-	// A use of a refused instance defers and reports nothing, leaving the alias's E2015 as the one
-	// report; `FoldLedger.requireEveryDeferralExplained` panics on a deferral in a program that
-	// reports no error.
+	// A use of a refused instance defers and reports nothing, leaving the alias's E2015, or E3171 for a
+	// `SharedValue` over a type parameter, as the one report; `FoldLedger.requireEveryDeferralExplained`
+	// panics on a deferral in a program that reports no error.
 	function defersOnRefusedInstance(id GenericInstanceId) returns bool
 		if not self.signatures.allFilesFolded 'theSweepRefusesNothing'
 			return false
@@ -3235,12 +3236,16 @@ extension Parser
 		return refused
 	end 'defersOnRefusedInstance'
 
+	function sharedValueBuiltOverATypeParameter(id GenericInstanceId) returns bool
+		return self.signatures.instanceBaseIsSharedValue(id) and elementBuildsNoSharedValue(self.signatures.sharedValueElementOf(id))
+	end 'sharedValueBuiltOverATypeParameter'
+
 	function refusedInstanceAnswer(id GenericInstanceId) returns bool
 		if let known = try self.refusedInstances.get(id) 'answeredAlready'
 			return known
 		end 'answeredAlready'
 
-		let answer = self.signatures.genericInstanceIsRefused(id)
+		let answer = self.signatures.genericInstanceIsRefused(id) or self.sharedValueBuiltOverATypeParameter(id)
 		self.refusedInstances.upsert(id, value: answer)
 
 		return answer
@@ -3280,12 +3285,9 @@ extension Parser
 		return declaredNameDenotesNothing(self.signatures, name: self.internedName(id), id: id, readerFilePath: scopeFilePath)
 	end 'declaredTypeIsUnknown'
 
-	function aliasDenotesARefusedInstance(aliasName ByteArray) returns bool
-		if not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'notAnInstanceAlias'
-			return false
-		end 'notAnInstanceAlias'
-
-		return self.defersOnRefusedInstance(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.job.path))
+	function aliasDenotesARefusedInstance(aliasKey ByteArray) returns bool
+		let instance = try self.genericAliasInstanceAtKey(aliasKey, readerFilePath: self.job.path) otherwise return false
+		return self.defersOnRefusedInstance(instance)
 	end 'aliasDenotesARefusedInstance'
 
 	function staticMemberResolutionAt(typeTok Token, baseIndex ElementIndex, aliasName ByteArray) returns StaticMemberResolution
@@ -3339,8 +3341,8 @@ extension Parser
 	// parameters. See `bareGenericInstanceInScope` for the binding rule and for why the caller-side gate is
 	// spelled here.
 	function constructorInstanceOf(baseName ByteArray) returns ConstructorInstance
-		if self.signatures.isAliasOfFormFor(baseName, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'genericAlias'
-			return ConstructorInstance.instance(self.signatures.genericAliasInstanceFrom(baseName, readerFilePath: self.job.path))
+		if let instance = try self.genericAliasInstanceAtKey(baseName, readerFilePath: self.job.path) 'genericAlias'
+			return ConstructorInstance.instance(instance)
 		end 'genericAlias'
 
 		if self.enclosingTypeParams.count() == 0 'noTypeParameterScope'
@@ -4887,7 +4889,7 @@ extension Parser
 		// call is claimed at one and refused at the other. An INNER alias is keyed base-qualified, so asking the
 		// bare member here would hand the base to the managed-constant fallback for exactly the aliases
 		// `parseQualifiedCall` does resolve.
-		let baseName = self.genericAliasKeyFor(written)
+		let baseName = self.innerAliasKeyOrName(written)
 
 		if self.signatures.containsEnumFor(baseName, readerFilePath: self.job.path) or self.signatures.isAliasOfFormFor(baseName, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'enumOrGenericAlias'
 			return true
@@ -7244,7 +7246,7 @@ extension Parser
 			return named
 		end 'theSizeNamesTheInstance'
 
-		let receiver = self.signatures.genericAliasInstanceFrom(self.genericAliasKeyFor(typeTok.value), readerFilePath: self.job.path)
+		let receiver = try self.writtenGenericAliasInstance(typeTok.value, readerFilePath: self.job.path) otherwise panic("managedMemoryCreateInstance: '{String.from(typeTok.value)}' reached the buffer's create through an alias, and `compilerOwnedStaticSurface` admits one only when `genericAliasInstanceAtKey` answers its key with an instance `aliasDenotesBufferSurface` names the buffer")
 
 		let stride = self.signatures.arrayElementSize(receiver) as FullRangeInt
 

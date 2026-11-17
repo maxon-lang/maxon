@@ -4817,7 +4817,8 @@ and a writer publishes a whole new value. Use it through an alias:
 `typealias ConfigCell = SharedValue with Config`. `T` is any type whose value graph reaches no OS handle,
 function value or promise, also through a conformer the program converts to an interface the graph holds
 ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171)): records with `var`
-fields, `Array` and `Map` publish as well as scalars, strings and service handles. It is the run-time form of
+fields, `Array` and `Map` publish as well as scalars, strings and service handles. `T` is a concrete type: a
+type parameter of the enclosing type or interface is E3171. It is the run-time form of
 a registry key's `default` ([`SharedValue`](LANGUAGE_REFERENCE.md#sharedvalue--a-live-value-made-at-run-time)).
 
 A value `current()` returns, like a registry `default`'s, is read-only all the way down: a write through it is

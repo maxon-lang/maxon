@@ -223,7 +223,7 @@ extension Parser
 		self.noteEmittedCallAsALiteral()
 	end 'emitContainerLiteralElement'
 
-	function parseContainerFromArray(func IrFunction, headTok Token, container FromHeadContainer) returns ValueId throws SourceParseError
+	function parseContainerFromArray(func IrFunction, headTok Token, container FromHeadContainer, stated ConstructorInstance) returns ValueId throws SourceParseError
 		let sourceTok = self.current()
 		let source = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
@@ -231,33 +231,37 @@ extension Parser
 			return self.mintDeferredValue()
 		end 'aDeferredSource'
 
-		let giid = try self.containerInstanceFromArray(source, headTok: headTok, sourceTok: sourceTok, container: container)
+		let giid = try self.containerInstanceFromArray(source, headTok: headTok, sourceTok: sourceTok, container: container, stated: stated)
 
 		let built = try self.emitContainerConstructorCall(fromHeadBaseName(container), method: InitMethod, giid: giid, args: argsOf(source), mint: CalleeMint.fromConstructionInit, anchor: headTok, range: SourceRange.ofToken(sourceTok))
 		self.noteEmittedCallAsALiteral()
 		return built
 	end 'parseContainerFromArray'
 
-	// The alias's element is checked here rather than by `init`'s argument check, so the E3005 names
-	// `source`, not `init`'s own `arr`; `specs/set.md` and `specs/list.md` pin that wording.
-	function containerInstanceFromArray(source ValueId, headTok Token, sourceTok Token, container FromHeadContainer) returns GenericInstanceId throws SourceParseError
-		if self.namesContainerInstanceAlias(headTok.value, container: container) 'statedByAlias'
-			let giid = self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.job.path)
-			let headElement = self.signatures.containerElementType(giid)
-			let expected = "{FromSourceArrayNoun} with {self.signatures.typeDisplayName(headElement)}"
-			let sourceElement = try self.arraySourceElement(source, expected: expected, sourceTok: sourceTok)
-
-			if not maxonTypesDenoteSame(headElement, b: sourceElement) 'anotherElement'
-				throw self.fromSourceMismatch(source, expected: expected, sourceTok: sourceTok)
-			end 'anotherElement'
-
-			return giid
+	function containerInstanceFromArray(source ValueId, headTok Token, sourceTok Token, container FromHeadContainer, stated ConstructorInstance) returns GenericInstanceId throws SourceParseError
+		match stated 'statedByAlias'
+			instance(giid) then return try self.aliasStatedInstanceFromArray(source, giid: giid, sourceTok: sourceTok)
+			none then break
 		end 'statedByAlias'
 
 		// The array's exact element, never a normalized one: an `Array with Code` strides 1, and
 		// `Set with integer`'s `init` would read it as a stride-8 array.
 		return self.inferredContainerInstance(container, element: try self.arraySourceElement(source, expected: FromSourceArrayNoun, sourceTok: sourceTok), head: headTok)
 	end 'containerInstanceFromArray'
+
+	// The alias's element is checked here rather than by `init`'s argument check, so the E3005 names
+	// `source`, not `init`'s own `arr`; `specs/set.md` and `specs/list.md` pin that wording.
+	function aliasStatedInstanceFromArray(source ValueId, giid GenericInstanceId, sourceTok Token) returns GenericInstanceId throws SourceParseError
+		let headElement = self.signatures.containerElementType(giid)
+		let expected = "{FromSourceArrayNoun} with {self.signatures.typeDisplayName(headElement)}"
+		let sourceElement = try self.arraySourceElement(source, expected: expected, sourceTok: sourceTok)
+
+		if not maxonTypesDenoteSame(headElement, b: sourceElement) 'anotherElement'
+			throw self.fromSourceMismatch(source, expected: expected, sourceTok: sourceTok)
+		end 'anotherElement'
+
+		return giid
+	end 'aliasStatedInstanceFromArray'
 
 	function inferredContainerInstance(container FromHeadContainer, element MaxonType, head Token) returns GenericInstanceId
 		let giid = self.signatures.builtinInstanceForElement(fromHeadBaseName(container), element: element)
@@ -382,20 +386,39 @@ extension Parser
 		self.recordTypeNameUse(self.tokenAt(index).value)
 	end 'noteTypeNameMention'
 
-	function namesContainerInstanceAlias(name ByteArray, container FromHeadContainer) returns bool
-		if not self.signatures.isAliasOfFormFor(name, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'notAGenericAlias'
-			return false
-		end 'notAGenericAlias'
+	function namesContainerInstanceAlias(name immutable ByteArray, container FromHeadContainer) returns bool
+		try self.containerAliasInstance(name, container: container) otherwise return false
+		return true
+	end 'namesContainerInstanceAlias'
 
-		let giid = self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.job.path)
+	function containerAliasInstance(name immutable ByteArray, container FromHeadContainer) returns GenericInstanceId throws AbsentError
+		let giid = try self.writtenGenericAliasInstance(name, readerFilePath: self.job.path)
 
-		return match container 'container'
+		let ofTheContainer = match container 'container'
 			set gives self.signatures.isSetShapedInstance(giid)
 			list gives self.signatures.genericInstanceBaseName(giid).equals(ListBuiltinBaseName)
 			fixedArray gives self.signatures.isFixedArrayInstance(giid)
 			array gives self.signatures.isArrayInstance(giid)
 		end 'container'
-	end 'namesContainerInstanceAlias'
+
+		if not ofTheContainer 'anotherContainer'
+			throw AbsentError.absent
+		end 'anotherContainer'
+
+		return giid
+	end 'containerAliasInstance'
+
+	function statedContainerInstance(name immutable ByteArray, container FromHeadContainer) returns ConstructorInstance
+		let giid = try self.containerAliasInstance(name, container: container) otherwise return ConstructorInstance.none
+		return ConstructorInstance.instance(giid)
+	end 'statedContainerInstance'
+
+	function statesTheCharacterSet(stated ConstructorInstance) returns bool
+		return match stated 'stated'
+			instance(giid) gives giid == self.signatures.setInstanceForCharacter()
+			none gives false
+		end 'stated'
+	end 'statesTheCharacterSet'
 
 	// ⭐⭐ **`ByteArray from [10, 20, 30]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN**, `FixedArray from […]`'s
 	// property and for the same reason: the array literal already builds exactly the record an `Array` is. It
@@ -421,7 +444,8 @@ extension Parser
 			throw SourceParseError.unsupported("`{String.from(headTok.value)} from` requires an array literal `[…]` — `{String.from(headTok.value)} from <expr>` for another source is not a construction", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
 
-		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.job.path)))
+		let giid = try self.containerAliasInstance(headTok.value, container: FromHeadContainer.array) otherwise panic("parseArrayFromConstruction: '{String.from(headTok.value)}' heads an `Array` construction only when `atContainerFromConstruction` found an `Array` alias under it")
+		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(giid))
 	end 'parseArrayFromConstruction'
 
 	// ⭐ **`Set from [1, 2, 3]` OR `Set from <array>`.** The cursor sits on the head identifier. A
@@ -432,9 +456,10 @@ extension Parser
 	// `Set.insert` per member.
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws SourceParseError
 		let setTok = try self.consumeConstructionHead()
+		let stated = self.statedContainerInstance(setTok.value, container: FromHeadContainer.set)
 
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
-			return try self.parseContainerFromArray(func, headTok: setTok, container: FromHeadContainer.set)
+			return try self.parseContainerFromArray(func, headTok: setTok, container: FromHeadContainer.set, stated: stated)
 		end 'notArrayLiteral'
 
 		// ⭐ **A CHARACTER-KEYED SET IS BUILT MEMBER BY MEMBER, NOT THROUGH AN ARRAY.** Every
@@ -443,13 +468,13 @@ extension Parser
 		// would infer `Array with integer` and a `Set with int` of byte values. The ALIAS states the key type
 		// the elements cannot, so the bracket list is read as members directly and each element adopts
 		// `Character` the way every other Character-expecting position makes a literal adopt it.
-		if self.namesContainerInstanceAlias(setTok.value, container: FromHeadContainer.set) and self.signatures.genericAliasInstanceFrom(setTok.value, readerFilePath: self.job.path) == self.signatures.setInstanceForCharacter() 'characterKeyed'
+		if self.statesTheCharacterSet(stated) 'characterKeyed'
 			return try self.parseCharacterMemberSetLiteral(func, anchor: setTok, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
 
 		// A literal is built member by member, which spares the intermediate `Array` record `Set.init`
 		// would take; `Map` takes the same route one container over.
-		return try self.parseSetMemberList(func, setTok: setTok)
+		return try self.parseSetMemberList(func, setTok: setTok, stated: stated)
 	end 'parseSetFromConstruction'
 
 	// ⭐⭐ **`Set from [m0, m1, …]` ONTO A DECLARED `Set` — `Set.create()` plus one `Set.insert` per
@@ -463,7 +488,7 @@ extension Parser
 	// ⚠ **NO MEMBER IS MOVED AT THE PARSE.** The corpus `Set.insert` declares its
 	// parameter, so the ORDINARY call machinery decides the move — see the note below `emitContainerLiteralCreate` for the leak
 	// a second, parse-time move produces.
-	function parseSetMemberList(func IrFunction, setTok Token) returns ValueId throws SourceParseError
+	function parseSetMemberList(func IrFunction, setTok Token, stated ConstructorInstance) returns ValueId throws SourceParseError
 		let range = SourceRange.ofToken(setTok)
 		try self.consume(TokenKind.leftBracket)
 
@@ -482,8 +507,8 @@ extension Parser
 			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstMember'
 
-		let statedByAlias = self.namesContainerInstanceAlias(setTok.value, container: FromHeadContainer.set)
-		let giid = try self.memberListInstance(setTok, container: FromHeadContainer.set, statedByAlias: statedByAlias, first: first, firstTok: firstTok, literalKind: SetLiteralSubject, columnNoun: HashTableKeyColumnNoun)
+		let statedByAlias = statesAnInstance(stated)
+		let giid = try self.memberListInstance(setTok, container: FromHeadContainer.set, stated: stated, first: first, firstTok: firstTok, literalKind: SetLiteralSubject, columnNoun: HashTableKeyColumnNoun)
 
 		let set = try self.emitContainerLiteralCreate(SetBuiltinBaseName, giid: giid, anchor: setTok, range: range)
 		try self.emitContainerLiteralElement(SetBuiltinBaseName, method: InsertMethod, container: set, value: first, anchor: setTok, range: range)
@@ -568,7 +593,7 @@ extension Parser
 		// `fromConstructionInit`, not `notMinted`: the author wrote `FilePath from "…"` and never named `init`, and
 		// that is the only fact distinguishing this call from a written-out `FilePath.init("…")` — they build
 		// the identical callee. See `CalleeMint.fromConstructionInit`.
-		let built = try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.fromConstructionInit, places: self.placesOfArguments(args, anchor: literalTok))
+		let built = try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(self.innerAliasKeyOrName(typeTok.value)), mint: CalleeMint.fromConstructionInit, places: self.placesOfArguments(args, anchor: literalTok))
 		self.noteEmittedCallAsALiteral()
 		return built
 	end 'parseLiteralInitConstruction'
@@ -1461,22 +1486,23 @@ extension Parser
 	// from there, and a second parse-time move would be the leak `emitContainerLiteralElement`'s note measures.
 	function parseListFromConstruction(func IrFunction) returns ValueId throws SourceParseError
 		let listTok = try self.consumeConstructionHead()
+		let stated = self.statedContainerInstance(listTok.value, container: FromHeadContainer.list)
 
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
-			return try self.parseContainerFromArray(func, headTok: listTok, container: FromHeadContainer.list)
+			return try self.parseContainerFromArray(func, headTok: listTok, container: FromHeadContainer.list, stated: stated)
 		end 'notArrayLiteral'
 
-		return try self.parseListMemberList(func, listTok: listTok)
+		return try self.parseListMemberList(func, listTok: listTok, stated: stated)
 	end 'parseListFromConstruction'
 
 	// ⭐ **`List from [m0, m1, …]` ONTO THE DECLARED `List`** — the cursor sits on the `[`. Split out from the
 	// head parse for `parseSetMemberList`'s reason: the head decides WHICH construction this is and the body
 	// decides what it builds.
-	function parseListMemberList(func IrFunction, listTok Token) returns ValueId throws SourceParseError
+	function parseListMemberList(func IrFunction, listTok Token, stated ConstructorInstance) returns ValueId throws SourceParseError
 		let range = SourceRange.ofToken(listTok)
 		try self.consume(TokenKind.leftBracket)
 
-		let statedByAlias = self.namesContainerInstanceAlias(listTok.value, container: FromHeadContainer.list)
+		let statedByAlias = statesAnInstance(stated)
 
 		// An EMPTY literal builds nothing, whether or not the head states the element type: an empty list is its
 		// alias's `create()`.
@@ -1491,7 +1517,7 @@ extension Parser
 			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.element)
 		end 'aDeferredFirstMember'
 
-		let giid = try self.memberListInstance(listTok, container: FromHeadContainer.list, statedByAlias: statedByAlias, first: first, firstTok: firstTok, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun)
+		let giid = try self.memberListInstance(listTok, container: FromHeadContainer.list, stated: stated, first: first, firstTok: firstTok, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun)
 		let list = try self.emitContainerLiteralCreate(ListBuiltinBaseName, giid: giid, anchor: listTok, range: range)
 		try self.emitContainerLiteralElement(ListBuiltinBaseName, method: AppendMethod, container: list, value: first, anchor: listTok, range: range)
 		var signs = try self.foldColumnSign(ColumnSigns.unseen, value: first, anchor: firstTok)
@@ -1516,9 +1542,10 @@ extension Parser
 	// The instance a `Set` or `List from […]` literal builds: the one its alias head names, or — under
 	// the bare base name — the one its FIRST member fixes, through `literalColumnTypeFor`, the door
 	// `arrayLiteralInstanceFor` asks.
-	function memberListInstance(headTok Token, container FromHeadContainer, statedByAlias bool, first ValueId, firstTok Token, literalKind String, columnNoun String) returns GenericInstanceId throws SourceParseError
-		if statedByAlias 'statedByTheAlias'
-			return self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.job.path)
+	function memberListInstance(headTok Token, container FromHeadContainer, stated ConstructorInstance, first ValueId, firstTok Token, literalKind String, columnNoun String) returns GenericInstanceId throws SourceParseError
+		match stated 'statedByTheAlias'
+			instance(giid) then return giid
+			none then break
 		end 'statedByTheAlias'
 
 		return self.inferredContainerInstance(container, element: try self.literalColumnTypeFor(first, literalKind: literalKind, columnNoun: columnNoun, valueTok: firstTok), head: headTok)
@@ -1619,8 +1646,8 @@ extension Parser
 			throw SourceParseError.unsupported("`{String.from(FixedArrayBuiltinBaseName)} from` requires an array literal `[…]` — a fixed array's SIZE is part of its type, and only a literal states it in the source", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
 
-		if self.namesContainerInstanceAlias(vecTok.value, container: FromHeadContainer.fixedArray) 'statedByTheAlias'
-			return try self.parseAliasedFixedArrayLiteral(func, vecTok: vecTok, headStart: headStart)
+		if let giid = try self.containerAliasInstance(vecTok.value, container: FromHeadContainer.fixedArray) 'statedByTheAlias'
+			return try self.parseAliasedFixedArrayLiteral(func, vecTok: vecTok, giid: giid, headStart: headStart)
 		end 'statedByTheAlias'
 
 		// The literal is parsed FIRST so its own refusals — an empty `[]`, an element of another type, an element type
@@ -1688,8 +1715,7 @@ extension Parser
 		end 'theWholeInitializer'
 	end 'imageTheLetInitializerAt'
 
-	function parseAliasedFixedArrayLiteral(func IrFunction, vecTok Token, headStart ElementIndex) returns ValueId throws SourceParseError
-		let giid = self.signatures.genericAliasInstanceFrom(vecTok.value, readerFilePath: self.job.path)
+	function parseAliasedFixedArrayLiteral(func IrFunction, vecTok Token, giid GenericInstanceId, headStart ElementIndex) returns ValueId throws SourceParseError
 		try self.requireFixedArrayElementType(giid, tok: vecTok)
 
 		let arrayGiid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: self.signatures.containerElementType(giid))
@@ -10232,3 +10258,10 @@ extension Parser
 		return self.regionRefusal(refusal.0, message: refusal.1, line: valueTok.line, column: valueTok.column)
 	end 'frozenFieldDefaultRefusal'
 end 'Parser'
+
+function statesAnInstance(stated ConstructorInstance) returns bool
+	return match stated 'stated'
+		instance gives true
+		none gives false
+	end 'stated'
+end 'statesAnInstance'

@@ -1167,6 +1167,10 @@ A `type` or `interface` body declares each nested typealias once: a second decla
 same body, whatever its form (generic instance, ranged, function or tuple), is
 [E3061](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3061) at its name.
 
+Inside the `type` or `extension` body that declares it, a nested typealias is spelled by its bare name in a
+type position, a static call (`Items.create()`) and a construction (`Items from [ ... ]`) alike. Inside the
+declaring type it shadows a file-scope typealias of the same name at each of them.
+
 A nested typealias follows the rule a method does (see [Static Methods](#static-methods)). An `extension` of a
 type that declares a nested typealias the type's own body declares is
 [E3061](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3061) at the extension's declaration, in any file and
@@ -6226,7 +6230,9 @@ end 'main'
 
 `SharedValue with T` is a value key's slot created at run time: one live value that every holder of the cell
 reads. `T` follows the value-key rule, or is a `String`, a service handle or a scalar
-([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) otherwise).
+([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) otherwise). `T` is a concrete type: a
+`SharedValue` over a type parameter of the enclosing type or interface, also as a nested argument
+(`Array with SharedValue with T`), is E3171 at that `SharedValue`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -7732,7 +7738,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3086](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3086) | a field not definitely assigned before its struct literal |
 | [E3102](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3102) | use of a moved value |
 | [E3152](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3152) | `__Raw` used outside `runtime/` |
-| [E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) | a shared value whose graph holds an OS handle, a function value or a promise, directly or through a conformer converted to an interface it holds |
+| [E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) | a shared value whose graph holds an OS handle, a function value or a promise, directly or through a conformer converted to an interface it holds; a `SharedValue` over a type parameter |
 | [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
 | [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |

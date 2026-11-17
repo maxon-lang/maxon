@@ -446,6 +446,10 @@ A `type` or `interface` body declares each nested typealias once: a second decla
 same body, whatever its form (generic instance, ranged, function or tuple), is
 [E3061](/docs/cli/error-codes/#e3061--semanticduplicatetypealias) at its name.
 
+Inside the `type` or `extension` body that declares it, a nested typealias is spelled by its bare name in a
+type position, a static call (`Items.create()`) and a construction (`Items from [ ... ]`) alike. Inside the
+declaring type it shadows a file-scope typealias of the same name at each of them.
+
 A nested typealias follows the rule a method does (see [Static Methods](/docs/language/composite-types/#static-methods)). An `extension` of a
 type that declares a nested typealias the type's own body declares is
 [E3061](/docs/cli/error-codes/#e3061--semanticduplicatetypealias) at the extension's declaration, in any file and

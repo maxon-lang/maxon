@@ -62,6 +62,7 @@ extension Parser
 		end 'target'
 
 		let bodyStart = self.pos
+		try self.judgeInterfaceExtensionAliases(header, bodyStart: bodyStart)
 		let conformers = self.admittedExtensionConformers(header)
 		try self.parseExtensionBodies(header, conformers: conformers, bodyStart: bodyStart)
 
@@ -4178,14 +4179,11 @@ extension Parser
 	// ⭐⭐ **THE `Base with Args` INSTANCE THE DECLARED TYPE AT `index` NAMES** — the fact
 	// `ProgramSignatures.instanceDenotedType` destroys when it collapses an interface instance to the bare
 	// `interfaceRef(Base)` the value is typed with, recovered from the one thing that survives: the tokens.
-	// `MapError.keyNotFound` for a type that names no generic alias, which is every ordinary declaration.
+	// `AbsentError` for a type that names no generic alias, which is every ordinary declaration.
 	//
-	// ⚠ **THE TWO NAME SHAPES ARE `parseTypeReference`'s TWO ALIAS ARMS, IN ITS ORDER, AND THEY MUST STAY
-	// THAT ORDER.** An INNER alias resolves under its base-qualified name (`Array.ElementIterable`) and a
-	// file-scope one under its bare name, and the inner one wins — a nested `typealias` shadows a top-level
-	// one of the same spelling. Asking bare-first would silently type a shared generic body's iteration
-	// against some other file's instantiation. This is the only restatement of that rule; the JOIN it reaches
-	// (`genericAliasDenotedType`'s two calls) is shared rather than spelled again.
+	// ⚠ The written name goes through `innerAliasKeyOrName`, where a nested `typealias` shadows a top-level
+	// one of the same spelling; asking the bare name would silently type a shared generic body's iteration
+	// against some other file's instantiation.
 	//
 	// ⚠ It declines a non-identifier by TOKEN KIND, which is what lets the receiver's slot hold the
 	// signature's `(` rather than an index whose meaning depends on what a name happens to denote.
@@ -4194,23 +4192,15 @@ extension Parser
 			throw AbsentError.absent
 		end 'namesNoTypeAtAll'
 
-		let name = self.tokenAt(index).value
-
-		if self.namesInnerAliasHere(name) 'innerAliasOfTheEnclosingType'
-			return try self.existentialClaimOf(self.innerAliasKey(name), readerFilePath: self.job.path)
-		end 'innerAliasOfTheEnclosingType'
-
-		return try self.existentialClaimOf(name, readerFilePath: self.job.path)
+		return try self.existentialClaimOf(self.innerAliasKeyOrName(self.tokenAt(index).value), readerFilePath: self.job.path)
 	end 'declaredExistentialInstanceAt'
 
 	function existentialClaimOf(aliasName ByteArray, readerFilePath FilePath) returns ExistentialClaim throws AbsentError
-		if not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: readerFilePath, wanted: FormAliasKind.generic) 'namesNoInstance'
-			throw AbsentError.absent
-		end 'namesNoInstance'
+		let instance = try self.genericAliasInstanceAtKey(aliasName, readerFilePath: readerFilePath)
 
 		match self.signatures.writtenGenericAliasDecl(aliasName, readerFilePath: readerFilePath) 'declared'
 			undeclared then panic("existentialClaimOf: '{String.from(aliasName)}' is a generic alias as '{readerFilePath.toString()}' reads it, yet no declaration of it is held — `isAliasOfFormFor` and `scopedGenericAliasDecl` read one registry")
-			declared(decl) then return ExistentialClaim.create(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: readerFilePath), scopeFilePath: decl.filePath)
+			declared(decl) then return ExistentialClaim.create(instance, scopeFilePath: decl.filePath)
 		end 'declared'
 	end 'existentialClaimOf'
 
@@ -5687,9 +5677,11 @@ extension Parser
 		self.recordQualifiedTypeNameUse(qualified)
 		try self.requireInnerAliasNameable(qualified, written: qualified, anchor: anchor)
 
-		if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualified) 'aQualifiedInnerGenericAlias'
-			return self.genericAliasDenotedType(qualified, readerFilePath: self.job.path)
-		end 'aQualifiedInnerGenericAlias'
+		if self.signatures.allFilesFolded 'theIndexIsComplete'
+			if let denoted = try self.genericAliasDenotedType(qualified, readerFilePath: self.job.path) 'aQualifiedInnerGenericAlias'
+				return denoted
+			end 'aQualifiedInnerGenericAlias'
+		end 'theIndexIsComplete'
 
 		return MaxonType.named(self.artifact.typeNames.intern(qualified))
 	end 'memberTypeReference'
@@ -5881,9 +5873,11 @@ extension Parser
 				try self.requireInnerAliasNameable(qualifiedInner, written: name, anchor: tok)
 			end 'aMemberAnotherBodyDeclaredAndTheAuthorWrote'
 
-			if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualifiedInner) 'genericInnerAlias'
-				return self.genericAliasDenotedType(qualifiedInner, readerFilePath: self.job.path)
-			end 'genericInnerAlias'
+			if self.signatures.allFilesFolded 'theIndexIsComplete'
+				if let denoted = try self.genericAliasDenotedType(qualifiedInner, readerFilePath: self.job.path) 'genericInnerAlias'
+					return denoted
+				end 'genericInnerAlias'
+			end 'theIndexIsComplete'
 
 			// A TUPLE inner alias — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
 			// THROUGH to the interned tuple's own `structRef`, which is what makes an `Entry`-typed slot and a
@@ -5989,8 +5983,8 @@ extension Parser
 			// spellings above and inside the function arm stay bare, and that is structural rather than an
 			// omission — a nominal type name is an identifier and holds no `.`, so `Wrapper.Idx` can be
 			// claimed by no second kind and can never be contested.
-			if self.signatures.isAliasOfFormFor(identity, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'genericAlias'
-				return self.genericAliasDenotedType(identity, readerFilePath: self.job.path)
+			if let denoted = try self.genericAliasDenotedType(identity, readerFilePath: self.job.path) 'genericAlias'
+				return denoted
 			end 'genericAlias'
 
 			// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one — so
@@ -6406,16 +6400,9 @@ extension Parser
 	// again only so that the three doors share ONE predicate: a fourth clause added here reaches every door
 	// that resolves a written name, which is exactly what the arm order could not guarantee.
 	// ⭐⭐ **DOES THIS WRITTEN SPELLING DENOTE THE `__ManagedMemory` BUFFER? — THE LITERAL NAME, A FILE-SCOPE
-	// ALIAS, *OR* AN INNER ONE.** The third is what `stdlib/Character.maxon:172` needs: its
-	// `typealias ByteMemory = __ManagedMemory with Byte` is declared INSIDE `type Character`, so the registry
-	// holds it under `Character.ByteMemory` while the call site writes the bare `ByteMemory`, and a lookup of
-	// the bare name misses. `ByteMemory.create(1, 1)` then routed to `parseArrayStaticCall` and met
-	// `E2010 Expected ')' but got '1'` against `Array.create()`'s no arguments.
-	//
-	// ⚠ **IT QUALIFIES THE SAME WAY `parseTypeReference` DOES, AND THAT IS THE WHOLE POINT** — one
-	// construction of an inner alias's registry key (`joinQualifiedName(enclosingType, member:)`), gated by
-	// the one predicate that says a bare name IS an inner alias here. A second spelling of that join is how a
-	// type position and a call position come to disagree about what one written word denotes.
+	// ALIAS, *OR* AN INNER ONE.** The third is what `type Character` needs: its
+	// `typealias ByteMemory = __ManagedMemory with Byte` is held under `Character.ByteMemory` while a
+	// parameter writes the bare `ByteMemory`, and a lookup of the bare name misses.
 	// ⚠ **THE INNER-ALIAS PROBE IS GATED ON `enclosingType` BEING NON-EMPTY, NOT ON `namesInnerAliasHere`.**
 	// The bare probe comes first because a file-scope alias is the common case; the join is skipped at file
 	// scope, where `enclosingType` is empty and the key it would build cannot exist. `namesInnerAliasHere`
@@ -6497,34 +6484,26 @@ extension Parser
 		return self.namesAnEnclosingInnerAlias(name)
 	end 'namesInnerAliasHere'
 
-	// ⭐⭐ **THE WHOLE-PROGRAM `genericAliases` KEY A WRITTEN BASE NAME DENOTES — the one home of "which
-	// registration is this spelling?" for the static-call doors.** A file-scope generic alias is keyed
-	// under its own name (`IntBox`); an INNER one under the enclosing type's, base-qualified
-	// (`Plain.IntPair`) — `recordScannedType` and `foldExtensionDeclarationInto` both re-key it through
-	// `qualifiedInnerGenericAlias`, because a bare member collides with another type's same-named alias.
-	// A caller here holds the name the AUTHOR wrote, which is the bare member for both.
-	//
-	// ⛔ **ASKING THE BARE NAME IS A SILENT WRONG ANSWER, NOT A REFUSAL.** `parseQualifiedCall` makes
-	// four alias-driven decisions and every one of them misses for an inner alias over a USER generic
-	// base, so `IntPair.create(9)` would mangle onto a callee no file declares and `mintCallResult` would type
-	// the value `unresolved`. The program would then be refused for a field access on `unknown` — one door
-	// past E3076's own advice to write exactly that call. That program is legal and exits 9.
-	//
-	// A name that is not an inner alias here, and one the declaration sweep did not key, are both handed back
-	// unchanged — the callers' file-scope reading, and the tolerant sweep's `no` for every name.
-	function genericAliasKeyFor(name immutable ByteArray) returns immutable ByteArray
-		if not self.namesInnerAliasHere(name) 'notInnerAlias'
-			return name
-		end 'notInnerAlias'
+	function writtenGenericAliasInstance(written immutable ByteArray, readerFilePath FilePath) returns GenericInstanceId throws AbsentError
+		return try self.genericAliasInstanceAtKey(self.innerAliasKeyOrName(written), readerFilePath: readerFilePath)
+	end 'writtenGenericAliasInstance'
 
-		let qualified = self.innerAliasKey(name)
+	function namesAGenericAlias(written immutable ByteArray, readerFilePath FilePath) returns bool
+		try self.writtenGenericAliasInstance(written, readerFilePath: readerFilePath) otherwise return false
+		return true
+	end 'namesAGenericAlias'
 
-		if not self.signatures.isGenericAliasInAnyFile(qualified) 'notKeyedWholeProgram'
-			return name
-		end 'notKeyedWholeProgram'
+	function genericAliasInstanceAtKey(key ByteArray, readerFilePath FilePath) returns GenericInstanceId throws AbsentError
+		if not self.signatures.isAliasOfFormFor(key, readerFilePath: readerFilePath, wanted: FormAliasKind.generic) 'namesNoInstance'
+			throw AbsentError.absent
+		end 'namesNoInstance'
 
-		return qualified
-	end 'genericAliasKeyFor'
+		return self.signatures.genericAliasInstanceFrom(key, readerFilePath: readerFilePath)
+	end 'genericAliasInstanceAtKey'
+
+	function genericAliasDenotedType(key ByteArray, readerFilePath FilePath) returns MaxonType throws AbsentError
+		return self.signatures.instanceDenotedType(try self.genericAliasInstanceAtKey(key, readerFilePath: readerFilePath), into: self.artifact.typeNames)
+	end 'genericAliasDenotedType'
 
 	// ⭐ **RESOLVE A `named` FUNCTION-ALIAS REFERENCE TO `function`** — the read-side twin of
 	// `resolveNamedStruct`, for the types the WHOLE-PROGRAM signature index hands back as `named` because
@@ -6550,24 +6529,6 @@ extension Parser
 
 		return try denotedAliasForm(self.signatures, name: name, readerFilePath: scopeFilePath, into: self.artifact.typeNames) otherwise t
 	end 'resolveNamedAlias'
-
-	// ⭐ **WHAT A GENERIC-ALIAS NAME DENOTES IN A TYPE POSITION** — the instance it was bound to, resolved
-	// through the one door that decides whether that instance is a BOX or an EXISTENTIAL
-	// (`instanceDenotedType`). Three type-resolution arms spelled this same two-call join — the inner-alias
-	// arm, the file-scope alias arm and the sweep repair — which is three chances for one of them to keep
-	// reading a `genericInstance` after the split moved.
-	//
-	// ⚠ **THE `isGenericAlias` GATE STAYS AT EACH ARM RATHER THAN MOVING IN HERE, AND THAT IS A MEASURED
-	// CHOICE.** This runs on the path `parseTypeReference` takes for every type annotation in the program; a
-	// door answering "or nothing" would return a union, and a union return is heap-boxed even for its miss
-	// case — the same +24,396 allocations at step 5 that `isInterfaceName` is spelled the narrow way for, one
-	// arm above. The gate is a bool and costs nothing; only the JOIN is shared.
-	//
-	// ⚠ `readerFilePath` is the file whose gate admitted the name. Resolving in a different file than the
-	// gate asked about hands back a homonym's instance on a legal program.
-	function genericAliasDenotedType(name ByteArray, readerFilePath FilePath) returns MaxonType
-		return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: readerFilePath), into: self.artifact.typeNames)
-	end 'genericAliasDenotedType'
 
 	// During the SWEEP only one answer about a tuple alias is knowable: a declaration already read in the
 	// reader's own file is FINAL, because a second same-file declaration of the name is E3061. Any other

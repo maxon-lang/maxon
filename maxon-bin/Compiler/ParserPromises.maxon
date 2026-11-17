@@ -4456,8 +4456,8 @@ extension Parser
 	// to disagree about which qualifier belongs to the compiler, and the failure would be silent in the worst
 	// direction: a statement accepted here and then rejected as an unknown intrinsic three functions later.
 	//
-	// ⚠⚠ **THE NAME IS BUILT BY THE SAME EXPRESSION `parseQualifiedCall` USES — `genericAliasKeyFor` AND
-	// `denotedGenericBaseName`, BOTH — and neither call is decoration.** Deriving the callee here from the
+	// ⚠⚠ **THE NAME IS BUILT BY THE SAME EXPRESSION `parseQualifiedCall` USES — `innerAliasKeyOrName` AND
+	// `denotedStaticCallee`, BOTH — and neither call is decoration.** Deriving the callee here from the
 	// BARE base token agrees with the real parse only for as long as those two are jointly the identity on
 	// every name that can reach this shape, and that premise does not hold: `parseQualifiedCall` reads an
 	// INNER alias under its base-qualified key, so a door that skipped it would make one written name mean
@@ -4503,22 +4503,16 @@ extension Parser
 		end 'statFree'
 
 		// The base name is resolved ONCE and threaded to both readings below — the callee mangle and the
-		// declared-type claim. `denotedGenericBaseName` is a registry lookup that can allocate, and two calls
+		// declared-type claim. `denotedStaticCallee` is a registry lookup that can allocate, and two calls
 		// on one token are two derivations of one name, which is the drift this predicate's header is about.
 		//
-		// ⛔ **THROUGH `genericAliasKeyFor`, AND THE HEADER'S OWN PREMISE IS WHY.** That premise —
-		// *"agrees with the real parse only for as long as `denotedGenericBaseName` is the identity on every name
-		// that can reach this shape … exactly the kind of premise that quietly stops holding"* — does not hold
-		// once `parseQualifiedCall` resolves an INNER alias under its base-qualified key. Reading
-		// the bare member here would make THIS door the fifth reader of "which registration does this spelling
-		// denote", and the two doors would then disagree about one written name. MEASURED on one binary: with
-		// `typealias IntPair = Pair with ExitCode` at FILE scope, `IntPair.shout()` as a statement compiled and
-		// ran; with the identical alias declared INSIDE the calling type it was
-		// `E2015: Unsupported: identifier statement`, while `let p = IntPair.create(9)` one line below resolved
-		// perfectly — a call accepted at one door and refused at the other, which is the exact failure this
-		// predicate's header names. `staticCallClaimsBase` asks the same key for the same reason.
+		// ⛔ **THROUGH `innerAliasKeyOrName`, AND THE HEADER'S OWN PREMISE IS WHY.** `parseQualifiedCall`
+		// resolves an INNER alias under its base-qualified key, so reading the bare member here would refuse an
+		// inner `IntPair.shout()` statement as `E2015: Unsupported: identifier statement` while
+		// `let p = IntPair.create(9)` resolves — a call accepted at one door and refused at the other.
+		// `staticCallClaimsBase` asks the same key for the same reason.
 		let baseTok = try self.typeBaseTokenAt(index) otherwise panic("qualifiedStaticCallsAt: typeBaseTokenAt refused the identifier at {index}, and it refuses only a base that is not a name")
-		let aliasName = self.genericAliasKeyFor(baseTok.value)
+		let aliasName = self.innerAliasKeyOrName(baseTok.value)
 		let callee = self.denotedStaticCallee(aliasName, member: self.tokenAt(index + 2).value, nameReader: self.job.path)
 
 		// ⭐ **THE COMPILER'S QUALIFIED FAMILIES — `__Builtins`, `__Raw`, `__DebugStream` — ARE CLAIMED WHOLE.** Their

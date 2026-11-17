@@ -456,3 +456,125 @@ end 'main'
 ```stdout
 3 4 5 6 count=4
 ```
+
+### `from` reaches an alias a type body declares
+
+An alias a type body or an extension body declares is named by its written name inside that body, and
+`<Alias> from [...]` builds through it there as it does through a top-level alias.
+
+<!-- test: an-alias-declared-in-a-generic-type-takes-from-an-array-literal -->
+The alias is over the type's own parameter, so it exists only per instantiation of `Bag`.
+```maxon
+type Bag uses T
+	typealias Items = Array with T
+
+	export var first as T
+	export var second as T
+
+	static function create(first T, second T) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+
+	function later() returns T
+		let items = Items from [self.first, self.second]
+
+		return try items.get(1) otherwise self.first
+	end 'later'
+end 'Bag'
+
+typealias TallyBag = Bag with Tally
+
+function main() returns ExitCode
+	let bag = TallyBag.create(3, second: 4)
+	print("{bag.later()}\n")
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: set-list-and-fixed-array-aliases-declared-in-a-generic-type-take-from -->
+```maxon
+type Shelf uses T
+	typealias Letters = Set with Character
+	typealias Readings = List with Reading
+	typealias ReadingTriple = FixedArray with 3 Reading
+
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function show()
+		let vowels = Letters from ['a', 'e', 'i']
+		let readings = Readings from [30, 10, 20]
+		let triple = ReadingTriple from [7, 8, 9]
+
+		print("{vowels.count()} {readings.count()} {triple.count()}\n")
+	end 'show'
+end 'Shelf'
+
+typealias ReadingShelf = Shelf with Reading
+
+function main() returns ExitCode
+	let shelf = ReadingShelf.create(1)
+	shelf.show()
+	return 0
+end 'main'
+typealias Reading = int(0 to 1000)
+```
+```exitcode
+0
+```
+```stdout
+3 3 3
+```
+
+<!-- test: an-alias-declared-in-an-extension-body-takes-from-an-array-literal -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+interface Tagged
+	function tag() returns ExitCode
+end 'Tagged'
+
+export extension Tagged
+	typealias TagArray = Array with ExitCode
+
+	function tags() returns Count
+		let result = TagArray from [self.tag(), self.tag()]
+
+		return result.count()
+	end 'tags'
+end 'Tagged'
+
+type Box implements Tagged
+	export var v as ExitCode
+
+	static function create() returns Self
+		return Self{v: 2}
+	end 'create'
+
+	function tag() returns ExitCode
+		return self.v
+	end 'tag'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	print("{b.tags()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```

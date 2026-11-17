@@ -925,7 +925,7 @@ extension Parser
 		match kind 'kind'
 			rangedAlias then return MaxonType.named(self.artifact.typeNames.intern(self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)))
 			functionAlias then return MaxonType.function(self.artifact.typeNames.intern(self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)))
-			genericAlias then return self.genericAliasDenotedType(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath)
+			genericAlias then return try self.genericAliasDenotedType(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath) otherwise panic("namespaceQualifiedType: '{String.from(name)}' resolved to a generic-alias declaration in '{declFilePath.toString()}', and that file reads no generic alias under its identity")
 			tupleAlias then return self.signatures.tupleAliasDenotedType(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath, into: self.artifact.typeNames)
 			structType or
 			enumType or
@@ -1018,16 +1018,13 @@ extension Parser
 		end 'nominal'
 	end 'recordHiddenNominal'
 
-	function recordNominalOfSpelledAlias(written ByteArray)
+	function recordNominalOfSpelledAlias(written immutable ByteArray)
 		if not self.signatures.allFilesFolded 'theIndexIsStillBeingBuilt'
 			return
 		end 'theIndexIsStillBeingBuilt'
 
-		if not self.signatures.isAliasOfFormFor(written, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'noInstanceToDenote'
-			return
-		end 'noInstanceToDenote'
-
-		self.artifact.hiddenTypeDeclarations.push(self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(written, readerFilePath: self.job.path)))
+		let instance = try self.writtenGenericAliasInstance(written, readerFilePath: self.job.path) otherwise return
+		self.artifact.hiddenTypeDeclarations.push(self.signatures.genericInstanceBaseName(instance))
 	end 'recordNominalOfSpelledAlias'
 
 	function nominalOfHiddenChain(declaration ChainType) returns HiddenNominal
@@ -9253,11 +9250,7 @@ extension Parser
 		// that reaches this literal. That program is being refused for its real fault a moment later; this arm
 		// exists so the refusal it gets HERE is not E3076's: that one prescribes a static factory, and the
 		// factory an unkeyed alias would need (`{alias}.create()`) has nothing to resolve to either.
-		if not self.signatures.isGenericAliasInAnyFile(qualified) 'notKeyedWholeProgram'
-			throw SourceParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, an inner typealias of `{String.from(self.enclosingTypeName())}` that the whole-program declaration sweep did not key — so there is no container instance for the literal to build. A sweep stops early at a member it cannot read, so the declaration this one shares a body with is the fault to look for", line: aliasTok.line, column: aliasTok.column)
-		end 'notKeyedWholeProgram'
-
-		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.job.path)
+		let giid = try self.genericAliasInstanceAtKey(qualified, readerFilePath: self.job.path) otherwise throw SourceParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, an inner typealias of `{String.from(self.enclosingTypeName())}` that the whole-program declaration sweep did not key — so there is no container instance for the literal to build. A sweep stops early at a member it cannot read, so the declaration this one shares a body with is the fault to look for", line: aliasTok.line, column: aliasTok.column)
 
 		if self.defersOnRefusedInstance(giid) 'aRefusedInstance'
 			try self.absorbStructLiteralFields(func)
@@ -9269,7 +9262,7 @@ extension Parser
 		// deliberately does not reach. `typealias IntPair = Pair with Count` denotes `Pair`, whose invariants
 		// are `Pair`'s own to establish — writing its literal here is exactly what the restriction is for, and
 		// the static factory it prescribes IS WRITABLE HERE (`IntPair.create(…)`): it resolves through
-		// `genericAliasKeyFor` and is pinned by `user-generic-inner-alias-create-is-the-cure`.
+		// `innerAliasKeyOrName` and is pinned by `user-generic-inner-alias-create-is-the-cure`.
 		// (The oracle ACCEPTS it, which voids its own E3076 for
 		// any type willing to declare an alias; that divergence is deliberate — and it is why no oracle pin
 		// covers this anchor.) Anchored inside the brace, which is where `requireConstructible` anchors the
