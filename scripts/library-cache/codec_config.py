@@ -109,6 +109,27 @@ BUILTIN_BOOL = FIELD_BOOL_TYPE
 DIGEST_TYPE = "HashDigest"
 
 
+BYTE_ORDER = "bytes"
+VALUE_ORDER = "value"
+
+# The order a generated writer writes each Map or Set key type in; it must match the order the
+# compiler's own table walks use for that type, whose rule is stated at `sortNamesInByteOrder`.
+KEY_ORDERINGS = {
+    BUILTIN_BYTES: BYTE_ORDER,
+    BUILTIN_STRING: VALUE_ORDER,
+    "ElementIndex": VALUE_ORDER,
+    "ValueId": VALUE_ORDER,
+    "ParamCount": VALUE_ORDER,
+    "TypeNameId": VALUE_ORDER,
+    "GenericInstanceId": VALUE_ORDER,
+    "TypeParamId": VALUE_ORDER,
+    DIGEST_TYPE: VALUE_ORDER,
+}
+
+BYTE_ORDER_KEYS = "NameRoster"
+BYTE_ORDER_SORT = "sortNamesInByteOrder"
+VALUE_ORDER_KEYS_SUFFIX = "WriteOrder"
+
 ARTIFACT_REWIND_TYPE = "FileParseArtifact"
 
 ARTIFACT_MARK_TYPE = "ArtifactMark"

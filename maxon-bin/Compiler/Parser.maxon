@@ -2639,7 +2639,15 @@ export typealias UsedTypeNameSet = Set with ByteArray
 function cacheWriteUsedTypeNameSet(writer LibraryCacheWriter, value UsedTypeNameSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	sortNamesInByteOrder(ordered)
+
+	for item in ordered 'eachItem'
 		writer.bytes(item)
 	end 'eachItem'
 end 'cacheWriteUsedTypeNameSet'

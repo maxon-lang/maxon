@@ -190,7 +190,9 @@ fold round of that compile is served the parses an earlier round encoded.
 The codecs are generated into the compiler's sources by `scripts/library-cache/generate-codecs.py`, between
 `// @generated library-cache` markers; the hand-written ones live in `LibraryCacheCodecs.maxon`,
 `LibraryCacheFormat.maxon` and `ContentHash.maxon`. A cached record that gains a field stops compiling until
-the generator runs again.
+the generator runs again. A generated writer writes a `Map` or `Set` in the order of its keys, so an entry is
+a function of the library and the stored seed alone; the generator takes each key type's order from
+`KEY_ORDERINGS` in `scripts/library-cache/codec_config.py` and refuses a key type missing from that table.
 
 The verdict entry holds the library half of E3219 for one library state. It is read and written only when
 the program's names do not overlap the library's (`LibraryParseSharing.shareable`); otherwise the

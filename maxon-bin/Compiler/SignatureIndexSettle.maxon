@@ -278,8 +278,13 @@ extension ProgramSignatures
 
 		for name in names 'eachNameInTheFootprint'
 			footprint.nameIds.push(name)
-			footprint.nameBytes.push(self.nameOfId(name))
 		end 'eachNameInTheFootprint'
+
+		footprint.nameIds.sortUnstable()
+
+		for name in footprint.nameIds 'eachNameInIdOrder'
+			footprint.nameBytes.push(self.nameOfId(name))
+		end 'eachNameInIdOrder'
 
 		let declared = InterfaceIndexArray.create(dispatchedInterfaces.count(), zeroed: false)
 
@@ -418,8 +423,15 @@ extension ProgramSignatures
 
 	export function libraryTypeNamesTheAuthorContests() returns NameRoster
 		let contested = NameRoster.create(0)
+		let authorTypes = NameRoster.create(self.settledDeclarations().userDeclaredTypeNames.count(), zeroed: false)
 
-		for name in self.settledDeclarations().userDeclaredTypeNames 'eachAuthorType'
+		for listed in self.settledDeclarations().userDeclaredTypeNames 'listAuthorTypes'
+			authorTypes.push(listed)
+		end 'listAuthorTypes'
+
+		sortNamesInByteOrder(authorTypes)
+
+		for name in authorTypes 'eachAuthorType'
 			if self.settledDeclarations().stdlibDeclaredTypeNames.contains(name) and self.authorContestsTheLibraryName(name) 'theLibraryDeclaresIt'
 				contested.push(name)
 			end 'theLibraryDeclaresIt'
@@ -435,11 +447,19 @@ extension ProgramSignatures
 	end 'declTokensOf'
 
 	export function declTokenStreamPaths() returns FilePathArray
-		let paths = FilePathArray.create(self.settledDeclarations().declTokenStreams.count(), zeroed: false)
+		let spellings = StringArray.create(self.settledDeclarations().declTokenStreams.count(), zeroed: false)
 
-		for (path, _) in self.settledDeclarations().declTokenStreams 'eachStream'
+		for (listed, _) in self.settledDeclarations().declTokenStreams 'listSpellings'
+			spellings.push(listed)
+		end 'listSpellings'
+
+		spellings.sortUnstable()
+
+		let paths = FilePathArray.create(spellings.count(), zeroed: false)
+
+		for path in spellings 'eachSpelling'
 			paths.push(try FilePath.from(path) otherwise panic("ProgramSignatures.declTokenStreamPaths: '{path}' keys a token stream and is not a path, and every key is spelled from the path of the file the fold kept"))
-		end 'eachStream'
+		end 'eachSpelling'
 
 		return paths
 	end 'declTokenStreamPaths'
@@ -607,7 +627,7 @@ extension ProgramSignatures
 			return false
 		end 'nothingIsContested'
 
-		contested.sortBy(function(left immutable ByteArray, right immutable ByteArray) gives compareBytesOrdinally(left, right: right))
+		sortNamesInByteOrder(contested)
 		self.attributeHashEventsTo(HashEventSource.library)
 
 		for name in contested 'eachContestedName'
@@ -856,23 +876,49 @@ extension ProgramSignatures
 	end 'mintAuthorName'
 
 	function noteAuthorMintSpellings(spellings StdlibShadowSpellingArray, spelled WrittenMintSet)
-		for (name, claims) in self.mainThreadSettled().contestedNominalClaims 'eachContestedNominal'
-			for claim in claims 'eachClaim'
-				if not isTypeAliasDecl(claim.kind) 'aNominalDeclaration'
-					self.noteAuthorMintSpelling(spellings, spelled: spelled, name: name, declFilePath: claim.declFilePath)
-				end 'aNominalDeclaration'
-			end 'eachClaim'
-		end 'eachContestedNominal'
+		if self.mainThreadSettled().contestedNominalClaims.count() > 0 'aNominalIsContested'
+			let nominals = NameRoster.create(self.mainThreadSettled().contestedNominalClaims.count(), zeroed: false)
 
-		for (name, sites) in self.mainThreadSettled().topLevelBindingSites 'eachBindingName'
+			for (listed, _) in self.mainThreadSettled().contestedNominalClaims 'listNominals'
+				nominals.push(listed)
+			end 'listNominals'
+
+			sortNamesInByteOrder(nominals)
+
+			for name in nominals 'eachNominalInNameOrder'
+				let claims = try self.mainThreadSettled().contestedNominalClaims.get(name) otherwise panic("ProgramSignatures.noteAuthorMintSpellings: `{String.from(name)}` was collected from `contestedNominalClaims`, which nothing has written since")
+
+				for claim in claims 'eachClaim'
+					if not isTypeAliasDecl(claim.kind) 'aNominalDeclaration'
+						self.noteAuthorMintSpelling(spellings, spelled: spelled, name: name, declFilePath: claim.declFilePath)
+					end 'aNominalDeclaration'
+				end 'eachClaim'
+			end 'eachNominalInNameOrder'
+		end 'aNominalIsContested'
+
+		if self.settledDeclarations().contestedBindingNames.count() == 0 and self.settledDeclarations().libraryContestedBindingNames.count() == 0 'noBindingIsContested'
+			return
+		end 'noBindingIsContested'
+
+		let bindings = NameRoster.create(self.mainThreadSettled().topLevelBindingSites.count(), zeroed: false)
+
+		for (listed, _) in self.mainThreadSettled().topLevelBindingSites 'listBindings'
+			bindings.push(listed)
+		end 'listBindings'
+
+		sortNamesInByteOrder(bindings)
+
+		for name in bindings 'eachBindingInNameOrder'
 			if not self.bindingNameIsContested(name) 'uncontested'
 				continue
 			end 'uncontested'
 
+			let sites = try self.mainThreadSettled().topLevelBindingSites.get(name) otherwise panic("ProgramSignatures.noteAuthorMintSpellings: `{String.from(name)}` was collected from `topLevelBindingSites`, which nothing has written since")
+
 			for site in sites 'eachSite'
 				self.noteAuthorMintSpelling(spellings, spelled: spelled, name: name, declFilePath: site.declFilePath)
 			end 'eachSite'
-		end 'eachBindingName'
+		end 'eachBindingInNameOrder'
 	end 'noteAuthorMintSpellings'
 
 	function bindingNameIsContested(name ByteArray) returns bool
@@ -893,8 +939,17 @@ extension ProgramSignatures
 		end 'eachSettledSpelling'
 
 		let spelled = WrittenMintSet.create()
+		let functionNames = NameRoster.create(self.settledDeclarations().contestedFreeFunctions.count(), zeroed: false)
 
-		for (name, directories) in self.settledDeclarations().contestedFreeFunctions 'eachContestedFunction'
+		for (listed, _) in self.settledDeclarations().contestedFreeFunctions 'listFunctionNames'
+			functionNames.push(listed)
+		end 'listFunctionNames'
+
+		sortNamesInByteOrder(functionNames)
+
+		for name in functionNames 'eachFunctionInNameOrder'
+			let directories = try self.settledDeclarations().contestedFreeFunctions.get(name) otherwise panic("ProgramSignatures.settleContestedFunctionSpellings: `{String.from(name)}` was collected from `contestedFreeFunctions`, which nothing has written since")
+
 			for directory in directories 'eachDirectory'
 				if directory.isEmpty() 'theRootKeepsTheBareName'
 					continue
@@ -902,7 +957,7 @@ extension ProgramSignatures
 
 				self.noteMintedSpelling(spellings, spelled: spelled, name: name, minted: freeFunctionRegistrationName(name, moduleDirectory: directory), namespace: namespaceForModuleDirectory(directory))
 			end 'eachDirectory'
-		end 'eachContestedFunction'
+		end 'eachFunctionInNameOrder'
 
 		let ownDeclarations = self.mainThreadSettled()
 		ownDeclarations.shadowRoster = ShadowSpellingRoster.of(spellings)
@@ -5942,7 +5997,9 @@ extension ProgramSignatures
 	export function settleFunctionBackedEnumCases()
 		let settled = EnumLayoutArray.create(0)
 
-		for (_, layout) in self.mainThreadSettled().enumTypes 'eachEnum'
+		for name in self.declaredEnumNames() 'eachEnum'
+			let layout = try self.mainThreadSettled().enumTypes.get(name) otherwise panic("ProgramSignatures.settleFunctionBackedEnumCases: `{String.from(name)}` was listed from `enumTypes`, which nothing has written since")
+
 			if layout.backing != EnumBacking.functionRef 'notFunctionBacked'
 				continue
 			end 'notFunctionBacked'
@@ -8123,7 +8180,20 @@ extension ProgramSignatures
 	end 'initializerClosureHostOf'
 
 	export function noteInitializerClosureShapes(shapes FunctionValueShapeMap, from TypeNameInterner)
-		for (name, shape) in shapes 'eachClosure'
+		if shapes.count() == 0 'noClosureWasShaped'
+			return
+		end 'noClosureWasShaped'
+
+		let names = NameRoster.create(shapes.count(), zeroed: false)
+
+		for (listed, _) in shapes 'listNames'
+			names.push(listed)
+		end 'listNames'
+
+		sortNamesInByteOrder(names)
+
+		for name in names 'eachClosure'
+			let shape = try shapes.get(name) otherwise panic("ProgramSignatures.noteInitializerClosureShapes: `{String.from(name)}` was listed from the shapes, which nothing has written since")
 			let paramTypes = MaxonTypeArray.create(shape.paramTypes.count(), zeroed: false)
 
 			for paramType in shape.paramTypes 'eachParam'
@@ -10006,11 +10076,12 @@ extension ProgramSignatures
 			end 'aNamedInterface'
 		end 'eachInterfaceSite'
 
-		for (name, _) in self.structSlots 'eachStruct'
+		for name in self.structSlotNamesInByteOrder() 'eachStruct'
 			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.structType)
 		end 'eachStruct'
 
-		for (name, layout) in self.settledDeclarations().enumTypes 'eachEnumOrUnion'
+		for name in self.declaredEnumNames() 'eachEnumOrUnion'
+			let layout = try self.settledDeclarations().enumTypes.get(name) otherwise panic("ProgramSignatures.settleCrossKindContests: `{String.from(name)}` was listed from `enumTypes`, which nothing has written since")
 			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.unionType if layout.isUnion else TypeDeclKind.enumType)
 		end 'eachEnumOrUnion'
 
@@ -10036,11 +10107,21 @@ extension ProgramSignatures
 			genericAliasNames.push(entry.aliasName)
 		end 'eachGenericAliasName'
 
+		sortNamesInByteOrder(genericAliasNames)
+
 		for aliasName in genericAliasNames 'eachGenericAlias'
 			self.noteCrossKindContest(aliasName, offeredAs: TypeDeclKind.genericAlias)
 		end 'eachGenericAlias'
 
-		for (name, _) in self.tupleAliases 'eachTupleAlias'
+		let tupleAliasNames = NameRoster.create(self.tupleAliases.count(), zeroed: false)
+
+		for (listed, _) in self.tupleAliases 'listTupleAliasNames'
+			tupleAliasNames.push(listed)
+		end 'listTupleAliasNames'
+
+		sortNamesInByteOrder(tupleAliasNames)
+
+		for name in tupleAliasNames 'eachTupleAlias'
 			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.tupleAlias)
 		end 'eachTupleAlias'
 	end 'settleCrossKindContests'
@@ -10114,8 +10195,10 @@ extension ProgramSignatures
 		let contestedAliases = self.settledDeclarations().typeAliases.contestedDeclarations(aliasKey)
 
 		if contestedAliases.count() > 0 'severalFilesDeclareTheRangedAlias'
+			let firstDeclaringFile = claims.count() as ElementIndex
+
 			for (_, alias) in contestedAliases 'eachDeclaringFile'
-				claims.push(self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+				insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
 			end 'eachDeclaringFile'
 		end 'severalFilesDeclareTheRangedAlias' else 'atMostOneFileDoes'
 			match self.settledDeclarations().typeAliases.declarationInAnyFile(aliasKey) 'theSoleRangedAlias'
@@ -10127,8 +10210,10 @@ extension ProgramSignatures
 		let contestedFunctionAliases = self.settledDeclarations().functionTypeAliases.contestedDeclarations(aliasKey)
 
 		if contestedFunctionAliases.count() > 0 'severalFilesDeclareTheFunctionAlias'
+			let firstDeclaringFile = claims.count() as ElementIndex
+
 			for (_, alias) in contestedFunctionAliases 'eachDeclaringFile'
-				claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+				insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
 			end 'eachDeclaringFile'
 		end 'severalFilesDeclareTheFunctionAlias' else 'atMostOneFileDoes'
 			match self.functionAliasInAnyFile(aliasKey) 'theSoleFunctionAlias'
@@ -10144,8 +10229,10 @@ extension ProgramSignatures
 		end 'aGenericAlias'
 
 		if let byFile = try self.claimantsOf(aliasKey) 'severalFilesDeclareTheTupleAlias'
+			let firstDeclaringFile = claims.count() as ElementIndex
+
 			for (_, tuple) in byFile 'eachDeclaringFile'
-				claims.push(tuple.claim)
+				insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: tuple.claim)
 			end 'eachDeclaringFile'
 		end 'severalFilesDeclareTheTupleAlias' else 'atMostOneFileDoes'
 			if let tuple = try self.aliasNamed(aliasKey) 'aTupleAlias'
@@ -11963,9 +12050,11 @@ extension ProgramSignatures
 
 		let extensionNames = NameRoster.create(self.settledDeclarations().extensionDeclaredConformances.count(), zeroed: false)
 
-		for (typeName, _) in self.settledDeclarations().extensionDeclaredConformances 'eachExtensionConformer'
-			extensionNames.push(typeName)
-		end 'eachExtensionConformer'
+		for (listed, _) in self.settledDeclarations().extensionDeclaredConformances 'listExtensionNames'
+			extensionNames.push(listed)
+		end 'listExtensionNames'
+
+		sortNamesInByteOrder(extensionNames)
 
 		let ownDeclarations = self.mainThreadSettled()
 		ownDeclarations.conformerIndex.fileExtensionConformers(groupConformersByInterface(extensionNames, swept: self.settledDeclarations().extensionDeclaredConformances, interfaces: self.settledDeclarations().interfaces))
@@ -11975,9 +12064,11 @@ extension ProgramSignatures
 	function declaredEnumNames() returns NameRoster
 		let enumNames = NameRoster.create(self.settledDeclarations().enumTypes.count(), zeroed: false)
 
-		for (enumName, _) in self.settledDeclarations().enumTypes 'eachDeclaredEnum'
-			enumNames.push(enumName)
-		end 'eachDeclaredEnum'
+		for (listed, _) in self.settledDeclarations().enumTypes 'listEnumNames'
+			enumNames.push(listed)
+		end 'listEnumNames'
+
+		sortNamesInByteOrder(enumNames)
 
 		return enumNames
 	end 'declaredEnumNames'
@@ -12059,3 +12150,19 @@ extension ProgramSignatures
 		return mixed
 	end 'mixRegionBounds'
 end 'ProgramSignatures'
+
+function insertInDeclaringFileOrder(claims TypeNameClaimArray, segmentStart ElementIndex, claim TypeNameClaim)
+	var at = claims.count() as ElementIndex
+
+	while at > segmentStart 'findItsPlace'
+		let before = try claims.get(at - 1) otherwise panic("insertInDeclaringFileOrder: claims.get OOB at {at - 1} below count {claims.count()}")
+
+		if comparePathSpelling(before.declFilePath, right: claim.declFilePath) != Ordering.greaterThan 'inItsPlace'
+			break
+		end 'inItsPlace'
+
+		at = at - 1
+	end 'findItsPlace'
+
+	claims.insert(at, value: claim)
+end 'insertInDeclaringFileOrder'

@@ -1548,7 +1548,16 @@ export typealias StdlibShadowRenameMap = Map with (ByteArray, immutable ByteArra
 function cacheWriteStdlibShadowRenameMap(writer LibraryCacheWriter, value StdlibShadowRenameMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteStdlibShadowRenameMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		writer.bytes(entry)
 	end 'eachEntry'
@@ -1575,7 +1584,16 @@ export typealias IrInterfaceEntryMap = Map with (ByteArray, IrInterface)
 function cacheWriteIrInterfaceEntryMap(writer LibraryCacheWriter, value IrInterfaceEntryMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteIrInterfaceEntryMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -1602,7 +1620,16 @@ export typealias SynthesizedNominalMap = Map with (ByteArray, immutable ByteArra
 function cacheWriteSynthesizedNominalMap(writer LibraryCacheWriter, value SynthesizedNominalMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteSynthesizedNominalMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		writer.bytes(entry)
 	end 'eachEntry'
@@ -2298,7 +2325,15 @@ export typealias InterfaceNameSet = Set with ByteArray
 export function cacheWriteInterfaceNameSet(writer LibraryCacheWriter, value InterfaceNameSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	sortNamesInByteOrder(ordered)
+
+	for item in ordered 'eachItem'
 		writer.bytes(item)
 	end 'eachItem'
 end 'cacheWriteInterfaceNameSet'

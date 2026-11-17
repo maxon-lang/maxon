@@ -70,6 +70,7 @@ class Emitter:
         self.tree = tree
         self.touched_aliases = set()
         self.frozen_records = set()
+        self.value_ordered_keys = set()
 
     def resolve(self, type_text, depth=0):
         text = type_text.strip()
@@ -295,11 +296,8 @@ class Emitter:
         out.append("\twriter.unsigned(value.count() as CacheUnsigned)")
         out.append("")
 
-        if node.kind == "map":
-            out.append("\tfor (key, entry) in value 'eachEntry'")
-            out.append(self.write_statement(self.resolve(node.key), "key", 2))
-            out.append(self.write_statement(self.resolve(node.value), "entry", 2))
-            out.append("\tend 'eachEntry'")
+        if node.kind in ("map", "set"):
+            out += self.ordered_table_writer(node, write_name)
         else:
             out.append("\tfor item in value 'eachItem'")
             out.append(self.write_statement(self.resolve(node.elem), "item", 2))
@@ -313,6 +311,64 @@ class Emitter:
         out.append("")
 
         return out + self.alias_reader(name, reader_visibility, frozen=False)
+
+    def ordered_table_writer(self, node, write_name):
+        is_map = node.kind == "map"
+        member = node.key if is_map else node.elem
+        column, sort = self.write_ordering(member, write_name)
+        out = ["\tlet ordered = %s.create(value.count(), zeroed: false)" % column, ""]
+
+        if is_map:
+            out.append("\tfor (key, _) in value 'eachKey'")
+            out.append("\t\tordered.push(key)")
+            out.append("\tend 'eachKey'")
+        else:
+            out.append("\tfor member in value 'eachMember'")
+            out.append("\t\tordered.push(member)")
+            out.append("\tend 'eachMember'")
+
+        out.append("")
+        out.append("\t" + sort)
+        out.append("")
+
+        if is_map:
+            out.append("\tfor key in ordered 'eachEntry'")
+            out.append("\t\tlet entry = try value.get(key) otherwise panic(\"%s: a key collected from the map is not in it\")" % write_name)
+            out.append(self.write_statement(self.resolve(node.key), "key", 2))
+            out.append(self.write_statement(self.resolve(node.value), "entry", 2))
+            out.append("\tend 'eachEntry'")
+        else:
+            out.append("\tfor item in ordered 'eachItem'")
+            out.append(self.write_statement(self.resolve(node.elem), "item", 2))
+            out.append("\tend 'eachItem'")
+
+        return out
+
+    def write_ordering(self, member, write_name):
+        key = re.sub(r"^" + IMMUTABLE_QUALIFIER + r"\s+", "", member.strip())
+        ordering = config.KEY_ORDERINGS.get(key)
+
+        if ordering is None:
+            raise Unresolved("%s writes a table keyed by %s, and KEY_ORDERINGS names no write order for it" % (write_name, key))
+
+        if ordering == config.BYTE_ORDER:
+            return config.BYTE_ORDER_KEYS, "%s(ordered)" % config.BYTE_ORDER_SORT
+
+        if ordering == config.VALUE_ORDER:
+            self.value_ordered_keys.add(key)
+
+            return key + config.VALUE_ORDER_KEYS_SUFFIX, "ordered.sortUnstable()"
+
+        raise Unresolved("KEY_ORDERINGS gives %s the unknown write order %s" % (key, ordering))
+
+    def write_order_aliases(self):
+        out = []
+
+        for key in sorted(self.value_ordered_keys):
+            out.append("")
+            out.append("typealias %s%s = Array with %s" % (key, config.VALUE_ORDER_KEYS_SUFFIX, key))
+
+        return out
 
     def frozen_alias_helpers(self, name, visibility):
         return [""] + self.alias_reader(name, visibility, frozen=True)

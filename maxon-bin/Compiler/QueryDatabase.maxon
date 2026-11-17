@@ -616,7 +616,15 @@ export typealias HashDigestSet = Set with HashDigest
 function cacheWriteHashDigestSet(writer LibraryCacheWriter, value HashDigestSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = HashDigestWriteOrder.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	ordered.sortUnstable()
+
+	for item in ordered 'eachItem'
 		writer.digest(item)
 	end 'eachItem'
 end 'cacheWriteHashDigestSet'

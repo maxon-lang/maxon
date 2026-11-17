@@ -6551,7 +6551,17 @@ extension ProgramSignatures
 	end 'adoptGenericFunctionInstances'
 
 	export function adoptRequestedTupleLayouts(filed RequestedTupleTypesMap, from TypeNameInterner)
-		for (_, tupleTypes) in filed 'eachInstance'
+		let instanceNames = NameRoster.create(filed.count(), zeroed: false)
+
+		for (listed, _) in filed 'listInstanceNames'
+			instanceNames.push(listed)
+		end 'listInstanceNames'
+
+		sortNamesInByteOrder(instanceNames)
+
+		for instanceName in instanceNames 'eachInstance'
+			let tupleTypes = try filed.get(instanceName) otherwise panic("ProgramSignatures.adoptRequestedTupleLayouts: `{String.from(instanceName)}` was listed from the filed instances, which nothing has written since")
+
 			if not self.holdsAnUnregisteredLayout(tupleTypes.layouts) 'everyTupleIsHere'
 				continue
 			end 'everyTupleIsHere'
@@ -6630,9 +6640,11 @@ extension ProgramSignatures
 	export function genericTemplateKeys() returns NameRoster
 		let keys = NameRoster.create(self.settledDeclarations().genericTemplates.count(), zeroed: false)
 
-		for (key, _) in self.settledDeclarations().genericTemplates 'eachTemplate'
-			keys.push(key)
-		end 'eachTemplate'
+		for (listed, _) in self.settledDeclarations().genericTemplates 'listKeys'
+			keys.push(listed)
+		end 'listKeys'
+
+		sortNamesInByteOrder(keys)
 
 		return keys
 	end 'genericTemplateKeys'
@@ -6804,6 +6816,10 @@ extension ProgramSignatures
 				roster.push(template)
 			end 'eachTemplate'
 		end 'eachKey'
+
+		// Stable on purpose: the walk above visits keys in hash order, and only a stable sort
+		// leaves the templates sharing a key in their declaration order.
+		roster.sortBy(function(left GenericFunctionTemplate, right GenericFunctionTemplate) gives compareBytesOrdinally(left.key, right: right.key))
 
 		return roster
 	end 'genericTemplateRoster'

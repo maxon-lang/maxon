@@ -102,7 +102,15 @@ export typealias ValueMarkSet = Set with ValueId
 function cacheWriteValueMarkSet(writer LibraryCacheWriter, value ValueMarkSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	ordered.sortUnstable()
+
+	for item in ordered 'eachItem'
 		writer.unsigned(item as CacheUnsigned)
 	end 'eachItem'
 end 'cacheWriteValueMarkSet'

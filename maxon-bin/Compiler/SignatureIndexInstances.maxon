@@ -1299,6 +1299,22 @@ extension ProgramSignatures
 		return try self.structSlots.get(name)
 	end 'slotOfLayout'
 
+	function structSlotNamesInByteOrder() returns NameRoster
+		let names = NameRoster.create(self.structSlots.count(), zeroed: false)
+
+		for (listed, _) in self.structSlots 'listNames'
+			names.push(listed)
+		end 'listNames'
+
+		sortNamesInByteOrder(names)
+
+		return names
+	end 'structSlotNamesInByteOrder'
+
+	function ownSlotOf(name immutable ByteArray) returns ElementIndex
+		return try self.structSlots.get(name) otherwise panic("ProgramSignatures.ownSlotOf: `{String.from(name)}` was listed from `structSlots`, which nothing has written since")
+	end 'ownSlotOf'
+
 	function hasRegisteredLayout(name ByteArray) returns bool
 		if self.structSlots.contains(name) 'ownLayout'
 			return true
@@ -1381,9 +1397,11 @@ extension ProgramSignatures
 	//
 	// ⚠ **THE FIRST MINTER'S FILE IS THE ONE THE LAYOUT KEEPS, and `sweepScopedTupleName` is what makes that
 	// exact rather than a race.** A CANONICAL element list holds resolved types, so every file that reaches
-	// that name means the same thing by it and the path is never consulted to say otherwise — one layout,
-	// one file, no ambiguity. A SWEEP spelling still holds bare `named`s, so it is keyed per file and there
-	// is again exactly one minter.
+	// that name means the same types by it — one layout, one file. The kept file is still read as the
+	// scope its element brands resolve in (`tupleElementBrands`, `settleSweptTupleElementBrands`,
+	// `substituteTupleThroughInstance`), so which file mints first must not follow a table walk's
+	// order. A SWEEP spelling still holds bare `named`s, so it is keyed per file and there is again
+	// exactly one minter.
 	function registerTupleLayout(elements MaxonTypeArray, written NameRoster, capabilities ParamCapabilityArray, declFilePath FilePath) returns immutable ByteArray
 		let instanceBrands = instanceBrandsOf(elements, written: written)
 		let canonicalCapabilities = self.canonicalTupleCapabilities(elements, capabilities: capabilities)
@@ -1457,11 +1475,12 @@ extension ProgramSignatures
 	export function settleSweptTupleElementBrands()
 		self.requireWholeProgramIndex("settleSweptTupleElementBrands")
 
-		for (name, slot) in self.structSlots 'eachLayout'
+		for name in self.structSlotNamesInByteOrder() 'eachLayout'
 			if not isTupleTypeName(name) 'notATuple'
 				continue
 			end 'notATuple'
 
+			let slot = self.ownSlotOf(name)
 			let layout = self.ownLayoutAtSlot(slot)
 			let brands = self.tupleElementBrands(layout.fieldTypes, instanceBrands: instanceBrandsOf(layout.fieldTypes, written: self.writtenBrandsOf(layout, types: layout.fieldTypes)), declFilePath: layout.declFilePath)
 
@@ -5151,6 +5170,8 @@ extension ProgramSignatures
 			environments.push(CompilerOwnedDeclFilePath)
 		end 'onlyReaderIndependentNamesNeedScoping'
 
+		sortPathsBySpelling(environments)
+
 		return environments
 	end 'scopedInstanceEnvironments'
 
@@ -5811,14 +5832,16 @@ extension ProgramSignatures
 	function rewriteRecordedSlotTypes(rule RecordedReturnTypeRule)
 		self.requireWholeProgramIndex("rewriteRecordedSlotTypes")
 
-		for (_, slot) in self.structSlots 'eachStruct'
+		for name in self.structSlotNamesInByteOrder() 'eachStruct'
+			let slot = self.ownSlotOf(name)
 			let revised = try self.revisedStructWithRecordedTypes(rule, layout: self.ownLayoutAtSlot(slot)) otherwise continue
 			self.refileOwnLayout(slot, settled: revised)
 		end 'eachStruct'
 
 		let revisedEnums = EnumLayoutArray.create(0)
 
-		for (_, layout) in self.mainThreadSettled().enumTypes 'eachEnum'
+		for name in self.declaredEnumNames() 'eachEnum'
+			let layout = try self.mainThreadSettled().enumTypes.get(name) otherwise panic("ProgramSignatures.rewriteRecordedSlotTypes: `{String.from(name)}` was listed from `enumTypes`, which nothing has written since")
 			revisedEnums.push(try self.revisedLayoutWithRecordedPayloads(rule, layout: layout) otherwise continue)
 		end 'eachEnum'
 
@@ -5889,8 +5912,17 @@ extension ProgramSignatures
 	export function rewriteRecordedReturnTypes(rule RecordedReturnTypeRule)
 		let rewrittenCallees = NameRoster.create(0)
 		let rewrittenReturns = MaxonTypeArray.create(0)
+		let callees = NameRoster.create(self.mainThreadSettled().returnTypes.count(), zeroed: false)
 
-		for (callee, declared) in self.mainThreadSettled().returnTypes 'eachReturnType'
+		for (listed, _) in self.mainThreadSettled().returnTypes 'listCallees'
+			callees.push(listed)
+		end 'listCallees'
+
+		sortNamesInByteOrder(callees)
+
+		for callee in callees 'eachReturnType'
+			let declared = try self.mainThreadSettled().returnTypes.get(callee) otherwise panic("ProgramSignatures.rewriteRecordedReturnTypes: `{String.from(callee)}` was collected from `returnTypes`, which nothing has written since")
+
 			if let rewritten = try self.rewrittenReturnTypeUnder(rule, declFilePath: self.recordedReturnDeclFileOf(callee), declared: declared) 'theRuleClaimsIt'
 				rewrittenCallees.push(callee)
 				rewrittenReturns.push(rewritten)
@@ -5924,8 +5956,17 @@ extension ProgramSignatures
 	function rewriteSweptDeclarationReturnTypes(rule RecordedReturnTypeRule)
 		let rewrittenKeys = NameRoster.create(0)
 		let rewrittenDecls = SweptDeclarationArray.create(0)
+		let keys = NameRoster.create(self.mainThreadSettled().sweptDeclarations.count(), zeroed: false)
 
-		for (key, declaration) in self.mainThreadSettled().sweptDeclarations 'eachKey'
+		for (listed, _) in self.mainThreadSettled().sweptDeclarations 'listKeys'
+			keys.push(listed)
+		end 'listKeys'
+
+		sortNamesInByteOrder(keys)
+
+		for key in keys 'eachKey'
+			let declaration = try self.mainThreadSettled().sweptDeclarations.get(key) otherwise panic("ProgramSignatures.rewriteSweptDeclarationReturnTypes: `{String.from(key)}` was collected from `sweptDeclarations`, which nothing has written since")
+
 			if let rebuilt = try self.rewrittenSweptDeclarationUnder(rule, decl: declaration) 'theRuleClaimsIt'
 				rewrittenKeys.push(key)
 				rewrittenDecls.push(rebuilt)
@@ -6152,7 +6193,8 @@ extension ProgramSignatures
 
 		// A spawned type's state is the cown's heap record — its receiver, the target of its
 		// mutations, and what `__finish` drops — so it is never packed, whatever its fields.
-		for (_, slot) in self.structSlots 'eachDeclaredType'
+		for name in self.structSlotNamesInByteOrder() 'eachDeclaredType'
+			let slot = self.ownSlotOf(name)
 			let layout = self.ownLayoutAtSlot(slot)
 
 			if serviceStates.contains(layout.name) 'aServiceState'
@@ -6379,7 +6421,8 @@ extension ProgramSignatures
 	end 'normalizeSweptScopedGenericFields'
 
 	function repairSweptStructFields(repair SweptFieldRepair)
-		for (_, slot) in self.structSlots 'eachStruct'
+		for name in self.structSlotNamesInByteOrder() 'eachStruct'
+			let slot = self.ownSlotOf(name)
 			let revised = try self.revisedStructWithRepairedFields(repair, layout: self.ownLayoutAtSlot(slot)) otherwise continue
 			self.refileOwnLayout(slot, settled: revised)
 		end 'eachStruct'
@@ -7016,11 +7059,12 @@ extension ProgramSignatures
 	//     row here is also read by `instanceWithTypeArgKind`, whose copy gate REFUSES on it — which is why
 	//     each row now carries whether anything NAMED it. See `internAggregateElementInstances`.
 	//   • **THE GIDS MOVE.** A gid is intern ORDER, and these interns now all happen after the last file folds
-	//     instead of interleaved with it, so every over-interned instance's gid shifts. Nothing DERIVES from a
-	//     gid's numeric value — `mangleGenericInstance` is structural (base name + arg manglings) precisely so
-	//     that a symbol is stable across cold and warm builds — and the one reader that walks the registry in
-	//     gid order (`ParseStaging.checkTypeSymbolNamespace`) uses it only to decide which of a COLLIDING pair
-	//     is blamed as the newcomer.
+	//     instead of interleaved with it, so every over-interned instance's gid shifts. Nothing EMITTED derives
+	//     from a gid's numeric value — `mangleGenericInstance` is structural (base name + arg manglings)
+	//     precisely so that a symbol is stable across cold and warm builds — and the one reader that walks the
+	//     registry in gid order (`ParseStaging.checkTypeSymbolNamespace`) uses it only to decide which of a
+	//     COLLIDING pair is blamed as the newcomer. The library cache's packs do carry gids and order by them,
+	//     so the intern order must not follow a table walk's order.
 	//
 	// What the hoist does rest on is that nothing between the sweep's last fold and this call READS a generic
 	// instance — the sweep only records — so no reader can observe the difference between "interned early" and
@@ -7062,8 +7106,9 @@ extension ProgramSignatures
 	// leaves the contest where it is.
 	//
 	// ⚠ **THE GIDS MOVE, AND THAT IS THE HOIST ABOVE'S ARGUMENT VERBATIM** — a gid is intern ORDER, nothing
-	// derives from its numeric value (`mangleGenericInstance` is structural), and the sweep only RECORDS
-	// between its last fold and this call, so no reader can observe "interned per file" from "interned here".
+	// emitted derives from its numeric value (`mangleGenericInstance` is structural), and the sweep only
+	// RECORDS between its last fold and this call, so no reader can observe "interned per file" from
+	// "interned here".
 	// It runs BEFORE `settleRangeScopedInstances` because the file-scoped split reads these
 	// instances, and the bare byte instance is the one every file-scoped answer is derived from.
 	export function internWellKnownContainerInstances()
@@ -7159,7 +7204,7 @@ extension ProgramSignatures
 
 		_ = self.builtinInstanceForElement(baseName, element: MaxonType.string, asSpeculative: true)
 
-		for (name, _) in self.structSlots 'eachStruct'
+		for name in self.structSlotNamesInByteOrder() 'eachStruct'
 			_ = self.builtinInstanceForNamedElement(baseName, element: name, asSpeculative: true)
 		end 'eachStruct'
 
@@ -7172,7 +7217,7 @@ extension ProgramSignatures
 	// `.allCases` read interns its own instance NAMED (`Parser.emitEnumAllCases`), which clears the mark on
 	// the one row that was not a guess.
 	function internEnumElementInstances(baseName ByteArray)
-		for (name, _) in self.settledDeclarations().enumTypes 'eachEnum'
+		for name in self.declaredEnumNames() 'eachEnum'
 			_ = self.builtinInstanceForNamedElement(baseName, element: name, asSpeculative: true)
 		end 'eachEnum'
 	end 'internEnumElementInstances'

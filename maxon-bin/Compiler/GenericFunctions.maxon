@@ -347,7 +347,16 @@ typealias GenericFunctionTemplateMap = Map with (ByteArray, GenericFunctionTempl
 function cacheWriteGenericFunctionTemplateMap(writer LibraryCacheWriter, value GenericFunctionTemplateMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteGenericFunctionTemplateMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteGenericFunctionTemplateArray(writer, value: entry)
 	end 'eachEntry'
@@ -450,7 +459,16 @@ export typealias GenericFunctionInstanceMap = Map with (ByteArray, GenericFuncti
 function cacheWriteGenericFunctionInstanceMap(writer LibraryCacheWriter, value GenericFunctionInstanceMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteGenericFunctionInstanceMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -477,7 +495,16 @@ typealias GenericFunctionInstancesBySite = Map with (ByteArray, GenericFunctionI
 function cacheWriteGenericFunctionInstancesBySite(writer LibraryCacheWriter, value GenericFunctionInstancesBySite)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteGenericFunctionInstancesBySite: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteGenericFunctionInstanceArray(writer, value: entry)
 	end 'eachEntry'

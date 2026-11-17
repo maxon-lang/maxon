@@ -120,7 +120,16 @@ export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanc
 function cacheWriteValueExistentialInstanceMap(writer LibraryCacheWriter, value ValueExistentialInstanceMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteValueExistentialInstanceMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		writer.unsigned(entry as CacheUnsigned)
 	end 'eachEntry'
@@ -147,7 +156,16 @@ export typealias ValueCallInstanceMap = Map with (ValueId, GenericInstanceId)
 function cacheWriteValueCallInstanceMap(writer LibraryCacheWriter, value ValueCallInstanceMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteValueCallInstanceMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		writer.unsigned(entry as CacheUnsigned)
 	end 'eachEntry'
@@ -448,7 +466,16 @@ export typealias LiteralCastMap = Map with (ValueId, LiteralCast)
 function cacheWriteLiteralCastMap(writer LibraryCacheWriter, value LiteralCastMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteLiteralCastMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'

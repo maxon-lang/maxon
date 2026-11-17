@@ -530,7 +530,7 @@ def desired_text(plan, order, emitted, rewind):
 
     calls, host_enums = attach_enum_aggregates(by_file, emitted, plan.emitter)
     sizes = size_alias_visibilities(plan, order, emitted)
-    leading = plan.emitter.size_aliases(sizes) + plan.emitter.bounded_alias_readers()
+    leading = plan.emitter.size_aliases(sizes) + plan.emitter.write_order_aliases() + plan.emitter.bounded_alias_readers()
     trailing = plan.emitter.module_helpers() + plan.emitter.enum_tables_aggregate(calls, host_enums)
     fingerprint = schema_fingerprint(plan, order, emitted, leading, trailing)
     desired = {}

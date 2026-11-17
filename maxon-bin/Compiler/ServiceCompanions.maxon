@@ -239,7 +239,15 @@ export typealias LiveNameSet = Set with ByteArray
 function cacheWriteLiveNameSet(writer LibraryCacheWriter, value LiveNameSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	sortNamesInByteOrder(ordered)
+
+	for item in ordered 'eachItem'
 		writer.bytes(item)
 	end 'eachItem'
 end 'cacheWriteLiveNameSet'
@@ -269,7 +277,16 @@ typealias ServiceSpawnCandidateKeyIndex = Map with (ByteArray, ElementIndex)
 function cacheWriteServiceSpawnCandidateKeyIndex(writer LibraryCacheWriter, value ServiceSpawnCandidateKeyIndex)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteServiceSpawnCandidateKeyIndex: a key collected from the map is not in it")
 		writer.bytes(key)
 		writer.unsigned(entry as CacheUnsigned)
 	end 'eachEntry'
@@ -1733,7 +1750,16 @@ typealias ServiceMessageIndex = Map with (ByteArray, ServiceMessage)
 function cacheWriteServiceMessageIndex(writer LibraryCacheWriter, value ServiceMessageIndex)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteServiceMessageIndex: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'

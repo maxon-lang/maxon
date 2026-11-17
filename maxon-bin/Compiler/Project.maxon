@@ -1386,7 +1386,16 @@ export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 function cacheWriteVarInfoMap(writer LibraryCacheWriter, value VarInfoMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteVarInfoMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -1453,7 +1462,16 @@ export typealias AsyncSpawnSiteMap = Map with (ElementIndex, AsyncSpawnSite)
 function cacheWriteAsyncSpawnSiteMap(writer LibraryCacheWriter, value AsyncSpawnSiteMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteAsyncSpawnSiteMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -1510,7 +1528,16 @@ export typealias RegistryUseSiteMap = Map with (ElementIndex, RegistryUseSite)
 function cacheWriteRegistryUseSiteMap(writer LibraryCacheWriter, value RegistryUseSiteMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteRegistryUseSiteMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -1578,7 +1605,16 @@ export typealias ProvenFixedArrayAccessMap = Map with (ElementIndex, SizedAccess
 function cacheWriteProvenFixedArrayAccessMap(writer LibraryCacheWriter, value ProvenFixedArrayAccessMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteProvenFixedArrayAccessMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -1605,7 +1641,15 @@ export typealias ClosureRecordSiteSet = Set with ElementIndex
 function cacheWriteClosureRecordSiteSet(writer LibraryCacheWriter, value ClosureRecordSiteSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	ordered.sortUnstable()
+
+	for item in ordered 'eachItem'
 		writer.unsigned(item as CacheUnsigned)
 	end 'eachItem'
 end 'cacheWriteClosureRecordSiteSet'
@@ -1631,7 +1675,16 @@ export typealias AllocTagSiteMap = Map with (ElementIndex, MmTag)
 function cacheWriteAllocTagSiteMap(writer LibraryCacheWriter, value AllocTagSiteMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteAllocTagSiteMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		writer.unsigned(entry.ordinal as CacheUnsigned)
 	end 'eachEntry'
@@ -1660,7 +1713,16 @@ export typealias DebugStreamNameSiteMap = Map with (ElementIndex, immutable Byte
 function cacheWriteDebugStreamNameSiteMap(writer LibraryCacheWriter, value DebugStreamNameSiteMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteDebugStreamNameSiteMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		writer.bytes(entry)
 	end 'eachEntry'
@@ -1790,7 +1852,16 @@ export typealias ImmortalConstArraySiteMap = Map with (ElementIndex, ImmortalRec
 function cacheWriteImmortalConstArraySiteMap(writer LibraryCacheWriter, value ImmortalConstArraySiteMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ElementIndexWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteImmortalConstArraySiteMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		cacheWriteImmortalRecordKind(writer, value: entry)
 	end 'eachEntry'
@@ -2295,7 +2366,16 @@ typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 function cacheWriteRangedTypeAliasMap(writer LibraryCacheWriter, value RangedTypeAliasMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteRangedTypeAliasMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -2330,7 +2410,16 @@ export typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 function cacheWriteRangedAliasByDeclaringFile(writer LibraryCacheWriter, value RangedAliasByDeclaringFile)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = StringWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteRangedAliasByDeclaringFile: a key collected from the map is not in it")
 		writer.text(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -2360,7 +2449,16 @@ typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
 function cacheWriteAliasStorageBytesMap(writer LibraryCacheWriter, value AliasStorageBytesMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteAliasStorageBytesMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		writer.unsigned(entry as CacheUnsigned)
 	end 'eachEntry'
@@ -2392,7 +2490,16 @@ typealias AliasPackedBitsMap = Map with (ByteArray, ElementPacking)
 function cacheWriteAliasPackedBitsMap(writer LibraryCacheWriter, value AliasPackedBitsMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteAliasPackedBitsMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		writer.unsigned(entry.ordinal as CacheUnsigned)
 	end 'eachEntry'
@@ -2421,7 +2528,16 @@ typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaring
 function cacheWriteMultiplyDeclaredAliasMap(writer LibraryCacheWriter, value MultiplyDeclaredAliasMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteMultiplyDeclaredAliasMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteRangedAliasByDeclaringFile(writer, value: entry)
 	end 'eachEntry'
@@ -2448,7 +2564,16 @@ typealias DeclarationIdentityMap = Map with (ByteArray, MintByDeclaringFile)
 function cacheWriteDeclarationIdentityMap(writer LibraryCacheWriter, value DeclarationIdentityMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteDeclarationIdentityMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteMintByDeclaringFile(writer, value: entry)
 	end 'eachEntry'
@@ -2475,7 +2600,16 @@ export typealias MintByDeclaringFile = Map with (String, immutable ByteArray)
 function cacheWriteMintByDeclaringFile(writer LibraryCacheWriter, value MintByDeclaringFile)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = StringWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteMintByDeclaringFile: a key collected from the map is not in it")
 		writer.text(key)
 		writer.bytes(entry)
 	end 'eachEntry'
@@ -2508,7 +2642,16 @@ typealias RangeContestedAliasMap = Map with (ByteArray, NameRoster)
 function cacheWriteRangeContestedAliasMap(writer LibraryCacheWriter, value RangeContestedAliasMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteRangeContestedAliasMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteNameRoster(writer, value: entry)
 	end 'eachEntry'
@@ -3044,7 +3187,15 @@ export typealias LibraryFilePathSet = Set with String
 function cacheWriteLibraryFilePathSet(writer LibraryCacheWriter, value LibraryFilePathSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = StringWriteOrder.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	ordered.sortUnstable()
+
+	for item in ordered 'eachItem'
 		writer.text(item)
 	end 'eachItem'
 end 'cacheWriteLibraryFilePathSet'
@@ -3069,7 +3220,16 @@ export typealias ModuleDirectoryByFile = Map with (String, String)
 function cacheWriteModuleDirectoryByFile(writer LibraryCacheWriter, value ModuleDirectoryByFile)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = StringWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteModuleDirectoryByFile: a key collected from the map is not in it")
 		writer.text(key)
 		writer.text(entry)
 	end 'eachEntry'
@@ -3126,7 +3286,15 @@ typealias UnderlyingContestedAliasSet = Set with ByteArray
 function cacheWriteUnderlyingContestedAliasSet(writer LibraryCacheWriter, value UnderlyingContestedAliasSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	sortNamesInByteOrder(ordered)
+
+	for item in ordered 'eachItem'
 		writer.bytes(item)
 	end 'eachItem'
 end 'cacheWriteUnderlyingContestedAliasSet'
@@ -3364,15 +3532,16 @@ export type RangedAliasRegistry
 	// ⭐ **EVERY NAME SOME FILE DECLARES A RANGED ALIAS UNDER** — for the ONE whole-program walk that has to
 	// visit them all (`ProgramSignatures.settleCrossKindContests`, which offers every declared type name to
 	// the cross-KIND test). A fresh array rather than the map itself: this registry's index is its own, and
-	// handing a caller a live handle to it is how a reader becomes a writer.
-	//
-	// It allocates once per compile, on a walk that already visits every declaration in the program.
+	// handing a caller a live handle to it is how a reader becomes a writer. In byte order, which that walk
+	// relies on so that it does not follow the process hash seed.
 	export function declaredNames() returns NameRoster
 		let names = NameRoster.create(self.byName.count(), zeroed: false)
 
 		for (name, _) in self.byName 'eachDeclaredName'
 			names.push(name)
 		end 'eachDeclaredName'
+
+		sortNamesInByteOrder(names)
 
 		return names
 	end 'declaredNames'
@@ -5012,7 +5181,16 @@ export typealias WrapOperandsMap = Map with (ValueId, WrapOperands)
 function cacheWriteWrapOperandsMap(writer LibraryCacheWriter, value WrapOperandsMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteWrapOperandsMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -5481,7 +5659,16 @@ export typealias ProvenIntRangeMap = Map with (ValueId, ProvenIntRange)
 function cacheWriteProvenIntRangeMap(writer LibraryCacheWriter, value ProvenIntRangeMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteProvenIntRangeMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -5586,7 +5773,16 @@ export typealias ProvenFloatRangeMap = Map with (ValueId, ProvenFloatRange)
 function cacheWriteProvenFloatRangeMap(writer LibraryCacheWriter, value ProvenFloatRangeMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = ValueIdWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteProvenFloatRangeMap: a key collected from the map is not in it")
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -6012,7 +6208,16 @@ export typealias FunctionValueShapeMap = Map with (ByteArray, FunctionValueShape
 function cacheWriteFunctionValueShapeMap(writer LibraryCacheWriter, value FunctionValueShapeMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteFunctionValueShapeMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -6342,7 +6547,16 @@ export typealias FunctionTypeAliasMap = Map with (ByteArray, FunctionTypeAlias)
 function cacheWriteFunctionTypeAliasMap(writer LibraryCacheWriter, value FunctionTypeAliasMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteFunctionTypeAliasMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -6369,7 +6583,16 @@ typealias FunctionAliasByDeclaringFile = Map with (String, FunctionTypeAlias)
 function cacheWriteFunctionAliasByDeclaringFile(writer LibraryCacheWriter, value FunctionAliasByDeclaringFile)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = StringWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteFunctionAliasByDeclaringFile: a key collected from the map is not in it")
 		writer.text(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -6398,7 +6621,16 @@ typealias MultiplyDeclaredFunctionAliasMap = Map with (ByteArray, FunctionAliasB
 function cacheWriteMultiplyDeclaredFunctionAliasMap(writer LibraryCacheWriter, value MultiplyDeclaredFunctionAliasMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteMultiplyDeclaredFunctionAliasMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteFunctionAliasByDeclaringFile(writer, value: entry)
 	end 'eachEntry'
@@ -6513,12 +6745,16 @@ type FunctionAliasRegistry
 		return try self.multiplyDeclared.get(name) otherwise FunctionAliasByDeclaringFile.create()
 	end 'contestedDeclarations'
 
+	// In byte order, which `ProgramSignatures.settleCrossKindContests` relies on so that it
+	// does not follow the process hash seed.
 	export function declaredNames() returns NameRoster
 		let names = NameRoster.create(self.byName.count(), zeroed: false)
 
 		for (name, _) in self.byName 'eachDeclaredName'
 			names.push(name)
 		end 'eachDeclaredName'
+
+		sortNamesInByteOrder(names)
 
 		return names
 	end 'declaredNames'
@@ -10341,7 +10577,16 @@ export typealias EnumLayoutMap = Map with (ByteArray, immutable EnumLayout)
 function cacheWriteEnumLayoutMap(writer LibraryCacheWriter, value EnumLayoutMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteEnumLayoutMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
@@ -10879,7 +11124,16 @@ export typealias FuncReturnTypeMap = Map with (ByteArray, MaxonReturnType)
 function cacheWriteFuncReturnTypeMap(writer LibraryCacheWriter, value FuncReturnTypeMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteFuncReturnTypeMap: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteMaxonReturnType(writer, value: entry)
 	end 'eachEntry'

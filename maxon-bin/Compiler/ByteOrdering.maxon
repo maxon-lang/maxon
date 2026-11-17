@@ -1,9 +1,10 @@
 // Compiler/ByteOrdering.maxon — the ordinal byte ordering every table this compiler sorts by shares.
 
 // ⭐ **ONE ORDERING, AND THAT IS THE REASON IT LIVES ALONE.** The formatter's file walk, the test report's
-// path column and the debug-info name tables must all order by the same rule; separate copies of "compare
-// the shared prefix, shorter name first" would be free to diverge, and a divergence would be a wrong ORDER
-// at one of them rather than an error at any of them.
+// path column, the debug-info name tables, the library cache's generated writers and the settle's table
+// walks must all order by the same rule; separate copies of "compare the shared prefix, shorter name
+// first" would be free to diverge, and a divergence would be a wrong ORDER at one of them rather than an
+// error at any of them.
 //
 // ⚠ **THE MEASURE IS BYTES.** The orders these tables need are filesystem- and locale-neutral, and the
 // reference implementations they are compared against compare units rather than collating text.
@@ -27,6 +28,19 @@ end 'compareBytesOrdinally'
 function comparePathSpelling(left FilePath, right FilePath) returns Ordering
 	return compareBytesOrdinally(left.toString().toByteArray(), right: right.toString().toByteArray())
 end 'comparePathSpelling'
+
+// A `Map` or `Set` walk follows the process hash seed. One whose body registers a first-wins
+// entry, interns a name, numbers an id, mints a layout or fills an array that is written or
+// indexed sorts its keys first, here or by `sortUnstable()` for a value-ordered key, else the
+// library cache's packs follow the seed; only a walk touching its own key's entry or folding a
+// count, min or max may stay unordered.
+function sortNamesInByteOrder(names NameRoster)
+	names.sortUnstableBy(function(left immutable ByteArray, right immutable ByteArray) gives compareBytesOrdinally(left, right: right))
+end 'sortNamesInByteOrder'
+
+function sortPathsBySpelling(paths FilePathArray)
+	paths.sortUnstableBy(function(left FilePath, right FilePath) gives comparePathSpelling(left, right: right))
+end 'sortPathsBySpelling'
 
 function comparePathIdentity(path FilePath, other FilePath) returns Ordering
 	let workingDirectory = Directory.currentPath()

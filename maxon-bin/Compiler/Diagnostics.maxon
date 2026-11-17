@@ -197,7 +197,16 @@ typealias RespellingPositionsByMint = Map with (ByteArray, RespellingPositionArr
 function cacheWriteRespellingPositionsByMint(writer LibraryCacheWriter, value RespellingPositionsByMint)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteRespellingPositionsByMint: a key collected from the map is not in it")
 		writer.bytes(key)
 		cacheWriteRespellingPositionArray(writer, value: entry)
 	end 'eachEntry'
@@ -365,7 +374,15 @@ export typealias WrittenMintSet = Set with ByteArray
 function cacheWriteWrittenMintSet(writer LibraryCacheWriter, value WrittenMintSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for item in value 'eachItem'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for member in value 'eachMember'
+		ordered.push(member)
+	end 'eachMember'
+
+	sortNamesInByteOrder(ordered)
+
+	for item in ordered 'eachItem'
 		writer.bytes(item)
 	end 'eachItem'
 end 'cacheWriteWrittenMintSet'
@@ -390,7 +407,16 @@ typealias SpellingPositionByMint = Map with (ByteArray, ElementIndex)
 function cacheWriteSpellingPositionByMint(writer LibraryCacheWriter, value SpellingPositionByMint)
 	writer.unsigned(value.count() as CacheUnsigned)
 
-	for (key, entry) in value 'eachEntry'
+	let ordered = NameRoster.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	sortNamesInByteOrder(ordered)
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteSpellingPositionByMint: a key collected from the map is not in it")
 		writer.bytes(key)
 		writer.unsigned(entry as CacheUnsigned)
 	end 'eachEntry'
