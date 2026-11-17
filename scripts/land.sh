@@ -11,11 +11,11 @@
 #   scripts/land.sh await <branch> <head> [--after=<run id>]
 #                                          # wait for the land.yml run of <head> on <branch>; prints main's new sha
 #   scripts/land.sh chain <base> <head>    # build the bootstrap chain base..head; prints the head's compiler
-#   scripts/land.sh in-flight [--wait]     # the chain land in flight, if any: branch and run, or "none"
 #   scripts/land.sh plan <head>            # land.yml's jobs; they read LAND_* from the environment
 #   scripts/land.sh freeze
 #   scripts/land.sh prove <lane>
 #   scripts/land.sh publish
+#   scripts/land.sh pin
 #   scripts/land.sh land
 #   scripts/land.sh consume                # delete the run's branch if it still points at the run's head
 #   scripts/land.sh retract
@@ -38,6 +38,7 @@ LandWorkflow="land.yml"
 LandTrailer="Land"
 ScaleNoteTrailer="Scale-Note"
 ChainTrailer="Bootstrap-Chain"
+FrozenFromTrailer="Frozen-From"
 ModeMain="main"
 ModeRehearsal="rehearsal"
 KindNone="none"
@@ -48,15 +49,8 @@ VerdictRefused="refused"
 ProofBuilt="built"
 ProofSkipped="skipped"
 ChainRefSuffix="-chain"
-WalkGuarded="guarded"
-WalkUnguarded="unguarded"
-RunStatusesInFlight="queued in_progress waiting pending requested"
-JobChain="chain"
-JobCredential="credential"
 JobPlan="plan"
 JobSkipped="skipped"
-InFlightPollSeconds=60
-InFlightNone="none"
 SubmitBranchPrefix="land/"
 LandWorkDirectory="temp/land-branch"
 ChainTree="$LandWorkDirectory/tree"
@@ -66,6 +60,8 @@ VerdictLog="$LandWorkDirectory/verdict.log"
 SeedAtBase="$LandWorkDirectory/seed"
 SeedAtTip="$LandWorkDirectory/tip-seed"
 MergedBuildLog="$LandWorkDirectory/merged.log"
+ChainSeed="$LandWorkDirectory/chain-seed"
+PinBuildDirectory="$LandWorkDirectory/pin"
 ScaleTestLog="$LandWorkDirectory/scale-test.log"
 ScaleLogAtBase="$LandWorkDirectory/scale-log-base.md"
 ScaleLogAtHead="$LandWorkDirectory/scale-log-head.md"
@@ -121,7 +117,8 @@ ScaleTestEnvironment=(
 )
 RedispatchedTitle="redispatched"
 OutputRedispatched="redispatched"
-RedispatchedYes="true"
+OutputReused="reused"
+OutputYes="true"
 
 # Every input the pinned seed's build reads, as `ci.yml` counts them: one missing here lets a merge
 # that changes it skip the seed proof.
@@ -198,7 +195,9 @@ main_tip() {
 }
 
 resolve_commit() {
-	git fetch --quiet "$Remote" "$1" || fail "$Remote has no $1 — tip and moved name a branch or a full commit id"
+	local ref="$1" refusal="${2:-tip and moved name a branch or a full commit id}"
+
+	git fetch --quiet "$Remote" "$ref" || fail "$Remote has no $ref — $refusal"
 	git rev-parse --verify "FETCH_HEAD^{commit}"
 }
 
@@ -279,7 +278,7 @@ build_prepared_tree() {
 }
 
 walk_chain() {
-	local base="$1" head="$2" guard="$3" compiler commit step=0
+	local base="$1" head="$2" compiler commit step=0
 
 	rm -rf "$ChainCompilers"
 	mkdir -p "$ChainCompilers"
@@ -287,12 +286,6 @@ walk_chain() {
 	fetch_pinned_seed "$base" "$compiler"
 
 	for commit in $(git rev-list --reverse "$base..$head"); do
-		case "$guard" in
-			"$WalkGuarded") require_base_unmoved ;;
-			"$WalkUnguarded") ;;
-			*) fail "walk_chain does not know the guard $guard" ;;
-		esac
-
 		step=$((step + 1))
 		echo "land.sh: chain step $step builds $(git log -1 --format='%h %s' "$commit")" >&2
 
@@ -310,11 +303,11 @@ walk_chain() {
 # `commit_trailer` runs first: the strip drops every `Land:` line, which is right only once git has
 # parsed each one as a trailer.
 landed_message() {
-	local head="$1" chain="$2" commit trailers=()
+	local head="$1" added="$2" trailer trailers=()
 
-	for commit in $chain; do
-		trailers+=(--trailer "$ChainTrailer: $commit")
-	done
+	while IFS= read -r trailer; do
+		[ -z "$trailer" ] || trailers+=(--trailer "$trailer")
+	done <<< "$added"
 
 	commit_trailer "$head" "$LandTrailer" > /dev/null
 
@@ -354,12 +347,27 @@ commit_as_bot() {
 }
 
 commit_from() {
-	local source="$1" chain="$2" tree="$3" parent="$4" name email date
+	local source="$1" trailers="$2" tree="$3" parent="$4" name email date
 
 	name="$(git log -1 --format=%an "$source")"
 	email="$(git log -1 --format=%ae "$source")"
 	date="$(git log -1 --format=%ad --date=raw "$source")"
-	landed_message "$source" "$chain" | commit_as_bot "$name" "$email" "$date" "$tree" -p "$parent"
+	landed_message "$source" "$trailers" | commit_as_bot "$name" "$email" "$date" "$tree" -p "$parent"
+}
+
+chain_trailers() {
+	local commit
+
+	for commit in $1; do
+		printf '%s: %s\n' "$ChainTrailer" "$commit"
+	done
+}
+
+chain_landed() {
+	local head="$1" chain="$2" base="$3" trailers
+
+	trailers="$(chain_trailers "$chain")"
+	commit_from "$head" "$trailers" "$head^{tree}" "$base"
 }
 
 tree_with_blob() {
@@ -375,30 +383,32 @@ tree_with_blob() {
 }
 
 make_pin() {
-	local landed="$1" tag="$2" blob tree
+	local merged="$1" frozen="$2" tag="$3" blob tree
 
 	blob="$(printf '%s\n' "$tag" | git hash-object -w --stdin)"
-	tree="$(tree_with_blob "$landed" "$SeedPinFile" "$blob")"
+	tree="$(tree_with_blob "$merged" "$SeedPinFile" "$blob")"
 
-	printf 'The tree is built with %s, frozen from %s\n' "$tag" "$(short "$landed")" \
-		| commit_as_bot "$BotName" "$BotEmail" "$LAND_COMMITTED $UtcOffset" "$tree" -p "$landed"
+	printf 'The tree is built with %s, frozen from %s\n' "$tag" "$(short "$frozen")" \
+		| commit_as_bot "$BotName" "$BotEmail" "$LAND_COMMITTED $UtcOffset" "$tree" -p "$merged"
 }
 
-# `S` and the pin are recomputed in every job from the plan's outputs; a different sha is a different landing.
+# `S` is recomputed in every job from the plan's outputs; a different sha is a different landing.
 recreate_landed() {
 	local landed
 
 	require_env LAND_HEAD LAND_BASE LAND_CHAIN LAND_COMMITTED LAND_LANDED
-	landed="$(commit_from "$LAND_HEAD" "$LAND_CHAIN" "$LAND_HEAD^{tree}" "$LAND_BASE")"
+	landed="$(chain_landed "$LAND_HEAD" "$LAND_CHAIN" "$LAND_BASE")"
 	[ "$landed" = "$LAND_LANDED" ] || fail "the landed commit came out as $landed, not the plan's $LAND_LANDED"
 }
 
-recreate_pin() {
-	local pin
+chain_merged_onto() {
+	local tip="$1" base="$2" landed="$3"
 
-	require_env LAND_TAG LAND_PIN
-	pin="$(make_pin "$LAND_LANDED" "$LAND_TAG")"
-	[ "$pin" = "$LAND_PIN" ] || fail "the pin commit came out as $pin, not the plan's $LAND_PIN"
+	if [ "$tip" = "$base" ]; then
+		printf '%s' "$landed"
+	else
+		merge_onto "$tip" "$base" "$landed" "$FrozenFromTrailer: $landed"
+	fi
 }
 
 require_tag_free() {
@@ -409,7 +419,7 @@ require_tag_free() {
 	fi
 
 	for name in "$LAND_TAG" "$LAND_TAG$ChainRefSuffix"; do
-		target="$(remote_ref_target "refs/tags/$name")"
+		target="$(remote_ref_target "refs/tags/$name")" || exit 1
 		[ -z "$target" ] || fail "$Remote already has the tag $name — a seed tag never moves"
 	done
 }
@@ -477,7 +487,7 @@ merged_tree() {
 }
 
 merge_onto() {
-	local tip="$1" base="$2" commit="$3" overlap tree
+	local tip="$1" base="$2" commit="$3" trailers="${4:-}" overlap tree
 
 	git merge-base --is-ancestor "$base" "$tip" || fail "$(short "$base") is not an ancestor of $(short "$tip") — $Remote/$Branch was rewritten; submit again"
 	git merge-base --is-ancestor "$base" "$commit" || fail "$(short "$base") is not an ancestor of $(short "$commit")"
@@ -488,7 +498,7 @@ merge_onto() {
 
 	tree="$(merged_tree "$tip" "$base" "$commit")" \
 		|| fail "$(short "$commit") does not merge cleanly onto $(short "$tip") — rebase by hand and submit again"
-	commit_from "$commit" "" "$tree" "$tip"
+	commit_from "$commit" "$trailers" "$tree" "$tip"
 }
 
 scale_log_or_empty() {
@@ -591,7 +601,7 @@ require_dispatched_head() {
 }
 
 require_no_stand_ins() {
-	[ -z "${LAND_TIP_INPUT:-}${LAND_MOVED_INPUT:-}" ] || fail "the dispatch inputs tip and moved rehearse an ordinary land, and $1 — drop them"
+	[ -z "${LAND_TIP_INPUT:-}${LAND_MOVED_INPUT:-}" ] || fail "the dispatch inputs tip and moved rehearse a land, and $1 — drop them"
 }
 
 standing_tip() {
@@ -628,8 +638,34 @@ standing_tip() {
 	esac
 }
 
+chain_commits() {
+	local base="$1" head="$2" chain
+
+	chain="$(git rev-list --reverse "$base..$head" | tr '\n' ' ')"
+	printf '%s' "${chain% }"
+}
+
+committed_date() {
+	date -u -d "@$LAND_COMMITTED" +"$SeedDateFormat"
+}
+
+require_seed_of_head() {
+	local seed="$1" head="$2" frozen="$3" base="$4" remedy="$5" chain_ref chain landed date tag
+
+	chain_ref="$(remote_ref_target "refs/tags/$seed$ChainRefSuffix")" || exit 1
+	[ "$chain_ref" = "$head" ] || fail "the chain ref $seed$ChainRefSuffix is not on $(short "$head") — $seed is not its seed; $remedy"
+	LAND_COMMITTED="$(git log -1 --format=%ct "$frozen")"
+	chain="$(chain_commits "$base" "$head")"
+	landed="$(chain_landed "$head" "$chain" "$base")"
+	[ "$landed" = "$frozen" ] || fail "the seed $seed was frozen from $(short "$frozen"), and $(short "$head") on $(short "$base") lands as $(short "$landed") at that commit's time — $seed is not its seed; $remedy"
+	date="$(committed_date)"
+	tag="$(seed_tag "$date" "$landed")"
+	[ "$tag" = "$seed" ] || fail "the seed $seed was frozen from $(short "$frozen"), whose commit time names it $tag — $LandWorkflow did not publish it; $remedy"
+}
+
 command_plan() {
-	local head land note mode tip base count merges pin_changes verdict kind native merged proof="" chain="" committed date="" landed="" tag="" pin=""
+	local head land note mode tip base count merges pin_changes verdict kind classified native merged proof="" chain="" date="" landed="" frozen="" tag=""
+	local seed="${LAND_SEED_INPUT:-}" reused=""
 
 	require_env LAND_EVENT
 	head="$(git rev-parse --verify "${1:?land.sh plan needs the head commit}^{commit}")"
@@ -656,33 +692,50 @@ command_plan() {
 	require_no_hand_row "$base" "$head"
 
 	mkdir -p "$LandWorkDirectory"
-	fetch_pinned_seed "$base" "$SeedAtBase"
-	prepare_tree "$head" "$SeedAtBase"
 
-	if build_prepared_tree "$VerdictLog"; then
-		verdict="$VerdictAccepted"
+	if [ -n "$seed" ]; then
+		[ "$count" -gt 1 ] || fail "the dispatch input seed reuses a bootstrap chain's seed, and $head is one commit on $(short "$base") — an ordinary land takes no seed; submit again"
+		kind="$KindChain"
+		classified="reusing the seed $seed"
 	else
-		verdict="$VerdictRefused"
+		fetch_pinned_seed "$base" "$SeedAtBase"
+		prepare_tree "$head" "$SeedAtBase"
+
+		if build_prepared_tree "$VerdictLog"; then
+			verdict="$VerdictAccepted"
+		else
+			verdict="$VerdictRefused"
+		fi
+
+		kind="$(classify "$head" "$count" "$verdict")"
+		classified="the pinned seed's verdict: $verdict"
 	fi
 
-	kind="$(classify "$head" "$count" "$verdict")"
 	native="$(./scripts/targets/matrix.sh json native)"
 	LAND_COMMITTED="$(date -u +%s)"
-	committed="$LAND_COMMITTED"
 
 	case "$kind" in
 		"$KindChain")
 			[ -z "$note" ] || fail "a bootstrap chain mints no scale row — drop the \`$ScaleNoteTrailer:\` trailer and carry it on an ordinary land"
-			require_no_stand_ins "$head is a bootstrap chain"
-			[ "$base" = "$tip" ] || fail "$head is a bootstrap chain, which lands only on $Remote/$Branch's tip — rebase onto it and push again"
-			chain="$(git rev-list --reverse "$base..$head" | tr '\n' ' ')"
-			chain="${chain% }"
-			landed="$(commit_from "$head" "$chain" "$head^{tree}" "$base")"
-			date="$(date -u -d "@$committed" +"$SeedDateFormat")"
+			chain="$(chain_commits "$base" "$head")"
+
+			if [ -n "$seed" ]; then
+				frozen="$(resolve_commit "refs/tags/$seed" "the dispatch input seed names the seed a bootstrap chain's first attempt published")"
+				require_seed_of_head "$seed" "$head" "$frozen" "$base" "submit again"
+				seed_published_on "$seed" "$frozen" || fail "the release $seed is gone or its tag left $(short "$frozen") — it was retracted; submit again"
+				reused="$OutputYes"
+			fi
+
+			landed="$(chain_landed "$head" "$chain" "$base")"
+			date="$(committed_date)"
 			tag="$(seed_tag "$date" "$landed")"
 			LAND_TAG="$tag"
-			require_tag_free
-			pin="$(make_pin "$landed" "$tag")"
+
+			if [ -z "$seed" ]; then
+				require_tag_free
+			fi
+
+			chain_merged_onto "$tip" "$base" "$landed" > /dev/null
 			;;
 		"$KindOrdinary")
 			merged="$(merge_onto "$tip" "$base" "$head")"
@@ -716,14 +769,13 @@ command_plan() {
 	output head "$head"
 	output native "$native"
 	output chain "$chain"
-	output committed "$committed"
+	output committed "$LAND_COMMITTED"
 	output date "$date"
 	output landed "$landed"
-	output proof "$proof"
 	output tag "$tag"
-	output pin "$pin"
+	output "$OutputReused" "$reused"
 
-	summary "$mode: $head, $count commit(s) on $(short "$base"), merged onto $(short "$tip"), the pinned seed's verdict: $verdict — kind: $kind${proof:+, seed proof of the merged tree: $proof}${note:+, a scale row minted}${tag:+ with the seed $tag}"
+	summary "$mode: $head, $count commit(s) on $(short "$base"), merged onto $(short "$tip"), $classified — kind: $kind${proof:+, seed proof of the merged tree: $proof}${note:+, a scale row minted}${tag:+ with the seed $tag}"
 }
 
 command_chain() {
@@ -732,7 +784,7 @@ command_chain() {
 	base="$(git rev-parse --verify "$base^{commit}")"
 	head="$(git rev-parse --verify "$head^{commit}")"
 	git merge-base --is-ancestor "$base" "$head" || fail "$base is not an ancestor of $head"
-	walk_chain "$base" "$head" "$WalkUnguarded"
+	walk_chain "$base" "$head"
 }
 
 append_chain_notes() {
@@ -755,9 +807,8 @@ command_freeze() {
 	local compiler
 
 	require_env LAND_DATE
-	require_base_unmoved
 	recreate_landed
-	compiler="$(walk_chain "$LAND_BASE" "$LAND_HEAD" "$WalkGuarded")"
+	compiler="$(walk_chain "$LAND_BASE" "$LAND_HEAD")"
 	git -C "$ChainTree" checkout --quiet --detach "$LAND_LANDED"
 	cmp -s "$compiler" "$(maxon_compiler_path "$ChainTree")" || fail "the chain's last compiler is not the slot of $ChainTree"
 
@@ -769,18 +820,23 @@ command_freeze() {
 	append_chain_notes
 }
 
+seed_builds_compiler() {
+	local tree="$1" target="$2" output="$3"
+
+	(cd "$tree" && "$(maxon_downloaded_path .)" build maxon-bin "--target=$target" "--output=$output")
+}
+
 command_prove() {
 	local lane="${1:?land.sh prove needs a lane}" host exe_ext
 
 	require_env LAND_TAG
-	require_base_unmoved
 	maxon_require_long_paths land.sh || exit 1
 	host="$(maxon_host_target)"
 	[ "$lane" = "$host" ] || fail "a $lane seed is proved on a $lane runner, and this runner is $host"
 	exe_ext="$(maxon_target_exe_ext "$lane")"
 
 	./scripts/fetch-seed.sh "$LAND_TAG" "$lane" "--from=$SeedDistDirectory"
-	"$(maxon_downloaded_path . "$exe_ext")" build maxon-bin "--output=$ProveOutput$exe_ext" \
+	seed_builds_compiler . "$lane" "$ProveOutput$exe_ext" \
 		|| fail "the seed $LAND_TAG does not build this tree on $lane"
 	summary "$lane: the seed $LAND_TAG builds the tree"
 }
@@ -800,23 +856,9 @@ require_fetchable() {
 	done
 }
 
-fail_base_moved() {
-	fail "$Remote/$Branch moved past $(short "$LAND_BASE") — nothing published; rebase and push again"
-}
-
-require_base_unmoved() {
-	local tip
-
-	require_env LAND_BASE
-	tip="$(remote_ref_target "refs/heads/$Branch")"
-	[ "$tip" = "$LAND_BASE" ] || fail_base_moved
-}
-
 command_publish() {
 	recreate_landed
-	recreate_pin
 	seed_release_require_assets "$LAND_TAG"
-	require_base_unmoved
 	require_tag_free
 
 	git push --quiet --atomic "$Remote" "$LAND_LANDED:refs/tags/$LAND_TAG" "$LAND_HEAD:refs/tags/$LAND_TAG$ChainRefSuffix" \
@@ -826,13 +868,59 @@ command_publish() {
 	summary "published $LAND_TAG on $(short "$LAND_LANDED"), its chain at $LAND_TAG$ChainRefSuffix"
 }
 
+cross_build_merged() {
+	local merged="$1" tip="$2" seed target exe_ext log
+
+	seed="$ChainSeed$MAXON_EXE_EXT"
+	./scripts/fetch-seed.sh "$LAND_TAG" "$(maxon_host_target)" "--output=$seed"
+	prepare_tree "$merged" "$seed"
+	rm -rf "$PinBuildDirectory"
+
+	for target in $MaxonTargets; do
+		exe_ext="$(maxon_target_exe_ext "$target")"
+		log="$PinBuildDirectory/$target.log"
+		mkdir -p "$PinBuildDirectory/$target"
+		echo "land.sh: the seed $LAND_TAG builds $(short "$merged") for $target" >&2
+		seed_builds_compiler "$ChainTree" "$target" "$repo_root/$PinBuildDirectory/$target/maxon$exe_ext" > "$log" 2>&1 \
+			|| { tail -n "$VerdictTailLines" "$log" >&2; fail "the seed $LAND_TAG does not build $(short "$merged"), the chain's $(short "$LAND_LANDED") merged onto $(short "$tip"), for $target (the build's tail is above) — rebase the chain onto $Remote/$Branch and submit again"; }
+	done
+}
+
+command_pin() {
+	local tip merged pin proof
+
+	require_env LAND_MODE LAND_TAG
+	recreate_landed
+	tip="$(standing_tip "$LAND_MODE" "$MomentPlan")"
+	merged="$(chain_merged_onto "$tip" "$LAND_BASE" "$LAND_LANDED")"
+
+	if seed_inputs_differ "$LAND_LANDED" "$merged"; then
+		cross_build_merged "$merged" "$tip"
+		proof="$ProofBuilt"
+	else
+		proof="$ProofSkipped"
+	fi
+
+	pin="$(make_pin "$merged" "$LAND_LANDED" "$LAND_TAG")"
+
+	output tip "$tip"
+	output merged "$merged"
+	output pin "$pin"
+
+	summary "the chain's $(short "$LAND_LANDED") merged onto $(short "$tip") as $(short "$merged"), pinned to $LAND_TAG by $(short "$pin") — the seed's build of the merged tree: $proof"
+}
+
+seed_published_on() {
+	local tag="$1" landed="$2" target
+
+	seed_release_published "$tag" || return 1
+	target="$(remote_ref_target "refs/tags/$tag")" || exit 1
+	[ -n "$target" ] && [ "$target" = "$landed" ]
+}
+
 # A re-run of this job after the retraction must not pin `main` to a seed that no longer exists.
 require_still_published() {
-	local target
-
-	seed_release_published "$LAND_TAG" || fail "the release $LAND_TAG is gone — this run was retracted; push again"
-	target="$(remote_ref_target "refs/tags/$LAND_TAG")"
-	[ "$target" = "$LAND_LANDED" ] || fail "the tag $LAND_TAG is not on $(short "$LAND_LANDED") — this run was retracted; push again"
+	seed_published_on "$LAND_TAG" "$LAND_LANDED" || fail "the release $LAND_TAG is gone or its tag is not on $(short "$LAND_LANDED") — this run was retracted; push again"
 }
 
 landing_words() {
@@ -853,7 +941,7 @@ record_landed() {
 }
 
 dispatch_land() {
-	local branch="$1" mode="$2" head="$3" attempt="$4" tip="${5:-}" fields
+	local branch="$1" mode="$2" head="$3" attempt="$4" tip="${5:-}" seed="${6:-}" fields
 
 	fields=(-f "ref=$branch" -f "inputs[mode]=$mode" -f "inputs[head]=$head" -f "inputs[attempt]=$attempt")
 
@@ -861,23 +949,33 @@ dispatch_land() {
 		fields+=(-f "inputs[tip]=$tip")
 	fi
 
+	if [ -n "$seed" ]; then
+		fields+=(-f "inputs[seed]=$seed")
+	fi
+
 	gh api --method POST "$SeedRepoApi/actions/workflows/$LandWorkflow/dispatches" "${fields[@]}" --silent \
 		|| fail "dispatching $LandWorkflow on $branch for $(short "$head") failed — submit again"
 }
 
 redispatch() {
-	local tip="$1" next
+	local tip="$1" next seed
 
 	[ "$LAND_ATTEMPT" -lt "$MaxLandAttempts" ] || fail "$Remote/$Branch moved to $(short "$tip"), which changes a seed input, on each of $MaxLandAttempts attempts — submit again"
 	next=$((LAND_ATTEMPT + 1))
 
+	case "$LAND_KIND" in
+		"$KindOrdinary") seed="" ;;
+		"$KindChain") seed="$LAND_TAG" ;;
+		*) fail "no re-dispatch for a $LAND_KIND land" ;;
+	esac
+
 	case "$LAND_MODE" in
-		"$ModeRehearsal") dispatch_land "$LAND_BRANCH" "$LAND_MODE" "$LAND_HEAD" "$next" "$tip" ;;
-		"$ModeMain") dispatch_land "$LAND_BRANCH" "$LAND_MODE" "$LAND_HEAD" "$next" ;;
+		"$ModeRehearsal") dispatch_land "$LAND_BRANCH" "$LAND_MODE" "$LAND_HEAD" "$next" "$tip" "$seed" ;;
+		"$ModeMain") dispatch_land "$LAND_BRANCH" "$LAND_MODE" "$LAND_HEAD" "$next" "" "$seed" ;;
 		*) fail "no re-dispatch in $LAND_MODE mode" ;;
 	esac
 
-	output "$OutputRedispatched" "$RedispatchedYes"
+	output "$OutputRedispatched" "$OutputYes"
 	annotate "$AnnotationNotice" "$RedispatchedTitle" "attempt $next merges onto $tip"
 	summary "$Remote/$Branch moved to $(short "$tip"), which changes a seed input — re-dispatched as attempt $next of $MaxLandAttempts"
 }
@@ -916,25 +1014,32 @@ require_landed_as_planned() {
 	require_minted_rows_only "$merged"
 }
 
-land_ordinary() {
-	local push tip candidate now
+remerged_candidate() {
+	local tip="$1" merged
 
-	require_env LAND_MODE LAND_TIP LAND_LANDED LAND_COMMITTED LAND_BRANCH
-	require_attempt
-	resolve_commit "$LAND_TIP" > /dev/null
-	receive_landed
-	require_landed_as_planned
+	case "$LAND_KIND" in
+		"$KindOrdinary") merge_onto "$tip" "$LAND_TIP" "$LAND_LANDED" ;;
+		"$KindChain")
+			merged="$(chain_merged_onto "$tip" "$LAND_BASE" "$LAND_LANDED")"
+			make_pin "$merged" "$LAND_LANDED" "$LAND_TAG"
+			;;
+		*) fail "no re-merge for a $LAND_KIND land" ;;
+	esac
+}
+
+push_landing() {
+	local planned="$1" push tip candidate now
 
 	for ((push = 1; ; push++)); do
 		tip="$(standing_tip "$LAND_MODE" "$MomentPush")"
 
 		if [ "$tip" = "$LAND_TIP" ]; then
-			candidate="$LAND_LANDED"
+			candidate="$planned"
 		elif seed_inputs_differ "$LAND_TIP" "$tip"; then
 			redispatch "$tip"
 			return 0
 		else
-			candidate="$(merge_onto "$tip" "$LAND_TIP" "$LAND_LANDED")"
+			candidate="$(remerged_candidate "$tip")"
 		fi
 
 		case "$LAND_MODE" in
@@ -959,18 +1064,30 @@ land_ordinary() {
 	done
 }
 
+land_ordinary() {
+	receive_landed
+	require_landed_as_planned
+	push_landing "$LAND_LANDED"
+}
+
 land_chain() {
-	require_base_unmoved
+	local merged pin
+
+	require_env LAND_TAG LAND_MERGED LAND_PIN
 	recreate_landed
-	recreate_pin
+	merged="$(chain_merged_onto "$LAND_TIP" "$LAND_BASE" "$LAND_LANDED")"
+	[ "$merged" = "$LAND_MERGED" ] || fail "the chain's $(short "$LAND_LANDED") merged onto $(short "$LAND_TIP") came out as $merged, not the pin job's $LAND_MERGED — nothing is pushed"
+	pin="$(make_pin "$merged" "$LAND_LANDED" "$LAND_TAG")"
+	[ "$pin" = "$LAND_PIN" ] || fail "the pin commit came out as $pin, not the pin job's $LAND_PIN — nothing is pushed"
 	require_still_published
-	git push --quiet "$Remote" "$LAND_PIN:refs/heads/$Branch" || fail_base_moved
-	record_landed "$ModeMain" "$LAND_PIN"
+	push_landing "$LAND_PIN"
 }
 
 command_land() {
-	require_env LAND_KIND LAND_HEAD LAND_RUN_HEAD
+	require_env LAND_KIND LAND_HEAD LAND_RUN_HEAD LAND_MODE LAND_TIP LAND_LANDED LAND_COMMITTED LAND_BRANCH
 	[ "$LAND_HEAD" = "$LAND_RUN_HEAD" ] || fail "the plan names $(short "$LAND_HEAD") as the head, and this run lands $(short "$LAND_RUN_HEAD") — nothing is pushed"
+	require_attempt
+	resolve_commit "$LAND_TIP" > /dev/null
 
 	case "$LAND_KIND" in
 		"$KindOrdinary") land_ordinary ;;
@@ -990,7 +1107,7 @@ command_consume() {
 		return 0
 	fi
 
-	target="$(remote_ref_target "refs/heads/$LAND_BRANCH")"
+	target="$(remote_ref_target "refs/heads/$LAND_BRANCH")" || exit 1
 
 	case "$target" in
 		"") summary "$LAND_BRANCH is already gone" ;;
@@ -1002,7 +1119,7 @@ command_consume() {
 delete_remote_ref() {
 	local ref="$1" expected="$2" target
 
-	target="$(remote_ref_target "$ref")"
+	target="$(remote_ref_target "$ref")" || exit 1
 
 	if [ -z "$target" ]; then
 		return 0
@@ -1018,89 +1135,42 @@ delete_remote_ref() {
 }
 
 command_retract() {
-	local target
+	local pins landed="${LAND_LANDED:-}" base
 
-	require_env LAND_HEAD LAND_TAG LAND_LANDED LAND_PIN
+	require_env LAND_HEAD LAND_TAG
 	fetch_branch || fail "$Remote/$Branch cannot be read — nothing is retracted; re-run this job"
+	pins="$(git log --format=%H -S"$LAND_TAG" "$Remote/$Branch" -- "$SeedPinFile")" \
+		|| fail "git cannot read the history of $SeedPinFile on $Remote/$Branch — nothing is retracted; re-run this job"
 
-	if git merge-base --is-ancestor "$LAND_PIN" "$Remote/$Branch" 2> /dev/null; then
-		summary "$Remote/$Branch holds the pin $(short "$LAND_PIN") — $LAND_TAG stays published"
+	if [ -n "$pins" ]; then
+		summary "$Remote/$Branch pins $LAND_TAG in $(short "$pins") — it stays published"
 		return 0
 	fi
 
-	if seed_release_published "$LAND_TAG"; then
-		target="$(remote_ref_target "refs/tags/$LAND_TAG")"
-		[ "$target" = "$LAND_LANDED" ] || fail "the release $LAND_TAG is not on this run's $(short "$LAND_LANDED") — left as it is"
-		seed_release_delete || fail "deleting the release $LAND_TAG failed — re-run this job"
-		summary "deleted the release $LAND_TAG"
+	if [ -z "$landed" ]; then
+		landed="$(remote_ref_target "refs/tags/$LAND_TAG")" || exit 1
+
+		if [ -n "$landed" ]; then
+			resolve_commit "$landed" "the tag $LAND_TAG names it, so nothing is retracted; re-run this job" > /dev/null
+			resolve_commit "$LAND_HEAD" "it is this run's head, so nothing is retracted; re-run this job" > /dev/null
+			base="$(git rev-parse --verify "$landed^")"
+			require_seed_of_head "$LAND_TAG" "$LAND_HEAD" "$landed" "$base" "$LAND_TAG is left as it is"
+		fi
 	fi
 
-	delete_remote_ref "refs/tags/$LAND_TAG" "$LAND_LANDED"
+	if seed_published_on "$LAND_TAG" "$landed"; then
+		seed_release_delete || fail "deleting the release $LAND_TAG failed — re-run this job"
+		summary "deleted the release $LAND_TAG"
+	elif seed_release_published "$LAND_TAG"; then
+		fail "the release $LAND_TAG is not on this run's $(short "$landed") — left as it is"
+	fi
+
+	delete_remote_ref "refs/tags/$LAND_TAG" "$landed"
 	delete_remote_ref "refs/tags/$LAND_TAG$ChainRefSuffix" "$LAND_HEAD"
 }
 
 run_jobs() {
 	gh api "$SeedRepoApi/actions/runs/$1/jobs?per_page=100" --jq "$2"
-}
-
-# A run whose plan has not finished may yet be a chain land, so it counts until the plan says otherwise.
-run_is_landing_chain() {
-	local run="$1" jobs plan chain credential
-
-	jobs="$(run_jobs "$run" '.jobs[] | "\(.name)\t\(.status)\t\(.conclusion // "")"')" \
-		|| fail "GitHub cannot say what the $LandWorkflow run $run is doing"
-	plan="$(printf '%s\n' "$jobs" | awk -F '\t' -v name="$JobPlan" '$1 == name { print $2 "/" $3 }')"
-	chain="$(printf '%s\n' "$jobs" | awk -F '\t' -v name="$JobChain" '$1 == name { print $3 }')"
-	credential="$(printf '%s\n' "$jobs" | awk -F '\t' -v name="$JobCredential" '$1 == name { print $3 }')"
-
-	case "$plan" in
-		"$RunCompleted/$RunSuccess") [ "$chain" != "$JobSkipped" ] && [ "$credential" != "$JobSkipped" ] ;;
-		"$RunCompleted/"*) return 1 ;;
-		*) return 0 ;;
-	esac
-}
-
-landing_chain_runs() {
-	local status runs run branch url
-
-	for status in $RunStatusesInFlight; do
-		runs="$(gh api "$SeedRepoApi/actions/workflows/$LandWorkflow/runs?status=$status&per_page=100" \
-			--jq '.workflow_runs[] | "\(.id)\t\(.head_branch)\t\(.html_url)"')" \
-			|| fail "GitHub cannot list the $LandWorkflow runs — whether a chain land is in flight is unknown"
-
-		while IFS=$'\t' read -r run branch url; do
-			[ -n "$run" ] || continue
-
-			if run_is_landing_chain "$run"; then
-				printf '%s %s\n' "$branch" "$url"
-			fi
-		done < <(printf '%s\n' "$runs")
-	done
-}
-
-command_in_flight() {
-	local wait="no" argument landing
-
-	for argument in "$@"; do
-		case "$argument" in
-			--wait) wait="yes" ;;
-			*) fail "unknown argument to in-flight: $argument" ;;
-		esac
-	done
-
-	while true; do
-		landing="$(landing_chain_runs)"
-
-		if [ -z "$landing" ]; then
-			echo "$InFlightNone"
-			return 0
-		fi
-
-		printf '%s\n' "$landing"
-		[ "$wait" = "yes" ] || return 0
-		echo "land.sh: waiting for the chain land to finish before $Branch is rebased onto" >&2
-		sleep "$InFlightPollSeconds"
-	done
 }
 
 newest_planned_run() {
@@ -1274,9 +1344,9 @@ case "$subcommand" in
 	freeze) command_freeze ;;
 	prove) command_prove "$@" ;;
 	publish) command_publish ;;
+	pin) command_pin ;;
 	land) command_land ;;
 	consume) command_consume ;;
 	retract) command_retract ;;
-	in-flight) command_in_flight "$@" ;;
-	*) fail "usage: land.sh <submit|await|in-flight|chain|plan|freeze|prove|publish|land|consume|retract> (docs/RELEASING.md)" ;;
+	*) fail "usage: land.sh <submit|await|chain|plan|freeze|prove|publish|pin|land|consume|retract> (docs/RELEASING.md)" ;;
 esac

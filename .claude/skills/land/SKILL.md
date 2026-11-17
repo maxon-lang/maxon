@@ -39,7 +39,7 @@ gates and the commit.** Agents do the reading and the typing.
 | 4 | Optimization | `optimize` on a trigger; **the ladder read and its note are yours**; the door mints the row | a ladder you cannot explain |
 | 5 | Review | `code-review`, never a writer of the code | fix before the commit |
 | 6 | Every comment, the `docs/` source | `documenter` | a non-empty code-identity proof |
-| 7 | Wait out a chain land | you | |
+| 7 | You do not rebase for the door | you | |
 | 8 | THE LANDING GATES, once | you | **stop** |
 | 9 | Commit, land through the door; do not wait for CI | you | a bounce: rebase by hand, re-take gates whose inputs changed |
 
@@ -255,14 +255,10 @@ comments are written once, on code that stopped moving.
 (added, rewritten, deleted, net) is zero or close — more than a few, or a comment over two lines, failed
 the skill. **§8 builds**: §6 edits compiled-in sources without building.
 
-## 7. Wait out a chain land — yours
+## 7. The door needs no rebase — yours
 
-```bash
-scripts/land.sh in-flight --wait                    # a chain land in flight holds main: wait for it first
-```
-
-(`in-flight`: `compiler-workflow`.) **You do not rebase for the door**: it merges your commit at main's
-tip (§9), and §8 gates the tree you wrote.
+**You do not rebase for the door**: it merges your commit at main's tip (§9), and §8 gates the tree you
+wrote.
 
 ## 8. THE LANDING GATES — once, on your tree — yours
 
@@ -309,8 +305,6 @@ read the ladder, the final paragraph carries `Scale-Note: <text>`** as a trailer
   --limit 3`), then land in a separate command. A completed red goes through §10's CI-red check (claimed
   by someone else: theirs; else recorded, its culprit asked); land anyway, and that red (it hides later failures) is first in your
   drain if it falls to you. A run in progress never blocks a land.
-- **Then, as its own step, `scripts/land.sh in-flight`**: anything but `none` is a chain land started
-  since §7 — wait (`--wait`).
 - **Then land, in the background** (`run_in_background`; about 4 minutes for a compiler change, and its
   exit wakes you). **From `main`: `scripts/land.sh submit --name=<name>`**, which pushes `land/<name>`,
   dispatches `land.yml` and waits for the run. **A session that pushes only its own branch** ends the

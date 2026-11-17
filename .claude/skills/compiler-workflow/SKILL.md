@@ -233,16 +233,14 @@ scripts/land.sh submit --name=<name>               # land it: main receives your
 can push only its own branch pushes the chain there instead, with the trailer `Land: main` (or `Land:
 rehearsal`) on its head, and follows the run with `scripts/land.sh await <branch> <head>`. CI freezes the
 seed from the chain's last compiler, proves it on every native lane's own runner, publishes it with the
-ref `<seed-tag>-chain`, and pushes the commit and its pin in one push; the run then deletes its branch.
-After a land from the main checkout, `git fetch origin main && git reset --keep origin/main` replaces the
-local chain with what landed. A failed or moved-`main` run retracts what it published: rebase onto
-`origin/main` (a chain needs main's tip as its base), re-take each `/land` §8 gate whose inputs changed,
-and submit again under the same name. A chain mints no scale row: it carries no `Scale-Note:`.
-`docs/RELEASING.md` owns the procedure and the retraction.
-
-**A chain land in flight holds `main`**: a push while `land.yml` publishes a seed costs that land its run.
-`scripts/land.sh in-flight --wait` prints `none` at once when no chain land is running; otherwise it names
-the branch and run and returns when they finish. A failure to read GitHub is a failure, not a `none`.
+ref `<seed-tag>-chain`, merges the commit onto `main`'s tip (building the merged tree with the new seed when
+the merge changed a seed input), and pushes the commit and its pin in one push; the run then deletes its
+branch. After a land from the main checkout, `git fetch origin main && git reset --keep origin/main`
+replaces the local chain with what landed. The chain needs no rebase onto `origin/main`. A bounce is a file
+both sides changed, or the seed refusing the merged tree; the run retracts what it published, so rebase by
+hand onto `origin/main`, re-take each `/land` §8 gate whose inputs changed, and submit again under the same
+name. A chain mints no scale row: it carries no `Scale-Note:`. `docs/RELEASING.md` owns the procedure and
+the retraction.
 
 **A session that can push only its own branch** lands an ordinary commit, one the seed accepts, the same
 way: one commit carrying the trailer `Land: main` in its final paragraph, pushed to that branch; `land.yml`

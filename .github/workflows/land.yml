@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: '1'
+      seed:
+        description: a chain's re-dispatch — the seed tag its first attempt published
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -63,9 +68,8 @@ jobs:
       committed: ${{ steps.plan.outputs.committed }}
       date: ${{ steps.plan.outputs.date }}
       landed: ${{ steps.plan.outputs.landed }}
-      proof: ${{ steps.plan.outputs.proof }}
       tag: ${{ steps.plan.outputs.tag }}
-      pin: ${{ steps.plan.outputs.pin }}
+      reused: ${{ steps.plan.outputs.reused }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -81,6 +85,7 @@ jobs:
           LAND_TIP_INPUT: ${{ inputs.tip }}
           LAND_MOVED_INPUT: ${{ inputs.moved }}
           LAND_ATTEMPT: ${{ inputs.attempt || '1' }}
+          LAND_SEED_INPUT: ${{ inputs.seed }}
         run: ./scripts/land.sh plan "$GITHUB_SHA"
 
       - name: Hand the landed commit to the land job
@@ -118,7 +123,7 @@ jobs:
 
   chain:
     needs: plan
-    if: needs.plan.outputs.kind == 'chain'
+    if: needs.plan.outputs.kind == 'chain' && needs.plan.outputs.reused != 'true'
     runs-on: ubuntu-latest
     env: &plan-env
       LAND_MODE: ${{ needs.plan.outputs.mode }}
@@ -131,7 +136,6 @@ jobs:
       LAND_DATE: ${{ needs.plan.outputs.date }}
       LAND_LANDED: ${{ needs.plan.outputs.landed }}
       LAND_TAG: ${{ needs.plan.outputs.tag }}
-      LAND_PIN: ${{ needs.plan.outputs.pin }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -197,12 +201,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/land.sh publish
 
+  pin:
+    needs: [plan, publish]
+    if: >-
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.kind == 'chain'
+      && (needs.publish.result == 'success' || needs.plan.outputs.reused == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tip: ${{ steps.pin.outputs.tip }}
+      merged: ${{ steps.pin.outputs.merged }}
+      pin: ${{ steps.pin.outputs.pin }}
+    env: *plan-env
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Merge the chain at main's tip, build the merged tree with the seed when a seed input changed, and write the pin
+        id: pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAND_TIP_INPUT: ${{ inputs.tip }}
+          LAND_MOVED_INPUT: ${{ inputs.moved }}
+        run: ./scripts/land.sh pin
+
   land:
-    needs: [plan, credential, publish]
+    needs: [plan, credential, pin]
     if: >-
       !cancelled() && needs.plan.result == 'success'
-      && ((needs.plan.outputs.kind == 'ordinary' && (needs.plan.outputs.mode == 'rehearsal' || needs.credential.result == 'success'))
-      || (needs.plan.outputs.kind == 'chain' && needs.plan.outputs.mode == 'main' && needs.credential.result == 'success' && needs.publish.result == 'success'))
+      && (needs.plan.outputs.mode == 'rehearsal' || needs.credential.result == 'success')
+      && (needs.plan.outputs.kind == 'ordinary' || (needs.plan.outputs.kind == 'chain' && needs.pin.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -231,6 +261,9 @@ jobs:
           LAND_TIP_INPUT: ${{ inputs.tip }}
           LAND_MOVED_INPUT: ${{ inputs.moved }}
           LAND_ATTEMPT: ${{ inputs.attempt || '1' }}
+          LAND_TIP: ${{ needs.pin.outputs.tip || needs.plan.outputs.tip }}
+          LAND_MERGED: ${{ needs.pin.outputs.merged }}
+          LAND_PIN: ${{ needs.pin.outputs.pin }}
         run: ./scripts/land.sh land
 
       - name: Keep the commit a rehearsal would push
@@ -243,10 +276,11 @@ jobs:
           if-no-files-found: error
 
   retract:
-    needs: [plan, chain, prove, credential, publish, land]
+    needs: [plan, chain, prove, credential, publish, pin, land]
     if: >-
-      always() && needs.plan.result == 'success' && needs.plan.outputs.kind == 'chain'
-      && (needs.plan.outputs.mode == 'rehearsal' || needs.land.result != 'success')
+      always() && needs.land.outputs.redispatched != 'true'
+      && ((needs.plan.result == 'success' && needs.plan.outputs.kind == 'chain')
+      || (needs.plan.result != 'success' && inputs.seed != ''))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -256,13 +290,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Retract what this run published, unless main holds its pin
+      - name: Retract what this run published, unless main pins its tag
         env:
           GH_TOKEN: ${{ github.token }}
+          LAND_TAG: ${{ needs.plan.outputs.tag || inputs.seed }}
+          LAND_HEAD: ${{ needs.plan.outputs.head || env.LAND_RUN_HEAD }}
         run: ./scripts/land.sh retract
 
   consume:
-    needs: [plan, chain, prove, credential, publish, land, retract]
+    needs: [plan, chain, prove, credential, publish, pin, land, retract]
     if: >-
       always() && needs.plan.result != 'skipped' && needs.land.outputs.redispatched != 'true'
       && startsWith(github.ref, 'refs/heads/') && github.ref_name != 'main'
