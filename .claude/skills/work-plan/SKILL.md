@@ -36,13 +36,16 @@ For each stage, in order:
 1. **An open question takes the plan's recommendation**, including one that breaks code the latest
    release compiles; the stage then owes its `## Unreleased` entry. Record the choice under the plan's
    "Rulings". Ask the user only where the plan gives no recommendation.
-2. **Fetch `main`.** If it moved, rebase the plan's commits onto its tip and re-run the filtered specs of
-   the stages already made. A conflict is resolved by hand, never worked around.
+2. **Fetch `main`.** If it moved, rebase the plan's commits onto its tip; a conflict is resolved by hand,
+   never worked around. Re-run only the cases of a stage whose files the rebase touched.
 3. **Watch the stage's spec set red.** The plan's "Shown by" line is its floor. There is no scout: the
    plan names the functions and files.
 4. **Write the code through implementer agents,** on the model each piece needs. A brief carries the
    stage's own section of the plan and the design points it cites, never the whole plan file.
-5. **Filtered specs green.** Where the code contradicts the plan, the implementer's finding amends the
+5. **The stage's own cases green, and nothing wider.** Until §2, a run is `--filter`ed to the cases the
+   stage wrote or re-pinned and the cases of a spec file it edited: never a whole spec file's suite for
+   safety, a corpus, `ir-specs` unfiltered, a second target, or a lane. What a stage breaks elsewhere is
+   §2's gates' to find, over the whole plan, once. Where the code contradicts the plan, the implementer's finding amends the
    stage in the plan file, in this commit. A contradiction with the plan's design stops and asks the user.
 6. **`code-review` per stage only in `ownership` and `generics`**, where a slip is a soundness hole: one
    round, by an agent that did not write the code, blockers only. Every other plan is reviewed in §2.
@@ -75,8 +78,9 @@ When every stage is ticked or `deferred`:
 5. **`documenter`**: the comments, the `docs/` sources the plan's surfaces own, the site regeneration,
    and every `## Unreleased` entry the stages recorded.
 6. **Mark the plan's "Done" cell in `plans/README.md`.** The plan file stays.
-7. **`/land` §8's gates once**, over the whole plan. A plan changes far more than one stage did: run the
-   whole `ir-specs` suite, not a filter, when any stage touched code generation.
+7. **`/land` §8's gates once**, over the whole plan: the first run wider than a stage's own cases. A
+   plan changes far more than one stage did: run the whole `ir-specs` suite, not a filter, when any stage
+   touched code generation. A red here is fixed in the squashed tree and the gate re-taken.
 8. **`/land` §9:** one commit whose message carries each stage's paragraph in order, landed through the
    door. It ends `Fixes #<class issue>` when no stage is `deferred`; with one deferred it names the
    issue without a closing word, and the issue stays open for those stages.
