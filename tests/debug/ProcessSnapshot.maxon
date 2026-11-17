@@ -8,6 +8,9 @@ let ParentColumn = 1
 let GroupColumn = 2
 let StatColumn = 3
 let DefunctState = "Z"
+let StoppedState = "T"
+let ProcessLookMs = 2 as Milliseconds
+let HandedBackRunningDeadlineMs = 2000 as DurationMs
 let SamplingTool = "sample"
 let SamplingSeconds = "1"
 let SamplingMs = 30000
@@ -25,9 +28,10 @@ type ListedProcess
 	let id as Pid
 	let parentId as Pid
 	let groupId as Pid
+	let stat as String
 
-	static function create(line String, columns StringArray, id Pid, parentId Pid, groupId Pid) returns ListedProcess
-		return Self{line: line, columns: columns, id: id, parentId: parentId, groupId: groupId}
+	static function create(line String, columns StringArray, id Pid, parentId Pid, groupId Pid, stat String) returns ListedProcess
+		return Self{line: line, columns: columns, id: id, parentId: parentId, groupId: groupId, stat: stat}
 	end 'create'
 
 	function isStub() returns bool
@@ -118,15 +122,13 @@ type ListedProcess
 	end 'isProcess'
 
 	function isDefunct() returns bool
-		let state = try self.columns.get(StatColumn as ElementIndex) otherwise return false
-
-		return state.startsWith(DefunctState)
+		return isDefunctState(self.stat)
 	end 'isDefunct'
 
 	static function placeAmong(listed ListedProcesses, process Pid) returns ProcessPlace
 		return match ListedProcess.lookUp(process, listed: listed) 'which'
 			absent gives ProcessPlace.absent
-			found(candidate) gives ProcessPlace.present(candidate.parentId, defunct: candidate.isDefunct(), heldByAStub: candidate.hasAStubParentAmong(listed))
+			found(candidate) gives ProcessPlace.present(candidate.parentId, stat: candidate.stat, heldByAStub: candidate.hasAStubParentAmong(listed))
 		end 'which'
 	end 'placeAmong'
 
@@ -164,11 +166,12 @@ function listedProcesses() returns ListedProcesses throws SubprocessError
 		let idText = try columns.get(ProcessIdColumn as ElementIndex) otherwise continue
 		let parentText = try columns.get(ParentColumn as ElementIndex) otherwise continue
 		let groupText = try columns.get(GroupColumn as ElementIndex) otherwise continue
+		let stat = try columns.get(StatColumn as ElementIndex) otherwise continue
 		let id = try int.fromString(idText) otherwise continue
 		let parentId = try int.fromString(parentText) otherwise continue
 		let groupId = try int.fromString(groupText) otherwise continue
 
-		processes.push(ListedProcess.create(line, columns: columns, id: id as Pid, parentId: parentId as Pid, groupId: groupId as Pid))
+		processes.push(ListedProcess.create(line, columns: columns, id: id as Pid, parentId: parentId as Pid, groupId: groupId as Pid, stat: stat))
 	end 'eachRow'
 
 	return processes
@@ -192,9 +195,24 @@ function processSnapshot(matching String) returns String
 	#endif
 end 'processSnapshot'
 
+function isDefunctState(stat String) returns bool
+	return stat.startsWith(DefunctState)
+end 'isDefunctState'
+
+function isStoppedState(stat String) returns bool
+	return stat.startsWith(StoppedState)
+end 'isStoppedState'
+
 union ProcessPlace
 	absent
-	present(parentId Pid, defunct bool, heldByAStub bool)
+	present(parentId Pid, stat String, heldByAStub bool)
+
+	export function isListed() returns bool
+		return match self 'which'
+			absent gives false
+			present gives true
+		end 'which'
+	end 'isListed'
 
 	export function isHeldByAStub() returns bool
 		return match self 'which'
@@ -203,20 +221,53 @@ union ProcessPlace
 		end 'which'
 	end 'isHeldByAStub'
 
+	export function isStopped() returns bool
+		return match self 'which'
+			absent gives false
+			present(_, stat, _) gives isStoppedState(stat)
+		end 'which'
+	end 'isStopped'
+
 	export function isALiveChildOf(parent Pid) returns bool
 		return match self 'which'
 			absent gives false
-			present(parentId, defunct, heldByAStub) gives parentId == parent and not defunct and not heldByAStub
+			present(parentId, stat, heldByAStub) gives parentId == parent and not isDefunctState(stat) and not isStoppedState(stat) and not heldByAStub
 		end 'which'
 	end 'isALiveChildOf'
 
 	export function displayReason() returns String
 		return match self 'which'
 			absent gives "the process is not listed"
-			present(parentId, defunct, heldByAStub) gives "the process is listed with parent {parentId}, {"defunct" if defunct else "not defunct"}, {"the parent is a debug stub" if heldByAStub else "the parent is not a debug stub"}"
+			present(parentId, stat, heldByAStub) gives "the process is listed with parent {parentId}, state `{stat}` ({"defunct" if isDefunctState(stat) else "stopped" if isStoppedState(stat) else "neither defunct nor stopped"}), {"the parent is a debug stub" if heldByAStub else "the parent is not a debug stub"}"
 		end 'which'
 	end 'displayReason'
 end 'ProcessPlace'
+
+function placeOnceTheStubIsGone(program Pid, deadlineMs DurationMs) returns ProcessPlace
+	let started = Clock.nowMs()
+	var place = placeOf(program)
+
+	while place.isHeldByAStub() and Clock.elapsedMs(started) < deadlineMs 'untilTheStubLeaves'
+		sleep(ProcessLookMs)
+
+		place = placeOf(program)
+	end 'untilTheStubLeaves'
+
+	return place
+end 'placeOnceTheStubIsGone'
+
+function placeOnceHandedBack(program Pid, stubGoneDeadlineMs DurationMs) returns ProcessPlace
+	var place = placeOnceTheStubIsGone(program, deadlineMs: stubGoneDeadlineMs)
+	let handedBack = Clock.nowMs()
+
+	while place.isStopped() and Clock.elapsedMs(handedBack) < HandedBackRunningDeadlineMs 'untilItRuns'
+		sleep(ProcessLookMs)
+
+		place = placeOf(program)
+	end 'untilItRuns'
+
+	return place
+end 'placeOnceHandedBack'
 
 function placeOf(process Pid) returns ProcessPlace
 	#if os(Windows)

@@ -2175,10 +2175,17 @@ export type StdToArm64Lowering
 	// which is a `CallFixup` that `arm64ResolveCallFixups` panics on.
 	function lowerOsHostProcess(resultId ValueId, service HostProcessCall, operands ValueIdArray, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerHostProcessImport(resultId, slot: machHostProcessSlot(service), operands: operands, dstRef: dstRef)
+			importCall then self.lowerDarwinHostProcess(resultId, route: darwinHostProcessRoute(service), operands: operands, dstRef: dstRef)
 			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixTraceChunk(service)), args: operands, dstRef: dstRef)
 		end 'route'
 	end 'lowerOsHostProcess'
+
+	function lowerDarwinHostProcess(resultId ValueId, route DarwinHostProcessRoute, operands ValueIdArray, dstRef ElementIndex)
+		match route 'route'
+			importSlot(slot) then self.lowerHostProcessImport(resultId, slot: slot, operands: operands, dstRef: dstRef)
+			chunk(name) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(name), args: operands, dstRef: dstRef)
+		end 'route'
+	end 'lowerDarwinHostProcess'
 
 	function lowerHostProcessImport(resultId ValueId, slot OsImportSlot, operands ValueIdArray, dstRef ElementIndex)
 		// A void import leaves nothing in x0 to capture, so the op's result is defined as 0.
@@ -3083,35 +3090,41 @@ function arm64HostCallOp(callee Arm64HostCallee) returns TargetOp
 	end 'which'
 end 'arm64HostCallOp'
 
-function machHostProcessSlot(service HostProcessCall) returns OsImportSlot
-	return match service 'slot'
-		machSelfTask gives OsImportSlot.machTaskSelf
-		machTaskForPid gives OsImportSlot.taskForPid
-		machTaskThreads gives OsImportSlot.taskThreads
-		machThreadInfo gives OsImportSlot.threadInfo
-		machThreadSuspend gives OsImportSlot.threadSuspend
-		machThreadResume gives OsImportSlot.threadResume
-		machThreadState gives OsImportSlot.threadGetState
-		machThreadSelf gives OsImportSlot.machThreadSelf
-		machReadMemory gives OsImportSlot.machVmReadOverwrite
-		machTaskInfo gives OsImportSlot.taskInfo
-		machReleasePort gives OsImportSlot.machPortDeallocate
-		machReleaseMemory gives OsImportSlot.machVmDeallocate
-		secTrustSettingsCopyCertificates gives OsImportSlot.secTrustSettingsCopyCertificates
-		secTrustSettingsCopyTrustSettings gives OsImportSlot.secTrustSettingsCopyTrustSettings
-		secPolicyCopyProperties gives OsImportSlot.secPolicyCopyProperties
-		cfDictionaryGetValueIfPresent gives OsImportSlot.cfDictionaryGetValueIfPresent
-		cfDictionaryContainsKey gives OsImportSlot.cfDictionaryContainsKey
-		cfNumberGetValue gives OsImportSlot.cfNumberGetValue
-		cfEqual gives OsImportSlot.cfEqual
-		cfStringCreate gives OsImportSlot.cfStringCreateWithCString
-		lookupSymbol gives OsImportSlot.dlsym
-		secCertificateCopyData gives OsImportSlot.secCertificateCopyData
-		cfArrayCount gives OsImportSlot.cfArrayGetCount
-		cfArrayElement gives OsImportSlot.cfArrayGetValueAtIndex
-		cfDataLength gives OsImportSlot.cfDataGetLength
-		cfDataBytes gives OsImportSlot.cfDataGetBytePtr
-		cfRelease gives OsImportSlot.cfRelease
+union DarwinHostProcessRoute
+	importSlot(slot OsImportSlot)
+	chunk(name immutable ByteArray)
+end 'DarwinHostProcessRoute'
+
+function darwinHostProcessRoute(service HostProcessCall) returns DarwinHostProcessRoute
+	return match service 'route'
+		processSignal gives DarwinHostProcessRoute.chunk(posixTraceChunk(service))
+		machSelfTask gives DarwinHostProcessRoute.importSlot(OsImportSlot.machTaskSelf)
+		machTaskForPid gives DarwinHostProcessRoute.importSlot(OsImportSlot.taskForPid)
+		machTaskThreads gives DarwinHostProcessRoute.importSlot(OsImportSlot.taskThreads)
+		machThreadInfo gives DarwinHostProcessRoute.importSlot(OsImportSlot.threadInfo)
+		machThreadSuspend gives DarwinHostProcessRoute.importSlot(OsImportSlot.threadSuspend)
+		machThreadResume gives DarwinHostProcessRoute.importSlot(OsImportSlot.threadResume)
+		machThreadState gives DarwinHostProcessRoute.importSlot(OsImportSlot.threadGetState)
+		machThreadSelf gives DarwinHostProcessRoute.importSlot(OsImportSlot.machThreadSelf)
+		machReadMemory gives DarwinHostProcessRoute.importSlot(OsImportSlot.machVmReadOverwrite)
+		machTaskInfo gives DarwinHostProcessRoute.importSlot(OsImportSlot.taskInfo)
+		machReleasePort gives DarwinHostProcessRoute.importSlot(OsImportSlot.machPortDeallocate)
+		machReleaseMemory gives DarwinHostProcessRoute.importSlot(OsImportSlot.machVmDeallocate)
+		secTrustSettingsCopyCertificates gives DarwinHostProcessRoute.importSlot(OsImportSlot.secTrustSettingsCopyCertificates)
+		secTrustSettingsCopyTrustSettings gives DarwinHostProcessRoute.importSlot(OsImportSlot.secTrustSettingsCopyTrustSettings)
+		secPolicyCopyProperties gives DarwinHostProcessRoute.importSlot(OsImportSlot.secPolicyCopyProperties)
+		cfDictionaryGetValueIfPresent gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfDictionaryGetValueIfPresent)
+		cfDictionaryContainsKey gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfDictionaryContainsKey)
+		cfNumberGetValue gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfNumberGetValue)
+		cfEqual gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfEqual)
+		cfStringCreate gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfStringCreateWithCString)
+		lookupSymbol gives DarwinHostProcessRoute.importSlot(OsImportSlot.dlsym)
+		secCertificateCopyData gives DarwinHostProcessRoute.importSlot(OsImportSlot.secCertificateCopyData)
+		cfArrayCount gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfArrayGetCount)
+		cfArrayElement gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfArrayGetValueAtIndex)
+		cfDataLength gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfDataGetLength)
+		cfDataBytes gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfDataGetBytePtr)
+		cfRelease gives DarwinHostProcessRoute.importSlot(OsImportSlot.cfRelease)
 
 		openProcess or
 		nextThread or
@@ -3144,10 +3157,9 @@ function machHostProcessSlot(service HostProcessCall) returns OsImportSlot
 		threadGroupSignal or
 		certOpenRootStore or
 		certEnumCertificate or
-		certCloseStore or
-		processSignal panic("machHostProcessSlot: `{service.name}` is a Win32 or ptrace primitive, and this lane reaches another process through Mach task ports — `ProfileRuntime.profileHostShapeOf` builds the Mach entries for it, and `HostFacility.machTaskPorts` is what refuses a program that names one on a lane without them (E3104), so reaching here is a compiler bug that got past both")
-	end 'slot'
-end 'machHostProcessSlot'
+		certCloseStore panic("darwinHostProcessRoute: `{service.name}` is a Win32 or ptrace primitive, and this lane reaches another process through Mach task ports — `ProfileRuntime.profileHostShapeOf` builds the Mach entries for it, and `HostFacility.machTaskPorts` is what refuses a program that names one on a lane without them (E3104), so reaching here is a compiler bug that got past both")
+	end 'route'
+end 'darwinHostProcessRoute'
 
 function dwordExtensionOp(answer ImportAnswer, into TargetVReg, src TargetVReg) returns TargetOp
 	return match answer 'extension'

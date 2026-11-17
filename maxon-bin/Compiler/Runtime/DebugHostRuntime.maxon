@@ -85,10 +85,16 @@ export function installDebugHostRuntime(module StdModule, usage RuntimeUsage, ta
 		return
 	end 'noProcessDebug'
 
-	match debugHostShapeOf(target) 'shape'
-		debugPort then installDebugPortEntries(module)
-		processTrace then installProcessTraceEntries(module)
-	end 'shape'
+	if targetProvidesFacility(target, facility: HostFacility.processDebug) 'drivesAProcess'
+		match debugHostShapeOf(target) 'shape'
+			debugPort then installDebugPortEntries(module)
+			processTrace then installProcessTraceEntries(module)
+		end 'shape'
+	end 'drivesAProcess'
+
+	if targetProvidesFacility(target, facility: HostFacility.processSignal) 'signalsAProcess'
+		buildHostProcessEntry(module, name: DebugHostProcessSignalName, words: HostProcessTwoWords, service: HostProcessCall.processSignal)
+	end 'signalsAProcess'
 end 'installDebugHostRuntime'
 
 union DebugHostShape
@@ -102,7 +108,7 @@ function debugHostShapeOf(target Target) returns DebugHostShape
 		linux gives DebugHostShape.processTrace
 
 		macos or
-		wasi panic("debugHostShapeOf: {targetToString(target)} provides neither a debug port nor ptrace, and `targetProvidesFacility` answers `processDebug` false for it — a program reaching here would be built asking for five trace-band entries this lane's runtime lays out no chunk for")
+		wasi panic("debugHostShapeOf: {targetToString(target)} provides neither a debug port nor ptrace, and `targetProvidesFacility` answers `processDebug` false for it — `installDebugHostRuntime` asks for a shape only where that facility is provided")
 	end 'os'
 end 'debugHostShapeOf'
 
@@ -111,7 +117,6 @@ function installProcessTraceEntries(module StdModule)
 	buildHostProcessEntry(module, name: DebugHostTraceeReadName, words: HostProcessFiveWords, service: HostProcessCall.traceeMemoryRead)
 	buildHostProcessEntry(module, name: DebugHostAwaitTraceeName, words: HostProcessThreeWords, service: HostProcessCall.awaitTracee)
 	buildHostProcessEntry(module, name: DebugHostThreadSignalName, words: HostProcessThreeWords, service: HostProcessCall.threadGroupSignal)
-	buildHostProcessEntry(module, name: DebugHostProcessSignalName, words: HostProcessTwoWords, service: HostProcessCall.processSignal)
 end 'installProcessTraceEntries'
 
 function installDebugPortEntries(module StdModule)

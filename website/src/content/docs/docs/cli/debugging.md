@@ -161,7 +161,9 @@ else is sent. A `pause` stop, and a stop whose thread has since ended, is detach
 On `arm64-macos` a `detach` the stub has answered waits up to a second for the program to become the
 session's own child again, and only then ends the stub. A program the stub still holds after that is
 refused `the-stub-still-holds-the-program`, and the stub keeps holding it. After it, every command
-except `help` and `quit` is refused, and `quit` ends the program through the stub.
+except `help` and `quit` is refused, and `quit` ends the program through the stub. A program that
+becomes the session's child still stopped, because the stub released it with a stop signal pending, is
+sent `SIGCONT`, so it runs on.
 
 `break <target> if <local> <op> <literal>` arms a conditional breakpoint the driver judges at the stop, so a
 hit that fails it resumes at once; a condition over a float, a `String`, a field path, a constant or a local

@@ -29,12 +29,16 @@ let RemovalRefusalWording = "could not remove "
 #else
 	let PosixLinkToolName = "ln"
 	let PosixSymbolicFlag = "-s"
-	let PosixShellCommandFlag = "-c"
 	let FileHolderShellArgumentZero = "fileholder"
 #endif
 
 #if not os(Windows)
-	public let PosixShellPath = "/bin/sh"
+	let PosixShellPath = "/bin/sh"
+	public let PosixShellCommandFlag = "-c"
+
+	public function posixShell() returns Executable
+		return Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path"))
+	end 'posixShell'
 #endif
 
 #if os(Windows)
@@ -188,8 +192,8 @@ public function endedProcessId() returns Pid
 		let exe = Executable.name("cmd")
 		let argv = ["/c", "exit", "0"]
 	#else
-		let exe = Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path"))
-		let argv = ["-c", "exit 0"]
+		let exe = posixShell()
+		let argv = [PosixShellCommandFlag, "exit 0"]
 	#endif
 
 	let finished = try Subprocess.run(exe, arguments: argv) otherwise panic("the gate could not run — could not run a child to learn an ended process's id")
@@ -488,7 +492,7 @@ public function fileHeldOpen(path FilePath, hold FileHold) returns FileHolder
 		let executable = Executable.name(WindowsShellName)
 		let arguments = windowsScriptArguments(supportFixtureScript(FileHolderFixtureName, script: FileHolderScriptName))
 	#else
-		let executable = Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path"))
+		let executable = posixShell()
 		let arguments = [PosixShellCommandFlag, fileHolderShellScript(), FileHolderShellArgumentZero].clone()
 	#endif
 

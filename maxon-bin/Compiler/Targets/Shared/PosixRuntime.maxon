@@ -142,7 +142,6 @@ export function posixOpensFiles(usage RuntimeUsage) returns bool
 	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesChildPipes or usage.usesManagedSocket
 end 'posixOpensFiles'
 
-
 // --- The CHILD-PROCESS band ---
 //
 // `mrt_host_proc_reap` and `mrt_host_proc_await` are internal to the band — no isel lowering names either —
@@ -269,7 +268,7 @@ export function posixTraceChunk(service HostProcessCall) returns immutable ByteA
 		cfArrayElement or
 		cfDataLength or
 		cfDataBytes or
-		cfRelease panic("posixTraceChunk: `{service.name}` is a Windows or Mach host service (debug-port, sampling, task-port or trust-store), and the Linux lanes' `lowerOsHostProcess`, which calls this, lays out a chunk only for the trace band's five entries — `installDebugHostRuntime` builds them where `debugHostShapeOf` answers `processTrace`; the arm64-macos lane reaches a Mach service through its import slot")
+		cfRelease panic("posixTraceChunk: `{service.name}` is a Windows or Mach host service (debug-port, sampling, task-port or trust-store), and a POSIX lane lays out a chunk only for the four trace-band entries and the process signal — `installDebugHostRuntime` builds the trace entries where `debugHostShapeOf` answers `processTrace` and the signal entry where `targetProvidesFacility` answers `processSignal`, and the arm64-macos lane asks this for the signal alone (`darwinHostProcessRoute`), reaching every Mach service through its import slot")
 	end 'service'
 end 'posixTraceChunk'
 
