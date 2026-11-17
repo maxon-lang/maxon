@@ -18,7 +18,7 @@ const HISTORY_SPACING_SECONDS = 240;
 const SAME_WINDOW_TOLERANCE_SECONDS = 120;
 const DEFAULT_POLL_SECONDS = 30;
 const DEFAULT_WAKE_MAX_SECONDS = 3000;
-const WAKE_HEARTBEAT_SECONDS = 600;
+const WAITING_HEARTBEAT_SECONDS = 600;
 const WAIT_TIMEOUT_EXIT = 3;
 const ACCOUNT_LABEL_LENGTH = 8;
 const ORCHESTRATOR_ID = 'orchestrator';
@@ -445,15 +445,37 @@ function commandAck(options, given) {
   console.log(`acknowledged ${ids.length}`);
 }
 
+function waitHeartbeat(id, options) {
+  const last = readFleet().heartbeats.find(entry => entry.key === id)?.data;
+  const model = options.model ?? last?.model;
+  if (model === undefined) fail(`wait heartbeats while it waits and needs --model: ${id} has no earlier heartbeat to take it from`);
+  return {
+    as: id,
+    model,
+    state: options.state ?? last?.state ?? STATE.idle,
+    task: options.task ?? last?.task ?? undefined,
+    account: options.account ?? process.env[ACCOUNT_ENV] ?? last?.account,
+  };
+}
+
 async function commandWait(options) {
   const id = required(options, 'as');
   const max = seconds(options, 'max', Infinity);
-  const messages = await watch(seconds(options, 'interval', DEFAULT_POLL_SECONDS), max, () => {
+  const beat = waitHeartbeat(id, options);
+  let lastBeat = nowSeconds();
+  await commandHeartbeat(beat);
+
+  const messages = await watch(seconds(options, 'interval', DEFAULT_POLL_SECONDS), max, async () => {
+    if (nowSeconds() - lastBeat >= WAITING_HEARTBEAT_SECONDS) {
+      lastBeat = nowSeconds();
+      await commandHeartbeat(beat);
+    }
     const found = unread(id);
     return found.length > 0 ? found : null;
   });
 
   if (!messages) {
+    await commandHeartbeat(beat);
     console.log(`no messages for ${id} within ${max} s`);
     process.exit(WAIT_TIMEOUT_EXIT);
   }
@@ -760,7 +782,7 @@ async function commandWake(options) {
   let standing = [];
 
   const fired = await watch(seconds(options, 'interval', DEFAULT_POLL_SECONDS), max, async () => {
-    if (nowSeconds() - lastBeat >= WAKE_HEARTBEAT_SECONDS) {
+    if (nowSeconds() - lastBeat >= WAITING_HEARTBEAT_SECONDS) {
       lastBeat = nowSeconds();
       await commandHeartbeat(beat);
     }

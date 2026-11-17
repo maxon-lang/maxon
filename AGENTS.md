@@ -37,7 +37,10 @@ checkout.
   only means no task is coming yet: stay `--state idle` and wait for an `ASSIGN`.
 - **Waiting** — for an `ASSIGN`, a `RULING` or a `RESUME` — is `fleet.mjs wait --as <id>` run with
   `run_in_background`: it polls GitHub, not you, so it costs no usage, and its exit wakes you and prints
-  the messages that arrived. `step --state idle` (or `paused`) before you start it.
+  the messages that arrived. `step --state idle` (or `paused`) before you start it. It heartbeats for you
+  while it waits, at its start, every 10 minutes and before it times out, with your last step's model, state
+  and task. **Keep it running whenever you are idle**: restart it each time it exits, so the orchestrator
+  sees an idle session as alive, not gone.
 - **Stay in the assigned area.** Needing a file outside it is a `PROGRESS` naming the file before you
   edit it; one that another task owns is a `BLOCKED`.
 - **Your scope is fixed at `ASSIGN`.** Work that a `RULING` or your own finding adds is a `FOUND` (or a
