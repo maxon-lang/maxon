@@ -1886,3 +1886,575 @@ end 'main'
 ```exitcode
 14
 ```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-statement-reads -->
+### A keep made in the CONDITION is seen by a read in a statement nested in the TRUE arm
+The true arm is a `try` whose handler block holds a `print`. The statement runs inside the arm, after the condition's call kept `u`, so its read of `u` is the use after the move that the hoisted control earns for the same condition made before the conditional.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = (try mayFail(k) otherwise 'h'
+		print("{peekUT(u)}\n")
+		return 0
+	end 'h') if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:47:18: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-statement-reads-hoisted -->
+### The hoisted control: the keep is made before the conditional
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let t = lg(peekUT(idUT(u)))
+	let c = (try mayFail(k) otherwise 'h'
+		print("{peekUT(u)}\n")
+		return 0
+	end 'h') if t != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:48:18: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-return-reads -->
+### A keep made in the CONDITION is seen by a `return` nested in the TRUE arm
+The read is inside the nested statement itself, and the statement is a `return`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = (try mayFail(k) otherwise 'h'
+		return peekUT(u)
+	end 'h') if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:47:17: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-read-before-nested-statement -->
+### A keep made in the CONDITION is seen by a read that precedes the TRUE arm's nested statement
+The `try`'s call reads `u` before the handler block's statement is entered.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = (try mayFail(peekUT(u)) otherwise 'h'
+		return 0
+	end 'h') if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:46:30: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-if-reads -->
+### A keep made in the CONDITION is seen by a read in an `if` nested in the TRUE arm
+The handler block holds an `if` whose body reads `u`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = (try mayFail(k) otherwise 'h'
+		if k > 0 'positive'
+			return peekUT(u)
+		end 'positive'
+
+		return 0
+	end 'h') if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:48:18: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-then-arm-while-reads -->
+### A keep made in the CONDITION is seen by a read in a `while` nested in the TRUE arm
+The handler block holds a `while` whose body reads `u`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = (try mayFail(k) otherwise 'h'
+		while k > 0 'spin'
+			return peekUT(u)
+		end 'spin'
+
+		return 0
+	end 'h') if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:48:18: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.error.condition-keeps-nested-then-arm-statement-reads -->
+### A keep made in the OUTER condition is seen by a statement nested in a nested conditional's TRUE arm
+The inner conditional's true arm is the `try` whose handler block reads `u`; the outer condition keeps it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = ((try mayFail(k) otherwise 'h'
+		print("{peekUT(u)}\n")
+		return 0
+	end 'h') if lg(1) != 0 else 0) if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:47:18: use of moved value 'u': its ownership moved to the parameter 'x' of 'idUT', which keeps it
+```
+
+<!-- test: ternary-expression.arm-local-binding-read-in-nested-statement -->
+### A binding the TRUE arm's nested statements declare is not the conditional's to re-check
+The handler block binds `local` and reads it inside an `if`; the condition that runs first keeps `u`, and has nothing to say about `local`.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+union UT
+	none
+	have(t Tk)
+end 'UT'
+
+type Tk is unique
+	var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Tk'
+
+function lg(x Num) returns Num
+	return x
+end 'lg'
+
+function peekUT(x UT) returns Num
+	match x 'x1'
+		none then return 0
+		have(t) then return t.n
+	end 'x1'
+end 'peekUT'
+
+function idUT(x UT) returns UT
+	return x
+end 'idUT'
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Num) returns Num throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function probe(k Num) returns Num
+	let u = UT.have(Tk.create(k))
+	let c = (try mayFail(k) otherwise 'h'
+		let local = UT.have(Tk.create(2))
+
+		if k > 0 'positive'
+			return peekUT(local)
+		end 'positive'
+
+		return 0
+	end 'h') if lg(peekUT(idUT(u))) != 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: ternary-expression.error.condition-lends-then-arm-statement-reads -->
+<!-- unsupported-targets: wasm32-wasi -->
+### A lend made in the CONDITION is seen by a read in a statement nested in the TRUE arm
+The condition starts a coroutine that writes `n`, so `n` is lent until the promise is drained, and the `print` in the
+true arm's handler block reads it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function mayFail(k Tally) returns Tally throws Oops
+	if k > 100 'big'
+		throw Oops.bad
+	end 'big'
+
+	return k
+end 'mayFail'
+
+function bump(n mutable Tally, k Tally) returns Tally
+	sleep(1)
+	n = n + 1
+
+	return k
+end 'bump'
+
+typealias Pending = Promise with Tally
+
+function started(p Pending) returns Tally
+	return await p
+end 'started'
+
+function probe(k Tally) returns Tally
+	var n = 5 as Tally
+	let c = (try mayFail(k) otherwise 'h'
+		print("{n}\n")
+		return 0
+	end 'h') if started(async bump(n, k: 1)) > 0 else 0
+	return c
+end 'probe'
+
+function main() returns ExitCode
+	let _ = probe(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:32:11: use of moved value 'n': it is lent to the coroutine of the `async` call at 34:28 until that promise is awaited or cancelled
+```

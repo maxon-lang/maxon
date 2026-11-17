@@ -10374,6 +10374,7 @@ extension Parser
 		let markBlockRefCount = func.blockRefs.count()
 		let markOperandCount = self.bodyState.operandOrder.eventCount()
 		let markReadCount = self.bodyState.operandOrder.reads.count()
+		self.bodyState.operandOrder.openExpression()
 
 		// ⭐ **AND THE RANGE-CHECK SITE HEIGHT AT THE SAME INSTANT (`rehomeArmRangeSites`).** A site records
 		// the block and ordinal a value is checked AT, and the relocation moves the arm's ops to a block that
@@ -10434,6 +10435,7 @@ extension Parser
 		if self.at(TokenKind.if) 'ternary'
 			self.releaseCompletedOperand()
 			self.bodyState.operandOrder.stashSince(markOperandCount)
+			self.bodyState.operandOrder.closeExpression()
 
 			self.noteIsolatedPartOrigin(value, startIndex: armStart, endIndex: self.pos)
 
@@ -10442,6 +10444,8 @@ extension Parser
 			let ternary = try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markRangeSiteCount: markRangeSiteCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, markReadCount: markReadCount, preMoveMark: preMoveMark, armSlot: armSlot, tupleArmSlot: tupleArmSlot)
 			return ternary
 		end 'ternary'
+
+		self.bodyState.operandOrder.closeExpression()
 
 		return value
 	end 'parseClaimedValueExpression'
