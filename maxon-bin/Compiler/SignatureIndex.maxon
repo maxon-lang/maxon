@@ -7022,6 +7022,46 @@ export union TransferWalk
 	refused(noun String)
 end 'TransferWalk'
 
+export enum NotAValueKind
+	functionType
+	interfaceType
+	promise
+end 'NotAValueKind'
+
+export union UnsendableStanding
+	notAValue(kind NotAValueKind)
+	unique
+	plainAggregate
+end 'UnsendableStanding'
+
+export union SendableRefusal
+	standing(why UnsendableStanding)
+	graph(noun String)
+end 'SendableRefusal'
+
+export union SendableBoundAnswer
+	openArgument
+	undeclared
+	refused(why SendableRefusal)
+	admitted(shareWalk TransferWalk, retainCallee OwnershipCallee)
+end 'SendableBoundAnswer'
+
+export enum IsolatedBoundAnswer
+	openArgument
+	undeclared
+	admitted
+	refused
+end 'IsolatedBoundAnswer'
+
+union BoundArgumentStanding
+	openArgument
+	undeclared
+	valueOrHandle(subject MaxonType)
+	notAValue(kind NotAValueKind)
+	unique
+	aggregate(subject MaxonType)
+end 'BoundArgumentStanding'
+
 // The subject a value of `tag` is walked as. `typeNames` is the interner `nameId` was minted from.
 function transferSubjectOf(tag ValueTypeTag, nameId TypeNameId, typeNames TypeNameInterner) returns TransferSubject
 	if tagIsByteRecord(tag) 'aByteRecord'

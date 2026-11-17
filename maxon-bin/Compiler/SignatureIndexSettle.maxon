@@ -1927,6 +1927,55 @@ extension ProgramSignatures
 		return DefaultSlotKind.value(OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType)), retainCallee: OwnershipCallee.named(self.retainCalleeOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), from: self.typeNames, result: RetainResult.sharedRead, readerFilePath: readerFilePath)), shareWalk: walk)
 	end 'registryValueKindOf'
 
+	export function sendableBoundAnswer(gid GenericInstanceId, position ElementIndex, readerFilePath FilePath) returns SendableBoundAnswer
+		match self.boundArgumentStanding(self.substitutedInstanceArg(gid, position: position)) 'standing'
+			openArgument then return SendableBoundAnswer.openArgument
+			undeclared then return SendableBoundAnswer.undeclared
+			notAValue(kind) then return SendableBoundAnswer.refused(SendableRefusal.standing(UnsendableStanding.notAValue(kind)))
+			unique then return SendableBoundAnswer.refused(SendableRefusal.standing(UnsendableStanding.unique))
+			valueOrHandle(subject) then return self.sharedGraphAnswer(subject, readerFilePath: readerFilePath)
+			aggregate(subject) then return self.immutableAggregateAnswer(gid, position: position, subject: subject, readerFilePath: readerFilePath)
+		end 'standing'
+	end 'sendableBoundAnswer'
+
+	function immutableAggregateAnswer(gid GenericInstanceId, position ElementIndex, subject MaxonType, readerFilePath FilePath) returns SendableBoundAnswer
+		if self.genericInstanceArgQualifier(gid, position: position) != GenericArgQualifier.frozen 'writtenPlain'
+			return SendableBoundAnswer.refused(SendableRefusal.standing(UnsendableStanding.plainAggregate))
+		end 'writtenPlain'
+
+		return self.sharedGraphAnswer(subject, readerFilePath: readerFilePath)
+	end 'immutableAggregateAnswer'
+
+	function sharedGraphAnswer(subject MaxonType, readerFilePath FilePath) returns SendableBoundAnswer
+		if self.typeIsBuiltOnATypeParameter(subject) 'itsGraphWaitsOnAParameter'
+			return SendableBoundAnswer.openArgument
+		end 'itsGraphWaitsOnAParameter'
+
+		match self.registryValueKindOf(subject, readerFilePath: readerFilePath) 'kind'
+			service then panic("ProgramSignatures.sharedGraphAnswer: `registryValueKindOf` answers `service` for no value type")
+			value(dropCallee, retainCallee, shareWalk) then return self.sharedWalkAnswer(dropCallee, retainCallee: retainCallee, shareWalk: shareWalk)
+		end 'kind'
+	end 'sharedGraphAnswer'
+
+	function sharedWalkAnswer(dropCallee OwnershipCallee, retainCallee OwnershipCallee, shareWalk TransferWalk) returns SendableBoundAnswer
+		match dropCallee 'drop'
+			inert then return SendableBoundAnswer.admitted(TransferWalk.closed, retainCallee: retainCallee)
+			named then break
+		end 'drop'
+
+		return match shareWalk 'walk'
+			refused(noun) gives SendableBoundAnswer.refused(SendableRefusal.graph(noun))
+
+			closed or
+			walkedBy or
+			walkedThroughWitness gives SendableBoundAnswer.admitted(shareWalk, retainCallee: retainCallee)
+		end 'walk'
+	end 'sharedWalkAnswer'
+
+	export function instanceIsAShareableHandle(id GenericInstanceId) returns bool
+		return self.instanceBaseIsServiceHandle(id) or self.instanceBaseIsSharedValue(id)
+	end 'instanceIsAShareableHandle'
+
 	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF A VALUE — the retain side of
 	// `managedNameDropCallee`.** Almost every managed value answers the plain box incref; the arms below
 	// name the records that do not.
@@ -9264,10 +9313,9 @@ extension ProgramSignatures
 		return false
 	end 'operandAliasSetFits'
 
-	// ⭐ **DOES `identity` NAME A SCALAR WEARING A NAME?** — the reader-less half of the door above, for
-	// `aggregatesConflict`, which is handed two identities and no file. A compiler-minted spelling
-	// (`Byte$0_1000`) un-mints first: the mint qualifies WHICH declaration, never WHAT KIND of thing the
-	// name denotes.
+	// ⭐ **DOES `identity` NAME A SCALAR WEARING A NAME?** — the reader-less half of the door above, for a
+	// caller handed an identity and no file. A compiler-minted spelling (`Byte$0_1000`) un-mints first: the
+	// mint qualifies WHICH declaration, never WHAT KIND of thing the name denotes.
 	//
 	// ⛔ **A NAME TWO KINDS HOLD IS TWO IDENTITIES, AND ONLY THE MINTED ONE IS THE ALIAS.**
 	// `rangedIdentityOfSpelling` spells a cross-kind contested alias as its mint, so the BARE name is the
@@ -11433,7 +11481,7 @@ extension ProgramSignatures
 	// that carries no identity; the two boundary admits below are about RECORDS, which is why this question
 	// is separate from them and asked first.
 	//
-	// ⚠ **THE STRANGER'S FILE** for the per-instance half — this authority is handed two NAMES and no
+	// ⚠ **THE STRANGER'S FILE** for the per-instance half — this authority is handed a NAME and no
 	// position, so a per-instance prefix two files declare over different bases has no reader to choose by.
 	function aliasIdentityDecays(identity ByteArray) returns bool
 		return self.isRangedAliasIdentity(identity) or self.isPerInstanceAlias(identity, readerFilePath: CompilerOwnedDeclFilePath)

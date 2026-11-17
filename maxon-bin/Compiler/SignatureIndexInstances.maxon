@@ -199,6 +199,16 @@ extension ProgramSignatures
 		return layout.regionBounds
 	end 'structRegionBounds'
 
+	export function typeParamIsBounded(typeName ByteArray, position ElementIndex, kind RegionBoundKind) returns bool
+		for bound in self.structRegionBounds(typeName) 'eachBound'
+			if bound.typeParamIndex == position and bound.kind == kind 'boundsThisParameter'
+				return true
+			end 'boundsThisParameter'
+		end 'eachBound'
+
+		return false
+	end 'typeParamIsBounded'
+
 	// The `uses` parameter names of a declared type, in declaration order — the list a `typeParameter` token
 	// is resolved against. Read by `Parser.scanFixedElementCountNeedsInto`, which scans an EXTENSION body in its
 	// TARGET's scope and so has no `uses` clause of its own to parse. An undeclared name answers the SHARED
@@ -3934,6 +3944,10 @@ extension ProgramSignatures
 		if maxonTypeTag(element) == ValueTypeTag.genericInstance and brandIsTheType(brand) 'aBrandedInstance'
 			return "{word}{String.from(self.brandDisplayName(brand, gid: genericInstanceIdOf(element)))}"
 		end 'aBrandedInstance'
+
+		if maxonTypeTag(element) == ValueTypeTag.typeParameter 'anOpaqueParameter'
+			return "{word}{String.from(self.requirementTypeParameterName(typeParamIdOf(element)))}"
+		end 'anOpaqueParameter'
 
 		return "{word}{self.typeDisplayName(element)}"
 	end 'tupleElementDisplayName'

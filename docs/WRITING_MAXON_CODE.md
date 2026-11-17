@@ -1337,7 +1337,7 @@ Common refusals and their fixes:
 | **E3212** a tied promise left unconsumed on an exit, returned, stored or passed on | `await p` or `p.cancel()` before every exit; `.clone()` the arguments to untie the call |
 | **E3213** a promise dropped, overwritten or discarded | await it, cancel it, store it or return it; `_ = try h.m(x)` discards a service reply |
 | **E3214** a unique value cloned, frozen, or bound from a field or element | move it with `pop` or `remove`, or `swap` it out of an `isolated` field |
-| **E3215** a type argument breaks a `where T is sendable` or `is isolated` bound | `immutable Job` or a value for `sendable`; a value or unique type for `isolated` |
+| **E3215** a type argument breaks a `where T is sendable` or `is isolated` bound | a value, a service handle, or an `immutable Job` whose graph `freeze` can share for `sendable`; a value or unique type for `isolated` |
 | **E3216** a service's state field can hold a promise | `await` or `.cancel()` the promise before the message or factory returns, and keep its result in the field |
 | **E3217** a service message or factory parameter, or a reply, is a record, payload union, array or interface value with no `isolated` or `immutable` | write `isolated T` and send a fresh value, or `immutable T` and send `freeze x.clone()` |
 | **E3217** a message or factory parameter or reply is a promise, a function value, an opaque type parameter or a thread-bound handle | send the scalar it is derived from, or `await` the promise and send its result |

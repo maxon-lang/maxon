@@ -750,7 +750,7 @@ end 'cacheReadDeclaredConformanceMap'
 // instantiation of a real constrained generic, with a real source position and no type name
 // anywhere in the program. The token SWEEP that fills `instantiationSites` reads `typealias`
 // declarations, so it structurally cannot see one; the PARSER records it instead
-// (`Project.inferredInstantiationSites`). Both lists are walked here, by one loop over one rule,
+// (`Project.inferredInstantiationSites`). Every list is walked here, by one loop over one rule,
 // because *"does this type argument satisfy the base's `where` clause"* is one question and a
 // second copy of it would be free to answer the literal differently from the alias.
 function checkWhereConstraints(project Project, signatures ProgramSignatures)
@@ -772,20 +772,18 @@ function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	end 'theUniverseIsUnreadable'
 
 	let declared = declaredConformanceIndex(project)
+	let regionBoundPass = RegionBoundPass.create()
 
 	// The DECLARED sites first, so a program whose alias and whose literal both name an inadmissible argument
 	// is reported against the declaration the author wrote before the one the compiler inferred.
-	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: aliasSites)
-	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: project.inferredInstantiationSites)
-	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: constSites)
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: aliasSites, regionBoundPass: regionBoundPass)
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: project.inferredInstantiationSites, regionBoundPass: regionBoundPass)
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: constSites, regionBoundPass: regionBoundPass)
 end 'checkWhereConstraints'
 
-// Validate every site in one list. The two lists this check reads differ in where they were RECORDED — a
-// `typealias` by the token sweep, a bracketed literal by the parser — and in nothing the rule can see, so
-// the walk is written once rather than once per provenance.
-function checkInstantiationSites(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, sites GenericInstantiationSiteArray)
+function checkInstantiationSites(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, sites GenericInstantiationSiteArray, regionBoundPass RegionBoundPass)
 	for site in sites 'eachSite'
-		checkOneInstantiation(project, signatures: signatures, declared: declared, site: site)
+		checkOneInstantiation(project, signatures: signatures, declared: declared, site: site, regionBoundPass: regionBoundPass)
 	end 'eachSite'
 end 'checkInstantiationSites'
 
@@ -868,9 +866,7 @@ function linearTypeArgumentMessage(argument String, holder String) returns Strin
 	return "'{argument}' is a linear value and cannot be a type argument of '{holder}': a linear value {LinearValueResidence}, so no container, promise, generic record or generic function holds one"
 end 'linearTypeArgumentMessage'
 
-// Validate one instantiation site's every `where` constraint. A base with no constraints (the whole
-// non-generic-witness corpus) iterates zero times.
-function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
+function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, regionBoundPass RegionBoundPass)
 	let baseName = signatures.genericInstanceBaseName(site.gid)
 	checkInstantiationHoldsNoLinearArgument(project, signatures: signatures, site: site)
 
@@ -884,7 +880,7 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 	// site, so the split is made here, at the one walk over those sites, rather than by a second list.
 	match lookupInterface(project.interfaces, name: baseName) 'base'
 		found(iface) then checkInterfaceInstantiationBindings(project, signatures: signatures, site: site, iface: iface)
-		notFound then checkStructInstantiationConstraints(project, signatures: signatures, declared: declared, site: site, baseName: baseName)
+		notFound then checkStructInstantiationConstraints(project, signatures: signatures, declared: declared, site: site, baseName: baseName, regionBoundPass: regionBoundPass)
 	end 'base'
 end 'checkOneInstantiation'
 
@@ -983,9 +979,7 @@ function requireWrittenBindingMatchesConformers(project Project, signatures Prog
 	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{signatures.aliasIdentityDisplay(written)}', but '{String.from(conformer.typeName)}' binds it to '{String.from(binding)}' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'requireWrittenBindingMatchesConformers'
 
-// Validate one STRUCT instantiation's every `where` constraint. A base with no constraints (the
-// whole non-generic-witness corpus) iterates zero times.
-function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray)
+function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray, regionBoundPass RegionBoundPass)
 	let constraints = signatures.structWhereConstraints(baseName)
 
 	for i in 0 upto constraints.count() 'eachConstraint'
@@ -999,61 +993,378 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 		reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 	end 'eachConstraint'
 
-	let visited = NameRoster.create(0)
-	checkRegionBoundsOfInstanceAndItsFields(project, signatures: signatures, site: site, instance: site.gid, visited: visited)
+	_ = checkRegionBoundsOfInstance(project, signatures: signatures, instance: site.gid, template: RegionBoundTemplate.judgedHere, walk: RegionBoundWalk.create(site, pass: regionBoundPass))
 end 'checkStructInstantiationConstraints'
 
-function checkRegionBoundsOfInstanceAndItsFields(project Project, signatures ProgramSignatures, site GenericInstantiationSite, instance GenericInstanceId, visited NameRoster)
-	let key = signatures.mangleGenericInstance(instance)
+union RegionBoundTemplate
+	judgedHere
+	heldBy(row GenericInstanceId)
+end 'RegionBoundTemplate'
 
-	if visited.contains(key) 'alreadyChecked'
-		return
-	end 'alreadyChecked'
+typealias RegionBoundSiteOrdinal = int(0 to u64.max)
+typealias RegionBoundReportOrdinals = Map with (ByteArray, RegionBoundSiteOrdinal)
 
-	visited.push(key)
-	let instanceBase = signatures.genericInstanceBaseName(instance)
+union RegionBoundNodeState
+	silent
+	expandedAt(ordinal RegionBoundSiteOrdinal)
+end 'RegionBoundNodeState'
 
-	for bound in signatures.structRegionBounds(instanceBase) 'eachRegionBound'
-		if signatures.instanceArgMeetsRegionBound(instance, position: bound.typeParamIndex, kind: bound.kind) 'meetsTheBound'
-			continue
-		end 'meetsTheBound'
+union RegionBoundNodeAnswer
+	unknown
+	known(mayReport bool)
+end 'RegionBoundNodeAnswer'
 
-		reportRegionBoundViolated(project, signatures: signatures, site: site, instance: instance, bound: bound, baseName: instanceBase)
-	end 'eachRegionBound'
+typealias RegionBoundNodeStates = Map with (GenericInstanceId, RegionBoundNodeState)
+typealias RegionBoundNodeStatesByInstance = Map with (GenericInstanceId, RegionBoundNodeStates)
 
+type RegionBoundNodes
+	let here as RegionBoundNodeStates
+	let underRow as RegionBoundNodeStatesByInstance
+
+	static function create() returns Self
+		return Self{here: RegionBoundNodeStates.create(), underRow: RegionBoundNodeStatesByInstance.create()}
+	end 'create'
+
+	function stateOf(instance GenericInstanceId, template RegionBoundTemplate) returns RegionBoundNodeState throws MapError
+		match template 'template'
+			judgedHere then return try self.here.get(instance)
+			heldBy(row) then return try self.stateUnderRow(instance, row: row)
+		end 'template'
+	end 'stateOf'
+
+	function stateUnderRow(instance GenericInstanceId, row GenericInstanceId) returns RegionBoundNodeState throws MapError
+		let states = try self.underRow.get(instance)
+		return try states.get(row)
+	end 'stateUnderRow'
+
+	function record(instance GenericInstanceId, template RegionBoundTemplate, state RegionBoundNodeState)
+		match template 'template'
+			judgedHere then self.here.upsert(instance, value: state)
+			heldBy(row) then self.recordUnderRow(instance, row: row, state: state)
+		end 'template'
+	end 'record'
+
+	function recordUnderRow(instance GenericInstanceId, row GenericInstanceId, state RegionBoundNodeState)
+		if let states = try self.underRow.get(instance) 'heldUnderAnotherRow'
+			states.upsert(row, value: state)
+			return
+		end 'heldUnderAnotherRow'
+
+		let states = RegionBoundNodeStates.create()
+		states.upsert(row, value: state)
+		self.underRow.upsert(instance, value: states)
+	end 'recordUnderRow'
+end 'RegionBoundNodes'
+
+type RegionBoundPass
+	let verdicts as RegionBoundVerdictMemo
+	let nodes as RegionBoundNodes
+	let reported as RegionBoundReportOrdinals
+	var sites = 0 as RegionBoundSiteOrdinal
+
+	static function create() returns Self
+		return Self{verdicts: RegionBoundVerdictMemo.create(), nodes: RegionBoundNodes.create(), reported: RegionBoundReportOrdinals.create()}
+	end 'create'
+end 'RegionBoundPass'
+
+type RegionBoundWalk
+	let site as GenericInstantiationSite
+	let pass as RegionBoundPass
+	let ordinal as RegionBoundSiteOrdinal
+
+	static function create(site GenericInstantiationSite, pass RegionBoundPass) returns Self
+		pass.sites = pass.sites + 1
+		return Self{site: site, pass: pass, ordinal: pass.sites}
+	end 'create'
+
+	function knownAnswer(instance GenericInstanceId, template RegionBoundTemplate) returns RegionBoundNodeAnswer
+		if templateIsTheInstance(template, instance: instance) 'heldByItself'
+			return RegionBoundNodeAnswer.known(false)
+		end 'heldByItself'
+
+		let state = try self.pass.nodes.stateOf(instance, template: template) otherwise return RegionBoundNodeAnswer.unknown
+
+		// A node still being expanded at this site may report: answering no would mark the nodes on its cycle
+		// silent before it is judged, and every later site would skip them.
+		return match state 'state'
+			silent gives RegionBoundNodeAnswer.known(false)
+			expandedAt(expandingSite) gives RegionBoundNodeAnswer.known(true) if expandingSite == self.ordinal else RegionBoundNodeAnswer.unknown
+		end 'state'
+	end 'knownAnswer'
+
+	function firstReport(key immutable ByteArray, position ElementIndex) returns bool
+		let reportKey = joinedKey(String.from(key), tail: "{position}")
+
+		if let reportingSite = try self.pass.reported.get(reportKey) 'reportedBefore'
+			if reportingSite == self.ordinal 'reportedAtThisSite'
+				return false
+			end 'reportedAtThisSite'
+		end 'reportedBefore'
+
+		self.pass.reported.upsert(reportKey, value: self.ordinal)
+		return true
+	end 'firstReport'
+end 'RegionBoundWalk'
+
+function checkRegionBoundsOfInstance(project Project, signatures ProgramSignatures, instance GenericInstanceId, template RegionBoundTemplate, walk RegionBoundWalk) returns bool
+	match walk.knownAnswer(instance, template: template) 'answer'
+		known(mayReport) then return mayReport
+		unknown then break
+	end 'answer'
+
+	walk.pass.nodes.record(instance, template: template, state: RegionBoundNodeState.expandedAt(walk.ordinal))
+
+	let mayReportHere = reportRegionBoundRefusals(project, signatures: signatures, instance: instance, template: template, walk: walk)
+	let mayReportBelow = checkRegionBoundsOfMembers(project, signatures: signatures, instance: instance, template: template, walk: walk)
+
+	if mayReportHere or mayReportBelow 'somethingMayReport'
+		return true
+	end 'somethingMayReport'
+
+	walk.pass.nodes.record(instance, template: template, state: RegionBoundNodeState.silent)
+	return false
+end 'checkRegionBoundsOfInstance'
+
+function templateIsTheInstance(template RegionBoundTemplate, instance GenericInstanceId) returns bool
+	return match template 'template'
+		judgedHere gives false
+		heldBy(row) gives row == instance
+	end 'template'
+end 'templateIsTheInstance'
+
+function checkRegionBoundsOfMembers(project Project, signatures ProgramSignatures, instance GenericInstanceId, template RegionBoundTemplate, walk RegionBoundWalk) returns bool
+	var mayReport = false
+
+	// Arguments are walked only where there is no base layout: `genericTypeGrowsWithoutBound` bounds fields,
+	// container arguments and tuple elements, and an argument a generic never stores can grow without end.
 	if not signatures.genericInstanceHasBaseLayout(instance) 'noDeclaredFields'
-		return
+		let row = regionBoundTemplateRow(template, instance: instance)
+
+		for position in 0 upto signatures.genericInstanceArgCount(instance) 'eachArgument'
+			if checkRegionBoundsReachedThrough(project, signatures: signatures, reached: signatures.substitutedInstanceArg(instance, position: position), opaque: signatures.substitutedInstanceArg(row, position: position), walk: walk) 'argumentMayReport'
+				mayReport = true
+			end 'argumentMayReport'
+		end 'eachArgument'
+
+		return mayReport
 	end 'noDeclaredFields'
 
 	let layout = signatures.baseLayoutOf(instance)
 
 	if not layoutTakesEveryTypeArgument(layout, count: signatures.genericInstanceArgCount(instance)) 'aTypeArgumentIsOmitted'
-		return
+		return false
 	end 'aTypeArgumentIsOmitted'
 
 	for index in 0 upto layout.fieldTypes.count() 'eachField'
-		let fieldType = signatures.substituteInstanceFieldType(instance, index: index as FieldIndex)
-
-		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance 'aHeldInstance'
-			checkRegionBoundsOfInstanceAndItsFields(project, signatures: signatures, site: site, instance: genericInstanceIdOf(fieldType), visited: visited)
-		end 'aHeldInstance'
+		if checkRegionBoundsReachedThrough(project, signatures: signatures, reached: signatures.substituteInstanceFieldType(instance, index: index as FieldIndex), opaque: fieldRegionBoundTemplate(signatures, layout: layout, template: template, index: index as FieldIndex), walk: walk) 'fieldMayReport'
+			mayReport = true
+		end 'fieldMayReport'
 	end 'eachField'
-end 'checkRegionBoundsOfInstanceAndItsFields'
 
-function reportRegionBoundViolated(project Project, signatures ProgramSignatures, site GenericInstantiationSite, instance GenericInstanceId, bound RegionBound, baseName ByteArray)
+	return mayReport
+end 'checkRegionBoundsOfMembers'
+
+function checkRegionBoundsReachedThrough(project Project, signatures ProgramSignatures, reached MaxonType, opaque MaxonType, walk RegionBoundWalk) returns bool
+	let subject = try signatures.typeOwnershipSubject(reached) otherwise return false
+
+	return match subject 'subject'
+		instance(id) gives checkRegionBoundsOfInstance(project, signatures: signatures, instance: id, template: regionBoundTemplateOf(signatures, opaque: opaque), walk: walk)
+		aggregate(name) gives checkRegionBoundsOfTupleElements(project, signatures: signatures, tupleName: name, opaque: opaque, walk: walk)
+	end 'subject'
+end 'checkRegionBoundsReachedThrough'
+
+function checkRegionBoundsOfTupleElements(project Project, signatures ProgramSignatures, tupleName immutable ByteArray, opaque MaxonType, walk RegionBoundWalk) returns bool
+	if not isTupleTypeName(tupleName) 'notATuple'
+		return false
+	end 'notATuple'
+
+	let layout = signatures.structLayoutOf(tupleName)
+	var mayReport = false
+
+	for index in 0 upto layout.fieldCount() 'eachElement'
+		if checkRegionBoundsReachedThrough(project, signatures: signatures, reached: signatures.layoutFieldType(layout, structName: tupleName, index: index as FieldIndex), opaque: tupleElementRegionBoundTemplate(signatures, opaque: opaque, index: index as FieldIndex), walk: walk) 'elementMayReport'
+			mayReport = true
+		end 'elementMayReport'
+	end 'eachElement'
+
+	return mayReport
+end 'checkRegionBoundsOfTupleElements'
+
+function regionBoundTemplateOf(signatures ProgramSignatures, opaque MaxonType) returns RegionBoundTemplate
+	match try signatures.typeOwnershipSubject(opaque) otherwise return RegionBoundTemplate.judgedHere 'subject'
+		instance(row) then return RegionBoundTemplate.heldBy(row)
+		aggregate(name) then panic("regionBoundTemplateOf: the template of a reached instance names the aggregate '{String.from(name)}', and substitution keeps an instance an instance and fixes a type parameter")
+	end 'subject'
+end 'regionBoundTemplateOf'
+
+function tupleElementRegionBoundTemplate(signatures ProgramSignatures, opaque MaxonType, index FieldIndex) returns MaxonType
+	match try signatures.typeOwnershipSubject(opaque) otherwise return opaque 'subject'
+		instance(row) then panic("tupleElementRegionBoundTemplate: the template of a reached tuple names instance {row}, and substitution keeps a tuple a tuple and fixes a type parameter")
+		aggregate(name) then return signatures.layoutFieldType(signatures.structLayoutOf(name), structName: name, index: index)
+	end 'subject'
+end 'tupleElementRegionBoundTemplate'
+
+function fieldRegionBoundTemplate(signatures ProgramSignatures, layout StructLayout, template RegionBoundTemplate, index FieldIndex) returns MaxonType
+	return match template 'template'
+		judgedHere gives signatures.declaredInstanceFieldType(layout, index: index)
+		heldBy(row) gives signatures.substituteInstanceFieldType(row, index: index)
+	end 'template'
+end 'fieldRegionBoundTemplate'
+
+function regionBoundTemplateRow(template RegionBoundTemplate, instance GenericInstanceId) returns GenericInstanceId
+	return match template 'template'
+		judgedHere gives instance
+		heldBy(row) gives row
+	end 'template'
+end 'regionBoundTemplateRow'
+
+union RegionBoundRefusal
+	notIsolated
+	sendable(why SendableRefusal)
+end 'RegionBoundRefusal'
+
+union RegionBoundVerdict
+	meets
+	undeclared
+	refused(why RegionBoundRefusal)
+end 'RegionBoundVerdict'
+
+typealias RegionBoundVerdictArray = Array with RegionBoundVerdict
+typealias RegionBoundVerdictMemo = Map with (GenericInstanceId, RegionBoundVerdictArray)
+
+function regionBoundVerdictsOf(signatures ProgramSignatures, instance GenericInstanceId, bounds RegionBoundArray, readerFilePath FilePath, memo RegionBoundVerdictMemo) returns RegionBoundVerdictArray
+	if let judged = try memo.get(instance) 'alreadyJudged'
+		return judged
+	end 'alreadyJudged'
+
+	let verdicts = RegionBoundVerdictArray.create(bounds.count(), zeroed: false)
+
+	for bound in bounds 'eachRegionBound'
+		verdicts.push(regionBoundVerdict(signatures, instance: instance, bound: bound, readerFilePath: readerFilePath))
+	end 'eachRegionBound'
+
+	memo.upsert(instance, value: verdicts)
+	return verdicts
+end 'regionBoundVerdictsOf'
+
+function regionBoundVerdict(signatures ProgramSignatures, instance GenericInstanceId, bound RegionBound, readerFilePath FilePath) returns RegionBoundVerdict
+	return match bound.kind 'kind'
+		sendable gives sendableBoundVerdict(signatures.sendableBoundAnswer(instance, position: bound.typeParamIndex, readerFilePath: readerFilePath))
+		isolated gives isolatedBoundVerdict(signatures.isolatedBoundAnswer(instance, position: bound.typeParamIndex))
+	end 'kind'
+end 'regionBoundVerdict'
+
+function sendableBoundVerdict(answer SendableBoundAnswer) returns RegionBoundVerdict
+	return match answer 'answer'
+		openArgument or
+		admitted gives RegionBoundVerdict.meets
+
+		undeclared gives RegionBoundVerdict.undeclared
+		refused(why) gives RegionBoundVerdict.refused(RegionBoundRefusal.sendable(why))
+	end 'answer'
+end 'sendableBoundVerdict'
+
+function isolatedBoundVerdict(answer IsolatedBoundAnswer) returns RegionBoundVerdict
+	return match answer 'answer'
+		openArgument or
+		admitted gives RegionBoundVerdict.meets
+
+		undeclared gives RegionBoundVerdict.undeclared
+		refused gives RegionBoundVerdict.refused(RegionBoundRefusal.notIsolated)
+	end 'answer'
+end 'isolatedBoundVerdict'
+
+function reportRegionBoundRefusals(project Project, signatures ProgramSignatures, instance GenericInstanceId, template RegionBoundTemplate, walk RegionBoundWalk) returns bool
+	let baseName = signatures.genericInstanceBaseName(instance)
+	let bounds = signatures.structRegionBounds(baseName)
+
+	if bounds.count() == 0 'declaresNoRegionBound'
+		return false
+	end 'declaresNoRegionBound'
+
+	let verdicts = regionBoundVerdictsOf(signatures, instance: instance, bounds: bounds, readerFilePath: walk.site.filePath, memo: walk.pass.verdicts)
+	var refuses = false
+
+	for (iter, bound) in bounds.withIterator() 'eachRegionBound'
+		if templateRefusesRegionBound(signatures, template: template, bounds: bounds, position: iter.index(), walk: walk) 'reportedAtTheTemplate'
+			continue
+		end 'reportedAtTheTemplate'
+
+		match regionBoundVerdictAt(verdicts, position: iter.index()) 'verdict'
+			meets or
+			undeclared then continue
+
+			refused(why) then reportRegionBoundViolated(project, signatures: signatures, instance: instance, bound: bound, position: iter.index(), baseName: baseName, refusal: why, walk: walk)
+		end 'verdict'
+
+		refuses = true
+	end 'eachRegionBound'
+
+	return refuses
+end 'reportRegionBoundRefusals'
+
+function templateRefusesRegionBound(signatures ProgramSignatures, template RegionBoundTemplate, bounds RegionBoundArray, position ElementIndex, walk RegionBoundWalk) returns bool
+	match template 'template'
+		judgedHere then return false
+		heldBy(row) then return match regionBoundVerdictAt(regionBoundVerdictsOf(signatures, instance: row, bounds: bounds, readerFilePath: walk.site.filePath, memo: walk.pass.verdicts), position: position) 'verdict'
+			refused gives true
+
+			meets or
+			undeclared gives false
+		end 'verdict'
+	end 'template'
+end 'templateRefusesRegionBound'
+
+function regionBoundVerdictAt(verdicts RegionBoundVerdictArray, position ElementIndex) returns RegionBoundVerdict
+	return try verdicts.get(position) otherwise panic("regionBoundVerdictAt: verdicts.get OOB at {position} below count {verdicts.count()} — `regionBoundVerdictsOf` judges every bound of the instance's base")
+end 'regionBoundVerdictAt'
+
+function reportRegionBoundViolated(project Project, signatures ProgramSignatures, instance GenericInstanceId, bound RegionBound, position ElementIndex, baseName ByteArray, refusal RegionBoundRefusal, walk RegionBoundWalk)
+	if not walk.firstReport(signatures.mangleGenericInstance(instance), position: position) 'alreadyReportedAtThisSite'
+		return
+	end 'alreadyReportedAtThisSite'
+
 	let argument = signatures.instanceArgDisplayName(instance, position: bound.typeParamIndex)
 	let shown = signatures.aliasIdentityDisplay(argument)
 	let parameter = String.from(constrainedTypeParamName(signatures, baseName: baseName, position: bound.typeParamIndex as FieldIndex))
 
-	let aUniqueType = signatures.instanceArgIsUnique(instance, position: bound.typeParamIndex)
+	let word = match refusal 'boundWord'
+		notIsolated gives String.from(IsolatedCapabilityWord)
+		sendable gives String.from(SendableBoundWord)
+	end 'boundWord'
 
-	let message = match bound.kind 'kind'
-		sendable gives "'{shown}' is `unique`, so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is sendable`: a unique value moves between owners instead of being shared; bound '{parameter}' with `isolated` instead" if aUniqueType else "'{shown}' is not sendable, so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is sendable`: a plain record is shared with the caller; use `immutable {shown}`, or a value or a service handle"
-		isolated gives "'{shown}' is not isolated, so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is isolated`: the bound takes a value, a service handle or a `unique` type"
-	end 'kind'
+	let head = "so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is {word}`"
 
-	reportPositioned(project, code: ErrorCode.semanticRegionBoundRefused, message: message, line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+	let message = match refusal 'refusal'
+		notIsolated gives "'{shown}' is not isolated, {head}: the bound takes a value, a service handle or a `unique` type"
+		sendable(why) gives sendableRefusalMessage(why, shown: shown, parameter: parameter, head: head)
+	end 'refusal'
+
+	reportPositioned(project, code: ErrorCode.semanticRegionBoundRefused, message: message, line: walk.site.nameLine, column: walk.site.nameColumn, filePath: walk.site.filePath)
 end 'reportRegionBoundViolated'
+
+function sendableRefusalMessage(why SendableRefusal, shown String, parameter String, head String) returns String
+	return match why 'refusal'
+		standing(reason) gives unsendableStandingMessage(reason, shown: shown, parameter: parameter, head: head)
+		graph(noun) gives "'{shown}' cannot be shared with another thread, {head}: it is {noun}"
+	end 'refusal'
+end 'sendableRefusalMessage'
+
+function unsendableStandingMessage(why UnsendableStanding, shown String, parameter String, head String) returns String
+	return match why 'refusal'
+		unique gives "'{shown}' is `unique`, {head}: a unique value moves between owners instead of being shared; bound '{parameter}' with `isolated` instead"
+		plainAggregate gives "'{shown}' is not sendable, {head}: a plain record is shared with the caller; use `immutable {shown}`, or a value or a service handle"
+		notAValue(kind) gives "'{shown}' is {notAValueNoun(kind)}, {head}: the bound takes a value, a service handle, or an `immutable` type that is not `unique`"
+	end 'refusal'
+end 'unsendableStandingMessage'
+
+function notAValueNoun(kind NotAValueKind) returns String
+	return match kind 'kind'
+		functionType gives "a function type"
+		interfaceType gives "an interface type"
+		promise gives "a promise"
+	end 'kind'
+end 'notAValueNoun'
 
 // ⭐⭐ **A `where` CONSTRAINT'S BINDING IS A CLAIM ABOUT THE TYPE ARGUMENT, AND THIS IS WHERE IT IS CHECKED
 // (E3131).** `where Source is Iterator with Element` states that the conformance behind `Source` binds

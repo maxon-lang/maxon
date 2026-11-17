@@ -657,11 +657,24 @@ type Pool uses T where T is sendable
 end 'Pool'
 ```
 
-`T is sendable` takes a value (a scalar, `String`, `Character`, `cstring`, or an aggregate that is not `unique`
-and owes no drop), a service or `SharedValue` handle, or `immutable` data that is not `unique`: a plain record,
-which the caller keeps sharing, and a `unique` type, whose values move, are refused. `T is isolated` takes a value, a service
-handle or a `unique` type. Every instantiation is checked against the bound, including an instance made
-through a type parameter, and a refusal is **E3215** (``'Job' is not sendable, so it cannot be 'T' of 'Pool',
+`T is sendable` takes an argument that stands as sendable and whose graph can be shared. A value stands as
+sendable — a scalar, `String`, `Character`, a C string, or a type that is not `unique` and owns no counted box
+(a union with no payload, a record packed in a word) — and so do a service handle, a `SharedValue` handle and a
+type written `immutable` that is not `unique`. A function type, an interface type and a promise are refused,
+written `immutable` or not. A plain record, a container instance, a tuple and a boxed union, which the caller
+keeps sharing, are refused bare and taken as `immutable Job`; a `unique` type, whose values move, is refused
+whatever its size. The graph must pass the share walk `freeze` and `SharedValue.publish` use, so an `immutable`
+record holding a function value or a promise is refused. The bound judges the type's own graph: what an
+interface-typed field holds is judged at the `freeze` that shares it, in a program that spawns a service.
+`T is isolated` takes the same values and handles, or a `unique` type.
+
+Every instantiation is checked against the bound, and so is every instance it holds in a field, a container or
+a tuple. An argument written inside a generic type is judged there with the type's own parameters unknown: one
+refused for every parameter (a function type) is reported there, once, and one whose verdict depends on the
+parameter (a bare `T`) is judged at each instantiation that fixes it. A `spawn` that infers a generic service's
+argument is reported at the factory the `spawn` calls. A generic service's factory parameter or reply declared as the bare
+`sendable`-bounded parameter is judged by the bound alone; a type built over it (`Array with T`) crosses as any
+other type does (**E3217**). A refusal is **E3215** (``'Job' is not sendable, so it cannot be 'T' of 'Pool',
 which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value
 or a service handle``). A function's or an extension's `where` clause cannot spell either bound (**E3215**).
 A generic type accepts an `isolated` type argument only when it declares `where T is isolated`

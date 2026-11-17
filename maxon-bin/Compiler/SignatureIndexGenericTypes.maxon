@@ -1712,7 +1712,7 @@ extension ProgramSignatures
 	end 'payloadsOwnership'
 
 	function walkedInstanceOwnership(id GenericInstanceId, mangled immutable ByteArray, walk OwnershipWalk) returns TypeOwnership
-		let shareable = self.instanceBaseIsServiceHandle(id) or self.instanceBaseIsSharedValue(id)
+		let shareable = self.instanceIsAShareableHandle(id)
 
 		if self.isElementBearingRecordInstance(id) 'itsElementsAreItsParts'
 			let elements = OwnershipParts.create(mangled, declaredUnique: false, tracksClosure: walk.wantsClosure and not shareable)
@@ -1894,66 +1894,197 @@ extension ProgramSignatures
 		return false
 	end 'unionPayloadsAreLinear'
 
-	export function instanceArgMeetsRegionBound(gid GenericInstanceId, position ElementIndex, kind RegionBoundKind) returns bool
+	export function isolatedBoundAnswer(gid GenericInstanceId, position ElementIndex) returns IsolatedBoundAnswer
 		let argument = self.substitutedInstanceArg(gid, position: position)
 
-		if maxonTypeTag(argument) == ValueTypeTag.typeParameter or self.typeIsAValueOrHandle(argument) 'needsNoOwner'
-			return true
-		end 'needsNoOwner'
+		return match self.boundArgumentStanding(argument) 'standing'
+			openArgument gives IsolatedBoundAnswer.openArgument
+			undeclared gives IsolatedBoundAnswer.undeclared
 
-		let unique = self.instanceArgIsUnique(gid, position: position)
+			valueOrHandle or
+			unique gives IsolatedBoundAnswer.admitted
 
-		return match kind 'kind'
-			isolated gives unique
-			sendable gives not unique and self.genericInstanceArgQualifier(gid, position: position) == GenericArgQualifier.frozen
-		end 'kind'
-	end 'instanceArgMeetsRegionBound'
+			notAValue gives IsolatedBoundAnswer.admitted if self.typeHoldsAUnique(argument) else IsolatedBoundAnswer.refused
+			aggregate(subject) gives IsolatedBoundAnswer.openArgument if self.typeIsBuiltOnATypeParameter(subject) else IsolatedBoundAnswer.refused
+		end 'standing'
+	end 'isolatedBoundAnswer'
 
 	export function instanceArgIsLinear(gid GenericInstanceId, position ElementIndex) returns bool
 		return self.typeIsLinear(self.substitutedInstanceArg(gid, position: position))
 	end 'instanceArgIsLinear'
 
-	export function instanceArgIsUnique(gid GenericInstanceId, position ElementIndex) returns bool
-		let subject = try self.typeOwnershipSubject(self.substitutedInstanceArg(gid, position: position)) otherwise return false
-		return self.answeredOwnership(subject, wantsClosure: false).cause.holdsAUnique()
-	end 'instanceArgIsUnique'
+	function typeHoldsAUnique(type MaxonType) returns bool
+		let subject = try self.typeOwnershipSubject(type) otherwise return false
+		return self.ownershipFact(subject, fact: OwnershipFact.holdsAUnique)
+	end 'typeHoldsAUnique'
 
-	function typeIsAValueOrHandle(type MaxonType) returns bool
-		let tag = maxonTypeTag(type)
+	function boundArgumentStanding(argument MaxonType) returns BoundArgumentStanding
+		if self.typeNamesAnUndeclaredPart(argument) 'anUndeclaredPart'
+			return BoundArgumentStanding.undeclared
+		end 'anUndeclaredPart'
 
-		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceBaseIsServiceHandle(genericInstanceIdOf(type))
-		end 'anInstance'
+		match maxonTypeTag(argument) 'tag'
+			typeParameter then return BoundArgumentStanding.openArgument
 
-		if not self.tagMayNameAggregate(tag) 'aScalarOrText'
-			return true
-		end 'aScalarOrText'
+			boolean or
+			integer or
+			float or
+			exitCode or
+			string or
+			character or
+			cstring then return BoundArgumentStanding.valueOrHandle(argument)
 
+			function then return BoundArgumentStanding.notAValue(NotAValueKind.functionType)
+			interfaceRef then return BoundArgumentStanding.notAValue(NotAValueKind.interfaceType)
+			genericInstance then return self.instanceArgumentStanding(genericInstanceIdOf(argument))
+
+			structRef or
+			named then return self.namedArgumentStanding(argument)
+
+			unresolved then panic("ProgramSignatures.boundArgumentStanding: an unresolved type argument reached the standing classification, and `typeNamesAnUndeclaredPart` answers every unresolved type undeclared")
+			void then panic("ProgramSignatures.boundArgumentStanding: a type argument tagged `{maxonTypeTag(argument).name}` is on no list of what a region bound takes or refuses")
+		end 'tag'
+	end 'boundArgumentStanding'
+
+	function namedArgumentStanding(argument MaxonType) returns BoundArgumentStanding
+		let name = self.denotedSlotAggregateName(argument)
+
+		return match try self.declaredFormInAnyFile(name) otherwise return self.formlessNameStanding(name, argument: argument) 'form'
+			structType gives self.recordArgumentStanding(name, argument: argument)
+
+			enumType or
+			unionType or
+			tupleAlias gives self.aggregateStanding(argument)
+
+			interfaceType gives BoundArgumentStanding.notAValue(NotAValueKind.interfaceType)
+			rangedAlias gives BoundArgumentStanding.valueOrHandle(argument)
+			functionAlias gives BoundArgumentStanding.notAValue(NotAValueKind.functionType)
+			genericAlias gives self.aliasInstanceStanding(argument)
+		end 'form'
+	end 'namedArgumentStanding'
+
+	function formlessNameStanding(name immutable ByteArray, argument MaxonType) returns BoundArgumentStanding
+		if self.aliasIdentityDecays(name) 'aScalarWearingAName'
+			return BoundArgumentStanding.valueOrHandle(argument)
+		end 'aScalarWearingAName'
+
+		panic("ProgramSignatures.formlessNameStanding: '{String.from(name)}' has no declared form and is no nested or per-instance ranged alias, and `typeNamesAnUndeclaredPart` answers such a name undeclared")
+	end 'formlessNameStanding'
+
+	function aliasInstanceStanding(argument MaxonType) returns BoundArgumentStanding
+		let id = try self.denotedAliasInstance(argument) otherwise panic("ProgramSignatures.aliasInstanceStanding: a generic alias that denotes no live instance reached the standing classification, and `typeNamesAnUndeclaredPart` answers such an alias undeclared")
+		return self.instanceArgumentStanding(id)
+	end 'aliasInstanceStanding'
+
+	function denotedAliasInstance(argument MaxonType) returns GenericInstanceId throws AbsentError
+		let subject = try self.typeOwnershipSubject(argument)
+
+		match subject 'subject'
+			instance(id) then return id
+			aggregate(name) then panic("ProgramSignatures.denotedAliasInstance: '{String.from(name)}' is a generic alias, and `typeOwnershipSubject` answers a generic alias with the instance it denotes")
+		end 'subject'
+	end 'denotedAliasInstance'
+
+	function recordArgumentStanding(name immutable ByteArray, argument MaxonType) returns BoundArgumentStanding
+		if self.isAnyServiceHandle(name) 'aHandle'
+			return BoundArgumentStanding.valueOrHandle(argument)
+		end 'aHandle'
+
+		return self.aggregateStanding(argument)
+	end 'recordArgumentStanding'
+
+	// Asked before the value fact: a `unique` record that packs into a word owes no drop, so it would
+	// stand as a value and meet `sendable`.
+	function aggregateStanding(argument MaxonType) returns BoundArgumentStanding
+		if self.typeHoldsAUnique(argument) 'aUniqueType'
+			return BoundArgumentStanding.unique
+		end 'aUniqueType'
+
+		if not self.typeOwesDrop(argument, from: self.typeNames) 'aValueInTheWord'
+			return BoundArgumentStanding.valueOrHandle(argument)
+		end 'aValueInTheWord'
+
+		return BoundArgumentStanding.aggregate(argument)
+	end 'aggregateStanding'
+
+	function tupleNamesAnUndeclaredPart(name immutable ByteArray) returns bool
+		for element in self.structLayoutOf(name).fieldTypes 'eachElement'
+			if self.typeNamesAnUndeclaredPart(element) 'anUndeclaredElement'
+				return true
+			end 'anUndeclaredElement'
+		end 'eachElement'
+
+		return false
+	end 'tupleNamesAnUndeclaredPart'
+
+	function instanceNamesAnUndeclaredPart(id GenericInstanceId) returns bool
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			if self.typeNamesAnUndeclaredPart(self.substitutedInstanceArg(id, position: position)) 'anUndeclaredArgument'
+				return true
+			end 'anUndeclaredArgument'
+		end 'eachArgument'
+
+		return false
+	end 'instanceNamesAnUndeclaredPart'
+
+	function typeNamesAnUndeclaredPart(type MaxonType) returns bool
+		return match maxonTypeTag(type) 'tag'
+			unresolved gives true
+			genericInstance gives self.instanceNamesAnUndeclaredPart(genericInstanceIdOf(type))
+
+			structRef or
+			named gives self.namedTypeNamesAnUndeclaredPart(type)
+
+			boolean or
+			integer or
+			float or
+			exitCode or
+			void or
+			string or
+			function or
+			interfaceRef or
+			typeParameter or
+			character or
+			cstring gives false
+		end 'tag'
+	end 'typeNamesAnUndeclaredPart'
+
+	function namedTypeNamesAnUndeclaredPart(type MaxonType) returns bool
 		let name = self.denotedSlotAggregateName(type)
 
-		if self.isAnyServiceHandle(name) 'aServiceHandle'
-			return true
-		end 'aServiceHandle'
+		match try self.declaredFormInAnyFile(name) otherwise return not self.aliasIdentityDecays(name) 'form'
+			structType then return isTupleTypeName(name) and self.tupleNamesAnUndeclaredPart(name)
+			tupleAlias then return self.tupleNamesAnUndeclaredPart(self.tupleAliasTargetInAnyFile(name))
+			genericAlias then return self.aliasInstanceNamesAnUndeclaredPart(type)
 
-		if self.containsStructInAnyFile(name) 'aRecord'
-			return false
-		end 'aRecord'
+			enumType or
+			unionType or
+			interfaceType or
+			rangedAlias or
+			functionAlias then return false
+		end 'form'
+	end 'namedTypeNamesAnUndeclaredPart'
 
-		match self.enumInAnyFile(name) 'enumeration'
-			declared(layout) then return self.enumCarriesNoPayload(layout)
-			undeclared then return not self.nameDeclaresAnInterface(name)
-		end 'enumeration'
-	end 'typeIsAValueOrHandle'
+	function aliasInstanceNamesAnUndeclaredPart(type MaxonType) returns bool
+		let id = try self.denotedAliasInstance(type) otherwise return true
+		return self.instanceNamesAnUndeclaredPart(id)
+	end 'aliasInstanceNamesAnUndeclaredPart'
 
-	function enumCarriesNoPayload(layout EnumLayout) returns bool
-		for ci in 0 upto layout.caseCount() 'eachCase'
-			if not layout.payloadsAt(ci).isEmpty() 'aPayload'
-				return false
-			end 'aPayload'
-		end 'eachCase'
+	function instanceArgumentStanding(id GenericInstanceId) returns BoundArgumentStanding
+		if self.instanceIsPromiseHandle(id) 'aPromise'
+			return BoundArgumentStanding.notAValue(NotAValueKind.promise)
+		end 'aPromise'
 
-		return true
-	end 'enumCarriesNoPayload'
+		if self.nameDeclaresAnInterface(self.genericInstanceBaseName(id)) 'anInterfaceInstance'
+			return BoundArgumentStanding.notAValue(NotAValueKind.interfaceType)
+		end 'anInterfaceInstance'
+
+		if self.instanceIsAShareableHandle(id) 'aShareableHandle'
+			return BoundArgumentStanding.valueOrHandle(MaxonType.genericInstance(id))
+		end 'aShareableHandle'
+
+		return self.aggregateStanding(MaxonType.genericInstance(id))
+	end 'instanceArgumentStanding'
 
 	function structFieldDeclaredType(structName ByteArray, index FieldIndex) returns MaxonType
 		return self.layoutFieldType(self.structLayoutOf(structName), structName: structName, index: index)
@@ -3080,7 +3211,7 @@ extension ProgramSignatures
 	end 'instanceIsImmutable'
 
 	function instanceSlotIsImmutable(id GenericInstanceId, visited ClonerSet) returns bool
-		if self.instanceBaseIsServiceHandle(id) or self.genericInstanceBaseName(id).equals(SharedValueTypeName) 'aShareableHandle'
+		if self.instanceIsAShareableHandle(id) 'aShareableHandle'
 			return true
 		end 'aShareableHandle'
 

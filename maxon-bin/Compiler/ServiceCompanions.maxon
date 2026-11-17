@@ -320,6 +320,7 @@ end 'spawnCandidateKey'
 export type LiveReach
 	export var defaultKeys as LiveNameSet
 	export var spawnedTypes as LiveNameSet
+
 	// A signature-memo hit re-adopts the reach only when this has moved, so every change to either
 	// set goes through `replaceWith`.
 	var revision = 0 as LiveKeysRevision
@@ -560,6 +561,15 @@ function typeIsFixedByAnInstantiation(signatures ProgramSignatures, t MaxonType)
 	return maxonTypeTag(t) == ValueTypeTag.genericInstance and not signatures.instanceArgsAreFullyConcrete(genericInstanceIdOf(t))
 end 'typeIsFixedByAnInstantiation'
 
+function declaresTheBareSendableParameter(signatures ProgramSignatures, layout StructLayout, declared MaxonType) returns bool
+	if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notTheBareParameter'
+		return false
+	end 'notTheBareParameter'
+
+	let position = try typeParamPositionIn(typeParamIdOf(declared), declarationName: layout.name, paramNames: layout.typeParamNames) otherwise panic("declaresTheBareSendableParameter: a bare type parameter in the roster of '{String.from(layout.name)}' is not one of its own `uses` parameters — a method or static that declares type parameters of its own is neither a message nor a factory, so every bare parameter a message, reply or factory slot holds is the service's")
+	return signatures.typeParamIsBounded(layout.name, position: position, kind: RegionBoundKind.sendable)
+end 'declaresTheBareSendableParameter'
+
 // ⭐⭐ **THE OWNER SYMBOL OF THE FUNCTIONS THAT SERVE ONE INSTANTIATION.** `<T>` while the service is
 // monomorphic, `<T with Args>` per instantiation once it is generic — the prefix of its `__behave`,
 // `__finish` and `__start_<factory>` symbols, read here by the BUILDER
@@ -777,7 +787,7 @@ function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray,
 			refused(replyNoun) then return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
 		end 'replyCannotBeCarried'
 
-		match replyTransferRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyCannotCross'
+		match replyTransferRefusal(signatures, returnType: decl.returnType, layout: layout, knowledge: knowledge) 'replyCannotCross'
 			acceptable then break
 			refused(replyCrossingNoun) then return ServiceRosterVerdict.messageReplyIsNotTransferable(methodName, noun: replyCrossingNoun)
 		end 'replyCannotCross'
@@ -819,9 +829,9 @@ function factoryTransferVerdict(signatures ProgramSignatures, layout StructLayou
 			atInstance(instance) gives signatures.instanceResolvedSlotType(slot, declFilePath: layout.declFilePath, instance: instance)
 		end 'known'
 
-		if typeIsFixedByAnInstantiation(signatures, t: resolved) 'deferredToTheInstantiation'
+		if typeIsFixedByAnInstantiation(signatures, t: resolved) or declaresTheBareSendableParameter(signatures, layout: layout, declared: slot) 'fixedLaterOrJudgedByTheBound'
 			continue
-		end 'deferredToTheInstantiation'
+		end 'fixedLaterOrJudgedByTheBound'
 
 		match transferRefusalOfType(signatures, resolved: resolved, declFilePath: layout.declFilePath) 'cannotCross'
 			acceptable then continue
@@ -845,12 +855,12 @@ function capabilityVerdict(signatures ProgramSignatures, layout StructLayout, fa
 		let methodName = layout.messageMethodAt(i)
 		let decl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: methodName))
 
-		match firstUnmarkedParameter(signatures, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge) 'parameters'
+		match firstUnmarkedParameter(signatures, decl: decl, layout: layout, knowledge: knowledge) 'parameters'
 			allMarkedOrValues then break
 			needsAWord(paramName, noun) then return ServiceRosterVerdict.messageParameterNeedsACapability(methodName, paramName: paramName, noun: noun)
 		end 'parameters'
 
-		match unmarkedReplyNoun(signatures, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge) 'reply'
+		match unmarkedReplyNoun(signatures, decl: decl, layout: layout, knowledge: knowledge) 'reply'
 			acceptable then break
 			refused(noun) then return ServiceRosterVerdict.messageReplyNeedsACapability(methodName, noun: noun)
 		end 'reply'
@@ -858,7 +868,7 @@ function capabilityVerdict(signatures ProgramSignatures, layout StructLayout, fa
 
 	let factoryDecl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: factory))
 
-	match firstUnmarkedParameter(signatures, decl: factoryDecl, declFilePath: layout.declFilePath, knowledge: knowledge) 'factoryParameters'
+	match firstUnmarkedParameter(signatures, decl: factoryDecl, layout: layout, knowledge: knowledge) 'factoryParameters'
 		allMarkedOrValues then return ServiceRosterVerdict.rosterIsDispatchable
 		needsAWord(paramName, noun) then return ServiceRosterVerdict.factoryParameterNeedsACapability(factory, paramName: paramName, noun: noun)
 	end 'factoryParameters'
@@ -871,14 +881,20 @@ function resolvedAtKnowledge(signatures ProgramSignatures, declared MaxonType, d
 	end 'known'
 end 'resolvedAtKnowledge'
 
-function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns UnmarkedParameter
+function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclaration, layout StructLayout, knowledge ServiceRosterKnowledge) returns UnmarkedParameter
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		if declaredCapabilityAt(decl.paramCapabilities, position: p as ParamCount) != ParamCapability.unmarked 'marked'
 			continue
 		end 'marked'
 
 		let declared = try decl.paramTypes.get(p) otherwise panic("firstUnmarkedParameter: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
-		let resolved = resolvedAtKnowledge(signatures, declared: serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: declFilePath), declFilePath: declFilePath, knowledge: knowledge)
+		let slot = serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: layout.declFilePath)
+
+		if declaresTheBareSendableParameter(signatures, layout: layout, declared: slot) 'judgedByTheBound'
+			continue
+		end 'judgedByTheBound'
+
+		let resolved = resolvedAtKnowledge(signatures, declared: slot, declFilePath: layout.declFilePath, knowledge: knowledge)
 
 		if typeNeedsACapabilityWord(signatures, resolved: resolved) 'aRecord'
 			return UnmarkedParameter.needsAWord(serviceParamName(decl, index: p as ParamCount), noun: capabilityWordNoun(signatures, resolved: resolved))
@@ -888,12 +904,18 @@ function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclarat
 	return UnmarkedParameter.allMarkedOrValues
 end 'firstUnmarkedParameter'
 
-function unmarkedReplyNoun(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
+function unmarkedReplyNoun(signatures ProgramSignatures, decl SweptDeclaration, layout StructLayout, knowledge ServiceRosterKnowledge) returns ServiceCrossing
 	if maxonReturnTypeIsVoid(decl.returnType) or decl.returnCapability != ResultCapability.unmarked 'nothingToJudge'
 		return ServiceCrossing.acceptable
 	end 'nothingToJudge'
 
-	let resolved = resolvedAtKnowledge(signatures, declared: declaredReplyType(signatures, returnType: decl.returnType, declFilePath: declFilePath), declFilePath: declFilePath, knowledge: knowledge)
+	let declared = declaredReplyType(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath)
+
+	if declaresTheBareSendableParameter(signatures, layout: layout, declared: declared) 'judgedByTheBound'
+		return ServiceCrossing.acceptable
+	end 'judgedByTheBound'
+
+	let resolved = resolvedAtKnowledge(signatures, declared: declared, declFilePath: layout.declFilePath, knowledge: knowledge)
 
 	if typeNeedsACapabilityWord(signatures, resolved: resolved) 'aRecord'
 		return ServiceCrossing.refused(capabilityWordNoun(signatures, resolved: resolved))
@@ -919,7 +941,7 @@ function typeNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonTy
 		cstring then return false
 
 		interfaceRef then return true
-		genericInstance then return not signatures.instanceBaseIsServiceHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsSharedValue(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsReply(genericInstanceIdOf(resolved)) and not signatures.genericInstanceIsImmutable(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
+		genericInstance then return not signatures.instanceIsAShareableHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsReply(genericInstanceIdOf(resolved)) and not signatures.genericInstanceIsImmutable(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
 		structRef or
 		named then return recordNeedsACapabilityWord(signatures, resolved: resolved)
 	end 'tag'
@@ -1013,22 +1035,23 @@ function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType Max
 	return uncarriableReplyNounOfType(declared)
 end 'uncarriableReplyResultNoun'
 
-function replyTransferRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
+function replyTransferRefusal(signatures ProgramSignatures, returnType MaxonReturnType, layout StructLayout, knowledge ServiceRosterKnowledge) returns ServiceCrossing
 	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
 		return ServiceCrossing.acceptable
 	end 'nothingComesBack'
 
-	let resolved = resolvedAtKnowledge(signatures, declared: declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath), declFilePath: declFilePath, knowledge: knowledge)
+	let declared = declaredReplyType(signatures, returnType: returnType, declFilePath: layout.declFilePath)
+	let resolved = resolvedAtKnowledge(signatures, declared: declared, declFilePath: layout.declFilePath, knowledge: knowledge)
 
-	if typeIsFixedByAnInstantiation(signatures, t: resolved) 'deferredToTheInstantiation'
+	if typeIsFixedByAnInstantiation(signatures, t: resolved) or declaresTheBareSendableParameter(signatures, layout: layout, declared: declared) 'fixedLaterOrJudgedByTheBound'
 		return ServiceCrossing.acceptable
-	end 'deferredToTheInstantiation'
+	end 'fixedLaterOrJudgedByTheBound'
 
 	if signatures.typeIsLinear(resolved) 'aLinearReply'
 		return ServiceCrossing.refused("a linear value, which {LinearValueResidence}")
 	end 'aLinearReply'
 
-	return transferRefusalOfType(signatures, resolved: resolved, declFilePath: declFilePath)
+	return transferRefusalOfType(signatures, resolved: resolved, declFilePath: layout.declFilePath)
 end 'replyTransferRefusal'
 
 function transferRefusalOfType(signatures ProgramSignatures, resolved MaxonType, declFilePath FilePath) returns ServiceCrossing
@@ -1055,10 +1078,11 @@ function declaredReplyType(signatures ProgramSignatures, returnType MaxonReturnT
 	return signatures.declaredSlotType(returned, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
 end 'declaredReplyType'
 
-// ⭐⭐ **WHETHER A TYPE'S GRAPH MAY CROSS TO ANOTHER GREEN THREAD — the one gate every message parameter, reply
-// and factory parameter asks, at the declaration or at the instantiation that fixes it.** A send is never
-// walked, so the type decides: a graph reaching a function value, an OS handle other than a socket or an
-// interface whose conformer does, is refused here and nowhere later.
+// ⭐⭐ **WHETHER A TYPE'S GRAPH MAY CROSS TO ANOTHER GREEN THREAD — the gate every message parameter, reply
+// and factory parameter asks, at the declaration or at the instantiation that fixes it.** A factory
+// parameter or reply declared as the bare `sendable`-bounded type parameter asks the bound instead. A send
+// is never walked, so the type decides: a graph reaching a function value, an OS handle other than a socket
+// or an interface whose conformer does, is refused here and nowhere later.
 function sendGraphCrossing(signatures ProgramSignatures, type MaxonType, declFilePath FilePath) returns ServiceCrossing
 	match classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: type, slotScopeFilePath: declFilePath) 'class'
 		scalar or
