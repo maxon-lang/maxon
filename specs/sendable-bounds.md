@@ -350,9 +350,11 @@ end 'main'
 ```
 
 <!-- test: freezing-a-record-whose-interface-field-reaches-a-function-value-is-refused-at-the-freeze -->
+<!-- unsupported-targets: wasm32-wasi -->
 In a program that spawns a service, the `freeze` that makes a `Holder` shared judges what its `Shape` field may
 hold, and a `Stepper` holds a function value, so the `freeze` is refused. `Pool with immutable Holder` still
 meets the bound: the refusal is the `freeze`'s, and the bound reports nothing.
+wasm32-wasi answers `E3104` for its `spawn` before the `freeze` is judged, so the case is pinned on the native lanes.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -483,9 +485,11 @@ end 'main'
 ```
 
 <!-- test: freezing-a-record-whose-interface-field-reaches-an-os-handle-is-refused-at-the-freeze -->
+<!-- unsupported-targets: wasm32-wasi -->
 In a program that spawns a service, the `freeze` that makes a `Holder` shared judges what its `Shape` field may
 hold, and a `Port` holds an OS handle, so the `freeze` is refused. `Pool with immutable Holder` still meets the
 bound: the refusal is the `freeze`'s, and the bound reports nothing.
+wasm32-wasi answers `E3104` for its `spawn` and `TcpListener.bind` before the `freeze` is judged, so the case is pinned on the native lanes.
 
 ```maxon
 typealias Tally = int(0 to 1024)
