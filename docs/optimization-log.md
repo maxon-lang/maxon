@@ -3069,3 +3069,53 @@ The answers now live in one round on the index, valid while the instance registr
 The `parse` term on the ring was the same walk asked once per parse-time question with a visited set per ask; a walk that follows no view now builds no set, and one that does builds it on the second parameter it enters. `deriveRuntimeNeeds` reads the same on both compilers, to within 126 allocations on `ring` and exactly on `cycle`.
 
 `scale-test` holds no ring, so its columns show only the fixed price per ask. Emitted code is identical at every rung. Against a compiler built from the parent in a copy of the tree, whose `load`, `signatures`, `merge`, `insertRangeChecks`, `prepareOutput` and `loadRuntime` rows differ by the same constant at every rung for that reason, `phase:parse` reads 106 allocations under it at rung 0 and 2,338 under at rung 5, and `phase:frontEndPool` 424 and 2,222 over; no other phase moves with the rung.
+### Result — 2026-11-16, where `Map with String, Count` loses to Go's `map[string]int`: two things the shared body does to a String, not dispatch
+
+A measurement, not a change: the attribution of maxon-lang/maxon#82's `map-string-lookup` and `map-string-insert` rows, taken to decide whether per-instantiation specialisation (#106) is the lever. arm64-macos on an Apple M3, go1.27.3, the `aes` hash tier, best of 7 interleaved rounds of 5 repeats, ns per operation. The same day's rows of `docs/hash-benchmark-log.md` are the unmodified benchmark on that host: lookup 237.60 against Go's 33.40 (7.11x), insert 204.96 against 63.19 (3.24x), and the software tier within 1% of `aes` on both, so the hash function is not the gap.
+
+Method. Every arm is a copy of `Map` in a private staged standard library, run by a one-row-per-process benchmark of the same keys (`"key{i}"`), passes and answers in Maxon and in Go, at 1,000,000, 62,500 and 1,000 entries; every arm's answers equal the baseline's. The arms: **G** `Map with String, Count`; **S** a textual `Key = String`, `Value = Count` copy (the hand-specialised body); **C** S copying the key wherever the shared body does (hit, store, rehash move); **CH** S copying at a hit only; **E** S comparing with `String.equals`; **CE** both; **K** S inlined into the loop with borrowed keys; **L** K with one `{tag, value}` element per slot beside a key column. G and S in this harness read within 2 ns of the benchmark's own binaries.
+
+Lookup, ns per operation and share of the gap:
+
+| component | 1,000,000 | 62,500 | 1,000 |
+|---|---:|---:|---:|
+| G / Go / gap | 234.14 / 32.01 / 202.14 | 75.65 / 8.16 / 67.49 | 66.92 / 6.37 / 60.55 |
+| the shared body against a concrete one doing the same work (G − CE) | 2.63 (1.3%) | 2.84 (4.2%) | 3.08 (5.1%) |
+| a heap copy of the stored key at every hit | 16.28 (8.1%) | 6.19 (9.2%) | 11.48 (19.0%) |
+| stored keys are scattered copies, one more cache miss per hit | 74.29 (36.8%) | 0.88 (1.3%) | 0.62 (1.0%) |
+| equality through `String.equals`, a byte at a time (E − S) | 72.75 (36.0%) | 35.46 (52.5%) | 27.79 (45.9%) |
+| copy × equality interaction | −4.41 | 1.80 | −1.35 |
+| `get`, `findSlot` and the hash out of line, a retain and release per hit (S − K) | 21.09 (10.4%) | 7.67 (11.4%) | 8.18 (13.5%) |
+| four columns against one element per slot (K − L) | 3.30 (1.6%) | 1.12 (1.7%) | 1.00 (1.7%) |
+| `__str_eq` against Go's `memequal` | 5.56 (2.7%) | 5.09 (7.5%) | 3.95 (6.5%) |
+| hash, net of the loop | 1.22 | 1.01 | 1.34 |
+| four checked element reads | 2.45 | 2.42 | 2.30 |
+| cache-miss term of L against Go | 4.67 (2.3%) | | |
+| unattributed residual | 2.31 (1.1%) | 3.01 (4.5%) | 2.16 (3.6%) |
+
+Insert, with the map growing as the benchmark grows it:
+
+| component | 1,000,000 | 62,500 | 1,000 |
+|---|---:|---:|---:|
+| G / Go / gap | 196.31 / 68.10 / 128.21 | 139.24 / 43.83 / 95.41 | 126.58 / 38.21 / 88.37 |
+| growth beyond Go's (grown − presized, each language) | 54.25 (42.3%) | 46.69 (48.9%) | 38.90 (44.0%) |
+| the shared body's store, presized (key copies and dispatch) | 25.70 (20.0%) | 9.31 (9.8%) | 15.86 (17.9%) |
+| the insert path out of line (S − K, presized) | 13.34 (10.4%) | 5.96 (6.3%) | 5.65 (6.4%) |
+| four columns against one element (K − L) | 0.88 | 4.94 (5.2%) | −0.62 |
+| the key store: a retain and an out-of-line `__managed_set` | 8.12 (6.3%) | 7.94 (8.3%) | 7.95 (9.0%) |
+| `withIterator()` in the benchmark's own loop | −1.60 | 8.79 (9.2%) | 13.27 (15.0%) |
+| cache-miss term of L against Go, presized | 16.37 (12.8%) | | |
+| hash, two checked reads, two copies of one source | 3.67 | 4.07 | 2.83 |
+| unattributed residual | 7.50 (5.8%) | 7.71 (8.1%) | 4.51 (5.1%) |
+
+Growth per entry is 90.3 / 78.8 / 67.5 ns in G, 82.4 / 45.4 / 46.6 in S and 36.0 / 32.1 / 28.6 in Go; both tables rehash at the same load (0.477 to 0.488 after the fill in both languages), so the count of moves is not the difference, the cost of a move is.
+
+What the census of one lookup shows. In G, `Map.get` and `Map.findSlot` are out of line and take three descriptor pointers; the hash and the equality are indirect calls; the equality is `String.equals`, which reads both strings through one throwing `byteAt` per byte; and a retain of a type-parameter value is, for a String, `__str_clone`, one allocation and copy per hit, freed before `get` returns. A rehash retains every key it moves, so a grown map's stored keys are fresh scattered copies. Measured allocations per 1,000 operations: 1,000 for G's lookups and none for S's; 3,591 for G's inserts and 1,067 for S's. In S there is no indirect call, the columns' `get` and `set` inline to loads and stores (so nothing of `Array`'s shared body is left on the path), a lookup examines 1.45 slots, and Go's `faststr` path buys Go nothing here (a `struct{ s string }` key reads the same).
+
+Two readings that were wrong on the way, and what replaced them. (1) *Int keys show the shared body is fine.* `Map with Count, Count` is 2.4x to 3.5x Go on lookup (50.76 / 17.61 / 16.44 against 21.27 / 6.20 / 4.65) and its hand-specialised copy still 1.8x to 2.3x. `Set with Count` is near Go in the benchmark only because `Set.contains` has one call site there and the called-once rule splices it into the loop, where its descriptors fold and its witness calls become direct; `Map.get` has two call sites and `findSlot` three, so they stay shared. What a generic container costs today depends on how many call sites its methods have in the program. (2) *The 1M excess is lost cache-miss overlap from a longer instruction stream.* Lookups made dependent on the value just read do not collapse the per-mechanism costs. The two measured causes are the scattered key copies (copying at a hit only costs 16 ns at 1M; copying at store and rehash as well costs 90) and the long equality holding the value load behind it (hoisting that load ahead of the compare takes E's miss term from 295 ns to S's 221).
+
+A trap in the measuring, with its mechanism. Two arms read 22 and 59 ns slower at 1M in one binary than the same types in another, with identical code. The `aes` tier's round-key table is emitted at 8-byte alignment, and in those two binaries its 16-byte loads straddled a 16 KiB page: with only a string literal lengthened by 8 bytes, the same code ran a lookup in 29 ns or 44 to 53 ns in cache, and 118 or 190 ns at 1M; under `MAXON_HASH_TIER=software` every layout read alike. The benchmark's own binary and every arm in the tables above have the table clear of a page edge. A second trap is in the allocator: when a size class's cached span has exactly one free slot, each allocate-and-free pair evicts and relists the span and costs 15 ns more (20 against 35 ns for a clone-and-drop), so a loop that allocates per iteration can differ between two processes by one live block. A sampling profile agrees with the arms in cache and for growth; at 1M it charges each miss to whichever instruction reads first (188 ns of "equality" in G), so it corroborates and does not attribute.
+
+Verdict: **revisited**. The rule was set before measuring: #106 is confirmed for #82 if the hand-specialised body removes 70% of the Maxon − Go lookup time, or lands within 2x Go, at both the in-cache and the full size. By the letter: S removes 79.4% and 79.9% at 1,000,000 (two sessions), which meets it; 71.6%, 71.1% and 69.9% at 62,500 and 70.0%, 69.0% and 68.7% at 1,000 (three sessions each), which straddle it; and S is 2.27x, 3.49x and 3.97x Go, so the 2x arm is missed at every size. The decomposition decided, because the specialised copy changed more than dispatch: a concrete body also compares with `__str_eq` and retains with `__str_retain`, where the shared body's String witness compares through `String.equals` (#200) and copies the key (#199). Those two are 93% to 98% of what S removes; the shared body against a concrete one doing the same work is 1% to 5% of the gap. So this measurement does not show what specialisation is worth for #82: that reading is taken again once #199 and #200 have landed.
+
+Causes ranked by measured share of the lookup gap, in cache and at 1,000,000: generic String equality, #200 (46-53%, 36%); the key copy, #199, at a hit (9-19%, 8%) and at store and rehash (1%, 37%); `get`, `findSlot` and the hash out of line plus a retain and release per hit, in concrete code too (11-14%, 10%); `__str_eq` against `memequal`, part of #200 (7%, 3%); the shared body itself (4-5%, 1%); layout (2%); unattributed residual 1.1% to 4.5%. For insert: growth beyond Go's, #207 (42-49%), of which the rehash copy of #199 is 8 to 33 ns; the shared body's store (10-20%); the key store through `__managed_set`, #202 (6-9%); `withIterator()` in the benchmark's loop, #201 (0-15%); unattributed residual 5.1% to 8.1%. With both String defects out of the path, the arms put lookup at S's reading, 2.3x to 4.0x Go, and what remains is in concrete code. The two traps are #204 (the key table's alignment) and #203 (the allocator's one-free-slot state).
