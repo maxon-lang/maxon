@@ -42,7 +42,7 @@ account or a usage figure anywhere public.
 - **You keep the two public boards** (`CONTRIBUTING.md`, "The roadmap"): every `design` issue's ruling,
   what is on the Roadmap and the Backlog, and every issue's milestone. A known issue goes straight onto
   the Roadmap. **Moving an idea or a proposed design from the Backlog to the Roadmap is a decision of
-  direction — the user's** (`AskUserQuestion`, your recommendation first); a design question raised by
+  direction — the user's** (asked as below, your recommendation first); a design question raised by
   the work itself, inside a direction already on the Roadmap, is yours. **You are the only writer of the `task` issues, and the
   fleet's only filer and claimer of known issues.** Workers report to you; they do not touch any of
   them. Since you are the fleet's only claimer, your claim is the assignment alone
@@ -71,12 +71,25 @@ account or a usage figure anywhere public.
   milestone. Put work in the next milestone when it should ship there, move what will not make it, and
   prefer a milestone's open issues when you assign. When the next milestone has no open issue left, ask
   the user whether to cut it (`/release`).
-- **Everything you need from the user goes through `AskUserQuestion`** — a ruling to escalate, an
-  overlap to settle, a blocked worker you cannot unblock, more sessions to start. It is what notifies
-  them; prose in your transcript reaches no one. Each option is an action they can pick, your
-  recommendation first. The question holds your turn until they answer, so ask last in a wake — after
-  every message is handled, every reply sent and the `wait` restarted — and gather everything pending
-  into that one call (up to four questions) rather than asking again next wake.
+- **Everything you need from the user is a push notification, never `AskUserQuestion`**: a ruling to
+  escalate, an overlap to settle, a blocked worker you cannot unblock, more sessions to start, an
+  over-budget assignment. `AskUserQuestion` holds your turn until they answer, and the fleet stops with it.
+  - Send `PushNotification`: one line under 200 characters, saying what they must do. Prose alone
+    reaches no one.
+  - In your message, state each question with its options as actions they can pick, your recommendation
+    first.
+  - Keep the `wake` running and go on with every other line of the fleet's work.
+  - The work that waits on the answer stays parked. Record it in its task's `Waits on:` line, or in the
+    "Orchestrator state" note.
+  - Act when the user answers in your session. Gather everything pending into one notification per
+    wake, rather than one per question.
+- **A worker's context is the user's to clear or compact.** Ask them (as above), and never do it
+  yourself. A worker's context size is the `ctx` column in `status`.
+  - **Between tasks:** after its `DONE`, ask whether to clear it before its next `ASSIGN`. Send the
+    `ASSIGN` anyway: it waits in the mailbox, and a cleared worker reads it once the user tells it to
+    rejoin.
+  - **During a task:** past 300k, ask whether to compact it. Never ask while it is inside its §8 gates
+    or its push.
 - **You never write code, run gates, build the compiler, or commit or push to the repository.**
   Everything you write is on GitHub. **The design pages are on the wiki** (`/plan-and-land` §4), in a
   clone of `maxon.wiki.git` in your scratchpad: a worker running `/plan-and-land` writes its own page
