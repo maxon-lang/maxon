@@ -93,47 +93,54 @@ Run from a clone that no worker uses, kept current with `git pull`, so your suba
 Every message goes through the fleet repository's issues, because Remote Control cannot reach a session
 on the other account. Your fleet id is `orchestrator`.
 
-- `node .claude/fleet/fleet.mjs inbox --as orchestrator` — unread messages, each with its id.
-- `… ack --as orchestrator <id> …` — mark them read, once acted on.
+- **Waiting:** run `node .claude/fleet/fleet.mjs wake --as orchestrator --model <your model id>` with
+  `run_in_background`. It polls GitHub, not you, so waiting costs no usage, and it heartbeats for you (at
+  its start, every 10 minutes and before it times out), so the account has a usage sample even when none
+  of its workers can report one. It exits with a digest, one line per finding under the check that found
+  it: `message` (an unread message, with its id and body), or, new since it started, `main-red` (the
+  latest `ci` run on `main` failed), `silent` (the heartbeat of a session holding a task is over 60 minutes old), `budget` (an
+  account's action changed), `unprioritized` (an open Roadmap issue without a priority) and `release` (a
+  parked task with nothing open left to wait on). What already held when it started is listed under
+  `standing`. With nothing fired it exits after 50 minutes, listing `standing`. Either wakes you. Start
+  it again before every turn ends. Never end a turn with it not running.
+- `… ack --as orchestrator <id> …` — mark messages read, once acted on.
 - `… send --as orchestrator --to <id> --file <path>` — write the message in your scratchpad first. It
   refuses an `ASSIGN` to a worker whose account `budget` reads `pause`; `--over-budget yes` overrides it
   only on the user's word, and `--account <label>` names the account of a worker with no heartbeat yet.
-- `… heartbeat --as orchestrator --model <your model id> --state working` — at every wake, so the
-  account has a usage sample even when none of its workers can report one.
-- `… status` — every session's last heartbeat. `… budget` — the sizing below.
-- **Waiting:** run `node .claude/fleet/fleet.mjs wait --as orchestrator --max 1200` with
-  `run_in_background`. It polls GitHub, not you, so waiting costs no usage; it exits when a message
-  arrives or after 20 minutes, and either wakes you. Start it again before every turn ends. Never end a
-  turn with it not running.
+- The `wake` checks on demand: `… inbox --as orchestrator` — unread messages, each with its id. `… status`
+  — every session's last heartbeat and context size. `… budget` — the sizing below. `… waiting` — the
+  parked tasks.
 
 ## The loop
 
-**On start:** read your memory (above); `heartbeat`; `status`; send `PING` to every live session so
-unknown work surfaces before you assign anything; start the `wait`.
+**On start:** read your memory (above); `status`; send `PING` to every live session so unknown work
+surfaces before you assign anything; start the `wake`. Its first digest lists under `standing` what held
+before it started: act on each line as below.
 
-**On every wake** — a message or the 20-minute timeout — in this order:
+**On every wake** — the `wake`'s digest — act on each line it prints, under `fired` or `standing`, by its
+check, in this order. A `standing` line you have already acted on needs nothing more, except a `silent`
+owner you have already sent a `PING`:
 
-1. `heartbeat`, then `inbox`, and act on every message (table below); `ack` each one.
-2. `gh run list --branch main --limit 5`. A red lane on main is a `ci-red` issue (`/land` §10). Ask the
+1. `message`: act on every message (table below); `ack` each one.
+2. `main-red`: a red lane on main is a `ci-red` issue (`/land` §10). Ask the
    culprit (`/land` §10) with one `send` to every live session in `status`
    rather than `SendMessage`, and assign it — to the culprit if one answers by the next wake, otherwise
    to the next free worker, ahead of everything else.
-3. `budget`, and resize the fleet ("Sizing", below).
-4. `status`: a `task` whose owner's heartbeat is over 60 minutes old gets a `PING`; still silent at the
+3. `budget`: resize the fleet ("Sizing", below).
+4. `silent`: a `task` whose owner's heartbeat is over 60 minutes old gets a `PING`; still silent at the
    next wake, the task returns to open with a note of what the owner last reported.
-5. `node .claude/roadmap/unprioritized.mjs`: it lists every open Roadmap issue without a priority,
-   including bugs the project added by itself and issues others filed. Give each one a priority now
-   (`status.mjs <n> Ready <P>`). The fleet panel's Roadmap card shows the same count.
-6. `fleet.mjs waiting`: it lists every task parked behind others. A task marked "ready to release"
-   has nothing open left to wait on: run `fleet.mjs release --task <the last one that closed>`, or tell
-   its owner yourself.
-7. Start the `wait` again.
+5. `unprioritized`: an open Roadmap issue without a priority, including bugs the project added by itself
+   and issues others filed (`node .claude/roadmap/unprioritized.mjs` lists them all). Give each one a
+   priority now (`status.mjs <n> Ready <P>`). The fleet panel's Roadmap card shows the same count.
+6. `release`: a task parked behind others (`fleet.mjs waiting` lists them all) has nothing open left to
+   wait on: run `fleet.mjs release --task <the last one that closed>`, or tell its owner yourself.
+7. Start the `wake` again.
 
 **A parked task records what it waits on.** When you hold a task behind other tasks (a landing order,
 an area another task holds, a ruling's dependency), put `Waits on: #<task>, #<task>` as the first line of
 its `task` issue. Closing a task releases its waiters: `fleet.mjs land` does it by itself, and a task
 closed any other way gets `fleet.mjs release --task <n>`. A parked worker whose heartbeat goes stale
-still gets the step-4 `PING`; idle is not the same as gone.
+still gets the `silent` `PING`; idle is not the same as gone.
 
 | message | what you do |
 |---|---|

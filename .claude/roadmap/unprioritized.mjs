@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const OWNER = 'maxon-lang';
 const PROJECT_NUMBER = 4;
@@ -18,16 +19,21 @@ const QUERY = `query($endCursor: String) {
   }
 }`;
 
-const pages = JSON.parse(execFileSync('gh', ['api', 'graphql', '--paginate', '--slurp', '-f', `query=${QUERY}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
-const missing = pages
-  .flatMap(page => page.data.organization.projectV2.items.nodes)
-  .filter(node => node.content?.state === 'OPEN' && !node.priority)
-  .map(node => node.content)
-  .sort((a, b) => a.number - b.number);
-
-for (const issue of missing) console.log(`#${issue.number} ${issue.title}`);
-if (missing.length > 0) {
-  console.error(`${missing.length} open Roadmap issue(s) without a ${PRIORITY_FIELD}; follow the file-issue skill (step 3) and set each with status.mjs <n> <status> <P0-P3>`);
-  process.exit(1);
+export function unprioritizedIssues() {
+  const pages = JSON.parse(execFileSync('gh', ['api', 'graphql', '--paginate', '--slurp', '-f', `query=${QUERY}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
+  return pages
+    .flatMap(page => page.data.organization.projectV2.items.nodes)
+    .filter(node => node.content?.state === 'OPEN' && !node.priority)
+    .map(node => node.content)
+    .sort((a, b) => a.number - b.number);
 }
-console.log('every open Roadmap issue has a priority');
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const missing = unprioritizedIssues();
+  for (const issue of missing) console.log(`#${issue.number} ${issue.title}`);
+  if (missing.length > 0) {
+    console.error(`${missing.length} open Roadmap issue(s) without a ${PRIORITY_FIELD}; follow the file-issue skill (step 3) and set each with status.mjs <n> <status> <P0-P3>`);
+    process.exit(1);
+  }
+  console.log('every open Roadmap issue has a priority');
+}

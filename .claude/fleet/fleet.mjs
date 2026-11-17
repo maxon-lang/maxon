@@ -1,28 +1,48 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
+import { unprioritizedIssues } from '../roadmap/unprioritized.mjs';
 
 const TARGET_PERCENT = 95;
 const STATUS_LINE_LIMIT_KINDS = { five_hour: 'session', seven_day: 'weekly_all' };
 const USAGE_COMMAND = '/usage';
 const LIVE_HEARTBEAT_MINUTES = 30;
+const SILENT_HEARTBEAT_MINUTES = 60;
 const RATE_SPAN_HOURS = 2;
 const MIN_RATE_SPAN_MINUTES = 20;
 const HISTORY_HOURS = 12;
 const HISTORY_SPACING_SECONDS = 240;
 const SAME_WINDOW_TOLERANCE_SECONDS = 120;
-const DEFAULT_WAIT_SECONDS = 90;
+const DEFAULT_POLL_SECONDS = 30;
+const DEFAULT_WAKE_MAX_SECONDS = 3000;
+const WAKE_HEARTBEAT_SECONDS = 600;
 const WAIT_TIMEOUT_EXIT = 3;
 const ACCOUNT_LABEL_LENGTH = 8;
 const ORCHESTRATOR_ID = 'orchestrator';
-const STATES = ['working', 'idle', 'paused'];
+const STATE = { working: 'working', idle: 'idle', paused: 'paused' };
+const STATES = Object.values(STATE);
+const LIVENESS = { waiting: 'waiting', live: 'live', stale: 'stale', silent: 'silent' };
 const LABELS = { mailbox: 'mailbox', task: 'task', fleet: 'fleet' };
 const FLEET_ISSUE_TITLE = 'fleet';
 const USAGE_FILE = 'plan-usage.json';
 const READ_REACTION = '+1';
+const WATERMARK_KIND = 'watermark';
+const WATERMARK_PATTERN = new RegExp(`<!-- fleet-${WATERMARK_KIND}:(.*?) -->`);
+const ACK_SEPARATOR = ',';
+const GH_MAX_BUFFER = 64 * 1024 * 1024;
+const HTTP_NOT_MODIFIED = 304;
+const SESSION_ENV = 'CLAUDE_CODE_SESSION_ID';
+const TRANSCRIPTS_DIR = 'projects';
+const TRANSCRIPT_TAIL_BYTES = 1024 * 1024;
+const TOKENS_PER_THOUSAND = 1000;
+const UNKNOWN_FIGURE = '-';
+const PUBLIC_REPO = 'maxon-lang/maxon';
+const CI_WORKFLOW = 'ci';
+const RUN_COMPLETED = 'completed';
+const RUN_FAILED = 'failure';
 
 function fail(message) {
   console.error(`fleet: ${message}`);
@@ -47,7 +67,7 @@ function gh(args, input) {
     encoding: 'utf8',
     input,
     stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'inherit'],
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: GH_MAX_BUFFER,
   });
 }
 
@@ -58,7 +78,34 @@ function api(method, path, body) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
+const responses = new Map();
+
+function header(head, name) {
+  return new RegExp(`^${name}:\\s*(.*)$`, 'im').exec(head)?.[1].trim() ?? null;
+}
+
+function get(path) {
+  const cached = responses.get(path);
+  const args = ['api', '-i', path];
+  if (cached) args.push('-H', `If-None-Match: ${cached.etag}`);
+  const result = spawnSync('gh', args, { encoding: 'utf8', maxBuffer: GH_MAX_BUFFER });
+  const separator = /\r?\n\r?\n/.exec(result.stdout);
+  const head = separator ? result.stdout.slice(0, separator.index) : result.stdout;
+  const status = Number(/^HTTP\/\S+ (\d{3})/.exec(head)?.[1]);
+
+  if (cached && status === HTTP_NOT_MODIFIED) return { data: JSON.parse(cached.text), next: cached.next };
+  if (result.status !== 0 || !separator) fail(`gh api ${path}: ${result.stderr.trim() || `HTTP ${status}`}`);
+
+  const text = result.stdout.slice(separator.index + separator[0].length);
+  const next = /rel="next"/.test(header(head, 'Link') ?? '');
+  const etag = header(head, 'ETag');
+  if (etag) responses.set(path, { etag, text, next });
+  return { data: JSON.parse(text), next };
+}
+
 function apiAll(path) {
+  const first = get(path);
+  if (!first.next) return first.data;
   return JSON.parse(gh(['api', '--paginate', '--slurp', path])).flat();
 }
 
@@ -100,6 +147,21 @@ function nowSeconds() {
   return Date.now() / 1000;
 }
 
+function sleep(secondsToSleep) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, secondsToSleep * 1000);
+}
+
+async function watch(interval, max, evaluate) {
+  const start = nowSeconds();
+
+  for (;;) {
+    const result = await evaluate();
+    if (result) return result;
+    if (nowSeconds() - start + interval > max) return null;
+    sleep(interval);
+  }
+}
+
 function openIssues(label) {
   return apiAll(`repos/${repo()}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`);
 }
@@ -116,18 +178,57 @@ function ensureIssue(label, title) {
   return findIssue(label, title) ?? api('POST', `repos/${repo()}/issues`, { title, labels: [label] });
 }
 
-function comments(issue) {
-  return apiAll(`repos/${repo()}/issues/${issue.number}/comments?per_page=100`);
+function comments(issue, since = null) {
+  const after = since ? `&since=${encodeURIComponent(since)}` : '';
+  return apiAll(`repos/${repo()}/issues/${issue.number}/comments?per_page=100${after}`);
 }
 
 function mailboxTitle(id) {
   return `mailbox: ${id}`;
 }
 
+function mailboxes(id) {
+  return matchingIssues(LABELS.mailbox, mailboxTitle(id));
+}
+
+function watermark(box) {
+  return WATERMARK_PATTERN.exec(box.body ?? '')?.[1] ?? null;
+}
+
+function mailboxComments(box) {
+  return comments(box, watermark(box));
+}
+
+function isUnread(comment) {
+  return (comment.reactions?.[READ_REACTION] ?? 0) === 0;
+}
+
 function unread(id) {
-  return matchingIssues(LABELS.mailbox, mailboxTitle(id))
-    .flatMap(comments)
-    .filter(comment => (comment.reactions?.[READ_REACTION] ?? 0) === 0);
+  return mailboxes(id).flatMap(box => mailboxComments(box).filter(isUnread));
+}
+
+function advanceWatermark(box, acked) {
+  const seen = mailboxComments(box);
+  const pending = seen.filter(comment => isUnread(comment) && !acked.has(String(comment.id)));
+  const times = (pending.length > 0 ? pending : seen).map(comment => comment.created_at).sort();
+  if (times.length === 0) return;
+
+  const next = pending.length > 0 ? times[0] : times[times.length - 1];
+  if (next === watermark(box)) return;
+  api('PATCH', `repos/${repo()}/issues/${box.number}`, { body: marker(WATERMARK_KIND, next) });
+}
+
+function formatMessage(message) {
+  return `=== ${message.id} ${message.created_at}\n${message.body}\n`;
+}
+
+function printMessages(messages) {
+  if (messages.length === 0) {
+    console.log('no messages');
+    return;
+  }
+
+  for (const message of messages) console.log(formatMessage(message));
 }
 
 function marker(kind, key) {
@@ -169,6 +270,46 @@ function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 }
 
+function transcriptPath() {
+  const session = process.env[SESSION_ENV];
+  const projects = join(configDir(), TRANSCRIPTS_DIR);
+  if (!session || !existsSync(projects)) return null;
+  return readdirSync(projects).map(dir => join(projects, dir, `${session}.jsonl`)).find(existsSync) ?? null;
+}
+
+function promptTokens(line) {
+  const entry = JSON.parse(line);
+  const usage = entry.message?.usage;
+  if (entry.type !== 'assistant' || entry.isSidechain || !usage) return null;
+  return usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+}
+
+function contextTokens() {
+  const path = transcriptPath();
+  if (!path) return null;
+  const size = statSync(path).size;
+  const fd = openSync(path, 'r');
+
+  try {
+    for (let span = TRANSCRIPT_TAIL_BYTES; ; span *= 2) {
+      const start = Math.max(0, size - span);
+      const buffer = Buffer.alloc(size - start);
+      readSync(fd, buffer, 0, buffer.length, start);
+      const lines = buffer.toString('utf8').split('\n').slice(start > 0 ? 1 : 0, -1).reverse();
+
+      for (const line of lines) {
+        if (!line.includes('"type":"assistant"')) continue;
+        const tokens = promptTokens(line);
+        if (tokens !== null) return tokens;
+      }
+
+      if (start === 0) return null;
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const ACCOUNT_LABEL_PATTERN = new RegExp(`^[0-9a-f]{${ACCOUNT_LABEL_LENGTH}}$`);
 const ACCOUNT_ENV = 'MAXON_FLEET_ACCOUNT';
 const ACCOUNT_OPTION_HINT = `pass --account <label> or set ${ACCOUNT_ENV}, the account's label as \`fleet.mjs status\` shows it`;
@@ -177,7 +318,7 @@ function account(options) {
   const given = options.account ?? process.env[ACCOUNT_ENV];
   if (given !== undefined && !ACCOUNT_LABEL_PATTERN.test(given)) fail(`the account label must be ${ACCOUNT_LABEL_LENGTH} lowercase hex digits; ${ACCOUNT_OPTION_HINT}`);
 
-  const result = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8', shell: true });
+  const result = spawnSync('claude auth status', { encoding: 'utf8', shell: true });
   const status = result.status === 0 ? JSON.parse(result.stdout) : {};
   const planTier = status.planTier ?? status.subscriptionType ?? 'unknown';
 
@@ -288,54 +429,49 @@ function commandSend(options) {
 }
 
 function commandInbox(options) {
-  const messages = unread(required(options, 'as'));
-
-  if (messages.length === 0) {
-    console.log('no messages');
-    return;
-  }
-
-  for (const message of messages) console.log(`=== ${message.id} ${message.created_at}\n${message.body}\n`);
+  printMessages(unread(required(options, 'as')));
 }
 
 function commandAck(options, ids) {
-  required(options, 'as');
+  const id = required(options, 'as');
   if (ids.length === 0) fail('ack needs the ids of the messages read');
-  for (const id of ids) api('POST', `repos/${repo()}/issues/comments/${id}/reactions`, { content: READ_REACTION });
+  for (const comment of ids) api('POST', `repos/${repo()}/issues/comments/${comment}/reactions`, { content: READ_REACTION });
+  const acked = new Set(ids.map(String));
+  for (const box of mailboxes(id)) advanceWatermark(box, acked);
   console.log(`acknowledged ${ids.length}`);
 }
 
-function commandWait(options) {
+async function commandWait(options) {
   const id = required(options, 'as');
-  const interval = seconds(options, 'interval', DEFAULT_WAIT_SECONDS);
   const max = seconds(options, 'max', Infinity);
-  const start = nowSeconds();
+  const messages = await watch(seconds(options, 'interval', DEFAULT_POLL_SECONDS), max, () => {
+    const found = unread(id);
+    return found.length > 0 ? found : null;
+  });
 
-  for (;;) {
-    const count = unread(id).length;
-
-    if (count > 0) {
-      console.log(`${count} message(s) for ${id}`);
-      return;
-    }
-
-    if (nowSeconds() - start + interval > max) {
-      console.log(`no messages for ${id} within ${max} s`);
-      process.exit(WAIT_TIMEOUT_EXIT);
-    }
-
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, interval * 1000);
+  if (!messages) {
+    console.log(`no messages for ${id} within ${max} s`);
+    process.exit(WAIT_TIMEOUT_EXIT);
   }
+
+  printMessages(messages);
+}
+
+async function commandStep(options) {
+  if (options.ack !== undefined) commandAck(options, options.ack.split(ACK_SEPARATOR).filter(Boolean));
+  await commandHeartbeat(options);
+  commandInbox(options);
 }
 
 async function commandHeartbeat(options) {
   const id = required(options, 'as');
   const state = required(options, 'state');
   if (!STATES.includes(state)) fail(`--state must be one of ${STATES.join(', ')}`);
-  if (state === 'paused' && options.task === undefined) fail('--state paused needs --task: a session paused with no task is idle (--state idle)');
+  if (state === STATE.paused && options.task === undefined) fail('--state paused needs --task: a session paused with no task is idle (--state idle)');
   const model = required(options, 'model');
   const { label, planTier } = account(options);
   const usage = await usageSample();
+  const context = contextTokens();
   const data = {
     id,
     account: label,
@@ -345,26 +481,38 @@ async function commandHeartbeat(options) {
     state,
     task: options.task ?? null,
     at: Math.round(nowSeconds()),
+    contextTokens: context,
     usage,
   };
   const { issue, heartbeats } = readFleet();
   upsertComment(issue, heartbeats.find(entry => entry.key === id)?.comment, 'heartbeat', id, data);
-  console.log(`heartbeat ${id} ${state} on account ${label}${usage ? '' : ' (no usage sample yet)'}`);
+  console.log(`heartbeat ${id} ${state} on account ${label}${usage ? '' : ' (no usage sample yet)'}${context === null ? ' (no context size)' : ''}`);
 }
 
 function ageMinutes(at) {
   return (nowSeconds() - at) / 60;
 }
 
-function commandStatus() {
-  const { heartbeats } = readFleet();
-  const rows = heartbeats
+function heartbeatRows(fleet) {
+  return fleet.heartbeats
     .map(entry => entry.data)
     .sort((a, b) => a.account.localeCompare(b.account) || a.id.localeCompare(b.id));
+}
 
-  for (const row of rows) {
-    const live = row.state !== 'working' ? 'waiting' : ageMinutes(row.at) < LIVE_HEARTBEAT_MINUTES ? 'live' : 'stale';
-    console.log(`${row.account}  ${row.id.padEnd(24)} ${row.state.padEnd(8)} ${String(row.model).padEnd(18)} ${row.machine.padEnd(16)} ${live} ${Math.round(ageMinutes(row.at))}m  ${row.task ?? ''}`);
+function liveness(row) {
+  const age = ageMinutes(row.at);
+  if (row.task != null && age >= SILENT_HEARTBEAT_MINUTES) return LIVENESS.silent;
+  if (row.state !== STATE.working) return LIVENESS.waiting;
+  return age < LIVE_HEARTBEAT_MINUTES ? LIVENESS.live : LIVENESS.stale;
+}
+
+function contextFigure(row) {
+  return row.contextTokens == null ? UNKNOWN_FIGURE : `${Math.round(row.contextTokens / TOKENS_PER_THOUSAND)}k`;
+}
+
+function commandStatus() {
+  for (const row of heartbeatRows(readFleet())) {
+    console.log(`${row.account}  ${row.id.padEnd(24)} ${row.state.padEnd(8)} ${String(row.model).padEnd(18)} ${row.machine.padEnd(16)} ${liveness(row)} ${Math.round(ageMinutes(row.at))}m  ctx ${contextFigure(row).padEnd(6)} ${row.task ?? ''}`);
   }
 }
 
@@ -398,8 +546,8 @@ function allowedConsumers(current, rate, now) {
   return { limit: headroom / (rate * hoursLeft), why: `${rate.toFixed(2)}%/h per consumer, ${hoursLeft.toFixed(1)} h left` };
 }
 
-function budgetPlan() {
-  const { issue, heartbeats, histories } = readFleet();
+function budgetPlan(fleet = readFleet()) {
+  const { issue, heartbeats, histories } = fleet;
   const now = nowSeconds();
   const accounts = [...new Set(heartbeats.map(entry => entry.data.account))].sort();
   const plan = [];
@@ -407,11 +555,12 @@ function budgetPlan() {
   for (const acct of accounts) {
     const live = heartbeats.map(entry => entry.data).filter(row => row.account === acct && ageMinutes(row.at) < LIVE_HEARTBEAT_MINUTES);
     const workers = live.filter(row => row.id !== ORCHESTRATOR_ID);
-    const working = workers.filter(row => row.state === 'working').length;
+    const working = workers.filter(row => row.state === STATE.working).length;
     const available = workers.length;
     const liveSample = live.map(row => row.usage).filter(Boolean).sort((a, b) => b.at - a.at)[0] ?? null;
 
     const stored = histories.find(entry => entry.key === acct);
+    const recorded = JSON.stringify(stored?.data ?? []);
     let history = stored?.data ?? [];
     const lastPoint = history[history.length - 1] ?? null;
 
@@ -424,7 +573,7 @@ function budgetPlan() {
 
     const newest = history[history.length - 1];
     history = history.filter(point => point === newest || point.at >= now - HISTORY_HOURS * 3600);
-    upsertComment(issue, stored?.comment, 'history', acct, history);
+    if (JSON.stringify(history) !== recorded) upsertComment(issue, stored?.comment, 'history', acct, history);
 
     const windows = Object.entries(limits).map(([key, current]) => {
       const allowed = allowedConsumers(current, perConsumerRate(history, key, current, now), now);
@@ -442,7 +591,7 @@ function budgetPlan() {
     const sampleAgeMinutes = sample ? Math.round(ageMinutes(sample.at)) : null;
     const action = sample && !liveSample ? `${paced} (last sample ${sampleAgeMinutes} min old)` : paced;
 
-    plan.push({ account: acct, working, available, target, action, hasLiveSample: Boolean(liveSample), sampleAgeMinutes, windows });
+    plan.push({ account: acct, working, available, target, pace: paced, action, hasLiveSample: Boolean(liveSample), sampleAgeMinutes, windows });
   }
 
   return plan;
@@ -496,16 +645,24 @@ function ownerOf(issue) {
 }
 
 function isOpen(number) {
-  return api('GET', `repos/${repo()}/issues/${number}`).state === 'open';
+  return get(`repos/${repo()}/issues/${number}`).data.state === 'open';
+}
+
+function parkedTasks(closed = null) {
+  return openIssues(LABELS.task)
+    .filter(issue => waitsOn(issue).length > 0 && (closed === null || waitsOn(issue).includes(closed)))
+    .map(issue => ({ issue, owner: ownerOf(issue), pending: waitsOn(issue).filter(number => number !== closed && isOpen(number)) }));
+}
+
+function taskNumbers(numbers) {
+  return numbers.map(number => `#${number}`).join(', ');
 }
 
 function releaseWaiters(closedTask) {
   const closed = Number(closedTask);
-  for (const waiter of openIssues(LABELS.task).filter(issue => waitsOn(issue).includes(closed))) {
-    const pending = waitsOn(waiter).filter(number => number !== closed && isOpen(number));
-    const owner = ownerOf(waiter);
+  for (const { issue: waiter, owner, pending } of parkedTasks(closed)) {
     if (pending.length > 0) {
-      console.log(`task ${waiter.number} (${owner}) still waits on ${pending.map(n => `#${n}`).join(', ')}`);
+      console.log(`task ${waiter.number} (${owner}) still waits on ${taskNumbers(pending)}`);
       continue;
     }
     const body = `GO ${waiter.number}\n\nEvery task it waited on is closed (the last was task ${closed}). Rebase onto origin/main and carry on.`;
@@ -522,17 +679,108 @@ function commandRelease(options) {
   releaseWaiters(required(options, 'task'));
 }
 
+function parkedLine({ issue, owner, pending }) {
+  const state = pending.length === 0 ? 'READY TO RELEASE (nothing open left): run release' : `waits on ${taskNumbers(pending)}`;
+  return `task ${issue.number} (${owner ?? '?'}): ${state}`;
+}
+
 function commandWaiting() {
-  const parked = openIssues(LABELS.task).filter(issue => waitsOn(issue).length > 0);
+  const parked = parkedTasks();
   if (parked.length === 0) {
     console.log('no task is waiting on another');
     return;
   }
-  for (const issue of parked) {
-    const pending = waitsOn(issue).filter(isOpen);
-    const state = pending.length === 0 ? 'READY TO RELEASE (nothing open left): run release' : `waits on ${pending.map(n => `#${n}`).join(', ')}`;
-    console.log(`task ${issue.number} (${ownerOf(issue) ?? '?'}): ${state}`);
+  for (const task of parked) console.log(parkedLine(task));
+}
+
+function redMain() {
+  const runs = JSON.parse(gh(['run', 'list', '-R', PUBLIC_REPO, '--branch', MAIN_BRANCH, '--workflow', CI_WORKFLOW, '--limit', '1', '--json', 'conclusion,headSha,status,url']));
+  return runs.filter(run => run.status === RUN_COMPLETED && run.conclusion === RUN_FAILED);
+}
+
+const WAKE_CHECKS = [
+  {
+    name: 'message',
+    always: true,
+    findings: ({ id }) => unread(id).map(message => ({ key: String(message.id), line: formatMessage(message) })),
+  },
+  {
+    name: 'main-red',
+    findings: () => redMain().map(run => ({ key: run.headSha, line: `${CI_WORKFLOW} failed on ${MAIN_BRANCH} at ${run.headSha}: ${run.url}` })),
+  },
+  {
+    name: 'silent',
+    findings: ({ fleet }) => heartbeatRows(fleet)
+      .filter(row => liveness(row) === LIVENESS.silent)
+      .map(row => ({ key: `${row.id}@${row.at}`, line: `${row.id} (task ${row.task}, ${row.state}) last heartbeat ${Math.round(ageMinutes(row.at))} min ago` })),
+  },
+  {
+    name: 'budget',
+    findings: ({ fleet }) => budgetPlan(fleet).map(entry => ({ key: `${entry.account} ${entry.pace}`, line: `account ${entry.account}: ${entry.action}` })),
+  },
+  {
+    name: 'unprioritized',
+    findings: () => unprioritizedIssues().map(issue => ({ key: String(issue.number), line: `#${issue.number} ${issue.title}` })),
+  },
+  {
+    name: 'release',
+    findings: () => parkedTasks()
+      .filter(task => task.pending.length === 0)
+      .map(task => ({ key: String(task.issue.number), line: parkedLine(task) })),
+  },
+];
+
+function evaluateChecks(id) {
+  const context = { id, fleet: readFleet() };
+  return WAKE_CHECKS.map(check => ({ check, findings: check.findings(context) }));
+}
+
+function printFindings(title, results) {
+  const shown = results.filter(result => result.findings.length > 0);
+  if (shown.length === 0) return;
+  console.log(`--- ${title}`);
+  for (const { check, findings } of shown) {
+    for (const finding of findings) console.log(`${check.name}: ${finding.line}`);
   }
+}
+
+async function commandWake(options) {
+  const id = required(options, 'as');
+  const max = seconds(options, 'max', DEFAULT_WAKE_MAX_SECONDS);
+  const beat = { ...options, state: STATE.working };
+  let lastBeat = nowSeconds();
+  await commandHeartbeat(beat);
+
+  let baseline = null;
+  let standing = [];
+
+  const fired = await watch(seconds(options, 'interval', DEFAULT_POLL_SECONDS), max, async () => {
+    if (nowSeconds() - lastBeat >= WAKE_HEARTBEAT_SECONDS) {
+      lastBeat = nowSeconds();
+      await commandHeartbeat(beat);
+    }
+
+    const results = evaluateChecks(id);
+    baseline ??= new Map(results.map(({ check, findings }) => [check, new Set(findings.map(finding => finding.key))]));
+    const select = isNew => results.map(({ check, findings }) => ({
+      check,
+      findings: findings.filter(finding => (check.always || !baseline.get(check).has(finding.key)) === isNew),
+    }));
+    standing = select(false);
+    const news = select(true);
+    return news.some(result => result.findings.length > 0) ? news : null;
+  });
+
+  if (!fired) {
+    await commandHeartbeat(beat);
+    console.log(`wake: no check fired within ${max} s`);
+    printFindings('standing', standing);
+    process.exit(WAIT_TIMEOUT_EXIT);
+  }
+
+  console.log(`wake: ${fired.filter(result => result.findings.length > 0).map(result => result.check.name).join(', ')}`);
+  printFindings('fired', fired);
+  printFindings('standing', standing);
 }
 
 function commandRetire(options) {
@@ -553,7 +801,7 @@ function commandRetire(options) {
   }
 
   if (beat) api('DELETE', `repos/${repo()}/issues/comments/${beat.comment.id}`);
-  for (const mailbox of matchingIssues(LABELS.mailbox, mailboxTitle(id))) {
+  for (const mailbox of mailboxes(id)) {
     api('PATCH', `repos/${repo()}/issues/${mailbox.number}`, { state: 'closed' });
   }
   console.log(`retired ${id}${archived ? ' (archived itself)' : '; finished marker posted for the panel'}`);
@@ -569,6 +817,8 @@ const COMMANDS = {
   inbox: commandInbox,
   ack: commandAck,
   wait: commandWait,
+  step: commandStep,
+  wake: commandWake,
   heartbeat: commandHeartbeat,
   status: commandStatus,
   budget: commandBudget,

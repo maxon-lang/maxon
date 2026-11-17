@@ -26,17 +26,18 @@ checkout.
 
 - **Before any work, tell it.** A task the user gave you directly is a `REQUEST`; with no task, send
   `READY`. Start only on its `ASSIGN`. A `STOP` means another session owns the problem: tell the user.
-- **Check your inbox at every step boundary** (`fleet.mjs inbox --as <id>`, then `ack` what you have
-  acted on), and send a `heartbeat --as <id> --model <model id> --state working --task <n>` there too:
-  the orchestrator sizes the fleet to the plans' usage from it. A cloud session cannot name its account
-  itself: it heartbeats with `--account <label>`, or with `MAXON_FLEET_ACCOUNT` set in its environment,
+- **At every step boundary, run `fleet.mjs step --as <id> --model <model id> --state working --task <n>`**,
+  with `--ack <id>,<id>` naming the messages you have acted on since the last one. It acknowledges them,
+  heartbeats with your plan's usage and your context size — the orchestrator sizes the fleet to the
+  plans' usage from it — and prints your unread messages. A cloud session cannot name its account
+  itself: it steps with `--account <label>`, or with `MAXON_FLEET_ACCOUNT` set in its environment,
   the label `fleet.mjs status` shows for the account it runs on.
 - **`PAUSE`:** stop at the next step boundary, keeping your task and your tree — never inside §8's gates
-  or the push. Heartbeat `--state paused --task <n>` and wait (below) for `RESUME`. With no task, a `PAUSE`
+  or the push. `step --state paused --task <n>` and wait (below) for `RESUME`. With no task, a `PAUSE`
   only means no task is coming yet: stay `--state idle` and wait for an `ASSIGN`.
 - **Waiting** — for an `ASSIGN`, a `RULING` or a `RESUME` — is `fleet.mjs wait --as <id>` run with
-  `run_in_background`: it polls GitHub, not you, so it costs no usage, and its exit wakes you. Heartbeat
-  `--state idle` (or `paused`) before you start it.
+  `run_in_background`: it polls GitHub, not you, so it costs no usage, and its exit wakes you and prints
+  the messages that arrived. `step --state idle` (or `paused`) before you start it.
 - **Stay in the assigned area.** Needing a file outside it is a `PROGRESS` naming the file before you
   edit it; one that another task owns is a `BLOCKED`.
 - **Your scope is fixed at `ASSIGN`.** Work that a `RULING` or your own finding adds is a `FOUND` (or a
@@ -63,7 +64,7 @@ checkout.
   `ASSIGN`, `RULING`, `STOP`, `RETIRE`, `PAUSE`, `RESUME` and `PING`; answer a `PING` with `PROGRESS`.
 - **`RETIRE`:** your work is finished and your session ends. If you have the desktop app's
   `archive_session` tool, send `ARCHIVING`, then archive yourself (`session_id: "self"`). Without it,
-  heartbeat `--state idle`, tell the user the session can be archived, and stop.
+  `step --state idle`, tell the user the session can be archived, and stop.
 - **Nothing about the fleet goes in this repository**, which is public: no session id, machine, account or
   usage figure in a commit, a file, a public issue or a comment on one.
 - **No answer from the orchestrator within 30 minutes:** tell the user, and fall back to the user and
