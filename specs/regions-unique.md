@@ -4501,3 +4501,43 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:27:13: 'h' is passed at two arguments of this call, and a unique value has one name; pass it once
 ```
+
+<!-- test: error.a-unique-slot-path-beside-its-receiver-names-self -->
+`self.t` and `self` reach one unique value, and the refusal names the receiver as it is written.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Holder is unique
+	var t as Token
+
+	static function create(t Token) returns Self
+		return Self{t: t}
+	end 'create'
+
+	function lendBoth()
+		both(self.t, h: self)
+	end 'lendBoth'
+end 'Holder'
+
+function both(t Token, h Holder)
+	h.t = Token.create(9)
+	t.n = 3
+end 'both'
+
+function main() returns ExitCode
+	let h = Holder.create(Token.create(1))
+	h.lendBoth()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:19: 'self' is passed at two arguments of this call, and a unique value has one name; pass it once
+```

@@ -2,10 +2,10 @@ let ReplTailSilenceMs = 300
 let ReplTailCapMs = 5000
 let ReplProcess = "the debug REPL"
 
-type ReplSession implements ChildLineSink
+type ReplSession
 	var child as StreamingSubprocess
 	var pump as ChildPump
-	var transcript as String
+	var transcript as ReplTranscript
 	var hungEvidence as String
 	var staged as FilePath
 
@@ -26,7 +26,7 @@ type ReplSession implements ChildLineSink
 			panic("the gate could not run — the debug REPL's output could not be taken ({e.displayReason()}).")
 		end 'outputNotTaken'
 
-		return Self{child: child, pump: pump, transcript: "", hungEvidence: "", staged: staged}
+		return Self{child: child, pump: pump, transcript: ReplTranscript.empty(), hungEvidence: "", staged: staged}
 	end 'open'
 
 	export function say(command String)
@@ -36,27 +36,27 @@ type ReplSession implements ChildLineSink
 	end 'say'
 
 	export function said() returns String
-		return withoutCarriageReturns(self.transcript)
+		return withoutCarriageReturns(self.transcript.spoken)
 	end 'said'
 
 	export function sayUntilThe(needle String, deadlineMs DurationMs) returns bool
 		let started = Clock.nowMs()
 
-		while Clock.remainingMs(started, deadlineMs: deadlineMs) > 0 and not self.transcript.contains(needle) 'untilItIsSaid'
+		while Clock.remainingMs(started, deadlineMs: deadlineMs) > 0 and not self.transcript.spoken.contains(needle) 'untilItIsSaid'
 			if not self.absorbNext(Clock.remainingMs(started, deadlineMs: deadlineMs)) 'streamsEnded'
 				break
 			end 'streamsEnded'
 		end 'untilItIsSaid'
 
-		return self.transcript.contains(needle)
+		return self.transcript.spoken.contains(needle)
 	end 'sayUntilThe'
 
 	export function finish(deadlineMs DurationMs) returns bool
 		self.child.closeStdin()
 
-		let ending = awaitChildEnd(self.pump, child: self.child, into: self, feed: StdinFeed.never(), started: Clock.nowMs(), deadlineMs: deadlineMs, endsWhen: RunEndsWhen.childExits)
+		let ending = awaitChildEnd(self.pump, child: self.child, into: self.transcript, feed: StdinFeed.never(), started: Clock.nowMs(), deadlineMs: deadlineMs, endsWhen: RunEndsWhen.childExits)
 		let inTime = self.endedInTime(ending)
-		let survivors = concludeChild(self.pump, child: self.child, into: self, ending: ending, tailSilenceMs: ReplTailSilenceMs, tailCapMs: ReplTailCapMs)
+		let survivors = concludeChild(self.pump, child: self.child, into: self.transcript, ending: ending, tailSilenceMs: ReplTailSilenceMs, tailCapMs: ReplTailCapMs)
 
 		requireSurvivorsEnded(survivors, what: ReplProcess)
 
@@ -92,17 +92,9 @@ type ReplSession implements ChildLineSink
 		return "{processSnapshot(self.staged.toString())}{LineFeed}The hung REPL, sampled:{LineFeed}{sampledStack(replProcess)}{LineFeed}The debug stubs, sampled:{sampledStubs()}"
 	end 'evidenceOfAHang'
 
-	export function heard(_ StdioStream, text String)
-		self.transcript.append("{text}{LineFeed}")
-	end 'heard'
-
-	export function broken(stream StdioStream, reason String)
-		refuseBrokenRead(ReplProcess, stream: stream, reason: reason)
-	end 'broken'
-
 	function absorbNext(waitMs DurationMs) returns bool
 		let event = self.pump.next(waitMs)
-		event.deliverTo(self)
+		event.deliverTo(self.transcript)
 
 		return match event 'event'
 			exhausted gives false
@@ -113,3 +105,19 @@ type ReplSession implements ChildLineSink
 		end 'event'
 	end 'absorbNext'
 end 'ReplSession'
+
+type ReplTranscript implements ChildLineSink
+	var spoken as String
+
+	static function empty() returns Self
+		return Self{spoken: ""}
+	end 'empty'
+
+	export function heard(_ StdioStream, text String)
+		self.spoken.append("{text}{LineFeed}")
+	end 'heard'
+
+	export function broken(stream StdioStream, reason String)
+		refuseBrokenRead(ReplProcess, stream: stream, reason: reason)
+	end 'broken'
+end 'ReplTranscript'

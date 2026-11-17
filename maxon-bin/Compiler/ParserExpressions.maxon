@@ -1989,7 +1989,7 @@ extension Parser
 				continue
 			end 'onlyLentToTheCaller'
 
-			self.fileKeptArgumentSite(func, opIdx: opIdx, position: position, anchor: self.tokenAt(nameIndex), argValue: variable, holder: keptHolderOf(self.bodyState.scope.getInfo(self.tokenAt(nameIndex).value), value: variable), argAnchors: argAnchors)
+			self.fileKeptArgumentSite(func, opIdx: opIdx, position: position, anchor: self.tokenAt(nameIndex), argValue: variable, holder: keptHolderOf(try self.bindingReadAt(nameIndex) otherwise panic("fileKeptJoinedVariables: lastReadIndexIn answers only an index that reads a binding"), value: variable), argAnchors: argAnchors)
 		end 'eachVariable'
 	end 'fileKeptJoinedVariables'
 
@@ -1999,11 +1999,7 @@ extension Parser
 		while index > span.startIndex 'towardTheStart'
 			index = index - 1
 
-			if not self.tokenReadsABindingAt(index) 'notAReadOfABinding'
-				continue
-			end 'notAReadOfABinding'
-
-			let binding = self.bodyState.scope.getInfo(self.tokenAt(index).value)
+			let binding = try self.bindingReadAt(index) otherwise continue
 
 			if binding.boundValue == value and not (liveOnly and binding.movedFrom) 'aReadOfTheValue'
 				return index
@@ -2012,6 +2008,17 @@ extension Parser
 
 		throw AbsentError.absent
 	end 'lastReadIndexIn'
+
+	function bindingReadAt(index ElementIndex) returns VarInfo throws AbsentError
+		let name = self.baseBindingName(self.tokenAt(index))
+		let readsTheReceiver = self.kindAt(index) == TokenKind.self and self.bodyState.scope.contains(name)
+
+		if not readsTheReceiver and not self.tokenReadsABindingAt(index) 'notAReadOfABinding'
+			throw AbsentError.absent
+		end 'notAReadOfABinding'
+
+		return self.bodyState.scope.getInfo(name)
+	end 'bindingReadAt'
 
 	function tokenReadsABindingAt(index ElementIndex) returns bool
 		let tok = self.tokenAt(index)
