@@ -73,13 +73,15 @@ data {
   __mrt_cpu_sha_usable@32 = i64 0
   __mrt_hash_seed@40 = i64 0
   __mrt_hash_tier@48 = i64 0
-  __slab_arena_list@56 = i64 0
-  __slab_arena_map_l1@64 = i64 0
-  __slab_state@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
-  __mrt_program_started@83 = i8 0
+  __mrt_hash_secret@56 = i64 0
+  __mrt_hash_pinned@64 = i64 0
+  __slab_arena_list@72 = i64 0
+  __slab_arena_map_l1@80 = i64 0
+  __slab_state@88 = i64 0
+  __mrt_console_probe_stdin@96 = i8 0
+  __mrt_console_probe_stdout@97 = i8 0
+  __mrt_console_probe_stderr@98 = i8 0
+  __mrt_program_started@99 = i8 0
 }
 
 func @Big.create {
@@ -334,10 +336,12 @@ data {
   __mrt_cpu_sha_usable@24 = i64 0
   __mrt_hash_seed@32 = i64 0
   __mrt_hash_tier@40 = i64 0
-  __slab_arena_list@48 = i64 0
-  __slab_arena_map_l1@56 = i64 0
-  __slab_state@64 = i64 0
-  __mrt_program_started@72 = i8 0
+  __mrt_hash_secret@48 = i64 0
+  __mrt_hash_pinned@56 = i64 0
+  __slab_arena_list@64 = i64 0
+  __slab_arena_map_l1@72 = i64 0
+  __slab_state@80 = i64 0
+  __mrt_program_started@88 = i8 0
 }
 
 func @Big.create {
@@ -589,10 +593,12 @@ data {
   __mrt_cpu_aes_usable@0 = i64 1
   __mrt_hash_seed@8 = i64 0
   __mrt_hash_tier@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_hash_secret@24 = i64 0
+  __mrt_hash_pinned@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @Big.create {
@@ -838,10 +844,12 @@ data {
   __mrt_cpu_sha_usable@32 = i64 0
   __mrt_hash_seed@40 = i64 0
   __mrt_hash_tier@48 = i64 0
-  __slab_arena_list@56 = i64 0
-  __slab_arena_map_l1@64 = i64 0
-  __slab_state@72 = i64 0
-  __mrt_program_started@80 = i8 0
+  __mrt_hash_secret@56 = i64 0
+  __mrt_hash_pinned@64 = i64 0
+  __slab_arena_list@72 = i64 0
+  __slab_arena_map_l1@80 = i64 0
+  __slab_state@88 = i64 0
+  __mrt_program_started@96 = i8 0
 }
 
 func @Big.create {
