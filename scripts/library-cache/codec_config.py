@@ -19,6 +19,10 @@ CUSTOM_TYPES = {
     "SharedLibraryParse",
 }
 
+CONTAINER_TYPES = {
+    "MemberRoster": ("array", "immutable ByteArray"),
+}
+
 REFUSING_TYPES = {
     "ConditionalRefusal",
     "MisclosedBlockSite",

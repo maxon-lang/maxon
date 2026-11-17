@@ -84,6 +84,110 @@ end 'cacheReadFrozenNameRoster'
 
 // @generated library-cache end
 
+let MemberRosterScanCeiling = 32 as Count
+
+typealias MemberPositionMap = Map with (ByteArray, ElementIndex)
+typealias MemberNameIterator = ArrayIterator with immutable ByteArray
+
+union MemberLookup
+	scanned
+	indexed(positions MemberPositionMap)
+end 'MemberLookup'
+
+export type MemberRoster
+	let names as NameRoster
+	var lookup as MemberLookup
+
+	static function create(capacity ElementIndex, zeroed bool = false) returns Self
+		if zeroed 'zeroFilled'
+			panic("MemberRoster.create: a roster has no zero name to fill {capacity} slots with — every name is pushed")
+		end 'zeroFilled'
+
+		return Self{names: NameRoster.create(capacity, zeroed: false), lookup: MemberLookup.scanned}
+	end 'create'
+
+	function reserve(minCapacity ElementIndex)
+		self.names.reserve(minCapacity)
+	end 'reserve'
+
+	function push(name ByteArray)
+		self.names.push(name)
+
+		match self.lookup 'lookup'
+			scanned then self.indexOnceItOutgrowsTheScan()
+			indexed(positions) then noteFirstPosition(positions, names: self.names, position: self.names.count() - 1)
+		end 'lookup'
+	end 'push'
+
+	function indexOnceItOutgrowsTheScan()
+		if self.names.count() <= MemberRosterScanCeiling 'stillScanned'
+			return
+		end 'stillScanned'
+
+		let positions = MemberPositionMap.create()
+
+		for position in 0 upto self.names.count() 'eachName'
+			noteFirstPosition(positions, names: self.names, position: position)
+		end 'eachName'
+
+		self.lookup = MemberLookup.indexed(positions)
+	end 'indexOnceItOutgrowsTheScan'
+
+	function count() returns Count
+		return self.names.count()
+	end 'count'
+
+	function get(index ElementIndex) returns immutable ByteArray throws ArrayError
+		return try self.names.get(index)
+	end 'get'
+
+	function positionOfName(name ByteArray) returns ElementIndex throws MapError
+		match self.lookup 'lookup'
+			scanned then return try self.names.positionOfName(name)
+			indexed(positions) then return try positions.get(name)
+		end 'lookup'
+	end 'positionOfName'
+
+	function contains(name ByteArray) returns bool
+		try self.positionOfName(name) otherwise return false
+		return true
+	end 'contains'
+
+	function createIterator() returns MemberNameIterator throws IterationError
+		return try self.names.createIterator()
+	end 'createIterator'
+end 'MemberRoster'
+
+// @generated library-cache begin
+function cacheWriteMemberRoster(writer LibraryCacheWriter, value MemberRoster)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteMemberRoster'
+
+function cacheReadMemberRoster(reader LibraryCacheReader) returns MemberRoster throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = MemberRoster.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = freeze try reader.bytes()
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadMemberRoster'
+
+// @generated library-cache end
+
+// A repeated name keeps its first position, the answer the scan gives below the ceiling: the fused
+// error union repeats a case name its members share.
+function noteFirstPosition(positions MemberPositionMap, names NameRoster, position ElementIndex)
+	let name = try names.get(position) otherwise panic("noteFirstPosition: names.get OOB at {position} below count {names.count()}")
+	try positions.insert(name, value: position) otherwise ignore
+end 'noteFirstPosition'
+
 // Visibility tier of a top-level declaration. Stamped by the parser at
 // declaration time; consumed by cross-file name resolution and the unused-export
 // check. `unexported` is the default (positively widened to `global`).
@@ -7410,7 +7514,7 @@ export type StructLayout
 	// reader indexes every one of them by one `FieldIndex`, so a caller that pushed a name and forgot
 	// a default would shift every later field's default onto the wrong field: a silent wrong answer
 	// with no crash to find it by.
-	export var fieldNames as NameRoster
+	export var fieldNames as MemberRoster
 	export var fieldTypes as MaxonTypeArray
 	export var fieldMutable as BoolArray
 
@@ -7577,7 +7681,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: NameRoster.create(0), fieldTypes: MaxonTypeArray.create(0), fieldMutable: BoolArray.create(0), fieldVisibility: VisibilityArray.create(0), fieldDefaults: FieldDefaultArray.create(0), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(0), fieldDeclaredBrands: NameRoster.create(0), fieldSpelledNames: SpelledFieldNameArray.create(0), fieldTypeSites: DeclaredTypeSites.create(), fieldOffsets: ByteOffsetArray.create(0), fieldBitWidths: BitWidthArray.create(0), fieldBitOffsets: BitWidthArray.create(0), slotBytes: 0, typeParamNames: freeze NameRoster.create(0), whereConstraints: WhereConstraintArray.create(0), conformsTo: NameRoster.create(0), conformanceBindings: ConformanceBindingArray.create(0), messageMethodNames: NameRoster.create(0), visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: MemberRoster.create(0), fieldTypes: MaxonTypeArray.create(0), fieldMutable: BoolArray.create(0), fieldVisibility: VisibilityArray.create(0), fieldDefaults: FieldDefaultArray.create(0), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(0), fieldDeclaredBrands: NameRoster.create(0), fieldSpelledNames: SpelledFieldNameArray.create(0), fieldTypeSites: DeclaredTypeSites.create(), fieldOffsets: ByteOffsetArray.create(0), fieldBitWidths: BitWidthArray.create(0), fieldBitOffsets: BitWidthArray.create(0), slotBytes: 0, typeParamNames: freeze NameRoster.create(0), whereConstraints: WhereConstraintArray.create(0), conformsTo: NameRoster.create(0), conformanceBindings: ConformanceBindingArray.create(0), messageMethodNames: NameRoster.create(0), visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -7781,13 +7885,11 @@ export type StructLayout
 	// value the literal supplied for that field, and the field's position is the only way to find it in a
 	// column parallel to the layout.
 	export function inlineManagedFieldIndex() returns FieldIndex throws MapError
-		for i in 0 upto self.fieldCount() 'eachField'
-			if self.isInlineManagedField(try self.fieldNames.get(i) otherwise panic("StructLayout.inlineManagedFieldIndex: fieldNames.get OOB at {i} for `type {String.from(self.name)}` below its own count")) 'found'
-				return i
-			end 'found'
-		end 'eachField'
+		if not self.conformsToBuiltinManagedWrapper() 'notAWrapper'
+			throw MapError.keyNotFound
+		end 'notAWrapper'
 
-		throw MapError.keyNotFound
+		return try self.indexOfField(InlineManagedFieldName)
 	end 'inlineManagedFieldIndex'
 
 	// ⭐⭐ **IS FIELD `index` THE INLINE `managed` WHOSE ADDRESS *IS* THE RECEIVER'S? — THE ONE HOME OF A
@@ -7972,8 +8074,6 @@ export type StructLayout
 		return self.fieldNames.count()
 	end 'fieldCount'
 
-	// A linear scan: field counts are tiny, and a per-layout name→index map would be a heap object per
-	// declared type bought to serve a handful of lookups.
 	export function indexOfField(wanted ByteArray) returns FieldIndex throws MapError
 		return (try self.fieldNames.positionOfName(wanted)) as FieldIndex
 	end 'indexOfField'
@@ -8023,7 +8123,7 @@ export type StructLayout
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.declLine as CacheUnsigned)
 		writer.unsigned(self.declColumn as CacheUnsigned)
-		cacheWriteNameRoster(writer, value: self.fieldNames)
+		cacheWriteMemberRoster(writer, value: self.fieldNames)
 		cacheWriteMaxonTypeArray(writer, value: self.fieldTypes)
 		cacheWriteBoolArray(writer, value: self.fieldMutable)
 		cacheWriteVisibilityArray(writer, value: self.fieldVisibility)
@@ -8053,7 +8153,7 @@ export type StructLayout
 		let f_declFilePath = try reader.path()
 		let f_declLine = (try reader.unsigned()) as LineNumber
 		let f_declColumn = (try reader.unsigned()) as ColumnNumber
-		let f_fieldNames = try cacheReadNameRoster(reader)
+		let f_fieldNames = try cacheReadMemberRoster(reader)
 		let f_fieldTypes = try cacheReadMaxonTypeArray(reader)
 		let f_fieldMutable = try cacheReadBoolArray(reader)
 		let f_fieldVisibility = try cacheReadVisibilityArray(reader)
@@ -8086,7 +8186,7 @@ export type StructLayout
 		let f_declLine = (try reader.unsigned()) as LineNumber
 		let f_declColumn = (try reader.unsigned()) as ColumnNumber
 
-		let built = Self{name: f_name, fieldNames: NameRoster.create(0), fieldTypes: MaxonTypeArray.create(0), fieldMutable: BoolArray.create(0), fieldVisibility: VisibilityArray.create(0), fieldDefaults: FieldDefaultArray.create(0), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(0), fieldDeclaredBrands: NameRoster.create(0), fieldSpelledNames: SpelledFieldNameArray.create(0), fieldTypeSites: f_fieldTypeSites.clone(), fieldOffsets: ByteOffsetArray.create(0), packsInlineIntoAWord: f_packsInlineIntoAWord, isUnique: f_isUnique, isLinear: f_isLinear, fieldBitWidths: BitWidthArray.create(0), fieldBitOffsets: BitWidthArray.create(0), slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: WhereConstraintArray.create(0), regionBounds: RegionBoundArray.create(0), conformsTo: NameRoster.create(0), conformanceBindings: ConformanceBindingArray.create(0), messageMethodNames: NameRoster.create(0), visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn} as isolated Self
+		let built = Self{name: f_name, fieldNames: MemberRoster.create(0), fieldTypes: MaxonTypeArray.create(0), fieldMutable: BoolArray.create(0), fieldVisibility: VisibilityArray.create(0), fieldDefaults: FieldDefaultArray.create(0), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(0), fieldDeclaredBrands: NameRoster.create(0), fieldSpelledNames: SpelledFieldNameArray.create(0), fieldTypeSites: f_fieldTypeSites.clone(), fieldOffsets: ByteOffsetArray.create(0), packsInlineIntoAWord: f_packsInlineIntoAWord, isUnique: f_isUnique, isLinear: f_isLinear, fieldBitWidths: BitWidthArray.create(0), fieldBitOffsets: BitWidthArray.create(0), slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: WhereConstraintArray.create(0), regionBounds: RegionBoundArray.create(0), conformsTo: NameRoster.create(0), conformanceBindings: ConformanceBindingArray.create(0), messageMethodNames: NameRoster.create(0), visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn} as isolated Self
 
 		let count_fieldNames = try reader.count()
 		built.fieldNames.reserve(count_fieldNames)
@@ -9591,6 +9691,31 @@ end 'EnumRawValueIdentity'
 
 let ZeroSlotTag = 0
 
+typealias PayloadCaseCountArray = Array with CaseIndex
+
+// @generated library-cache begin
+function cacheWritePayloadCaseCountArray(writer LibraryCacheWriter, value PayloadCaseCountArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWritePayloadCaseCountArray'
+
+function cacheReadPayloadCaseCountArray(reader LibraryCacheReader) returns PayloadCaseCountArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = PayloadCaseCountArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.boundedUnsigned(0, high: 65535)) as CaseIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPayloadCaseCountArray'
+
+// @generated library-cache end
+
 export type EnumLayout
 	export let name as immutable ByteArray
 
@@ -9606,7 +9731,7 @@ export type EnumLayout
 	// Parallel arrays, in DECLARATION order: case `i` is named `caseNames[i]`, carries tag
 	// `caseTags[i]` and declares payload fields `casePayloads[i]` (empty for a payload-free case).
 	// NEVER appended to directly — `addCase` is the one writer (see the header).
-	export var caseNames as NameRoster
+	export var caseNames as MemberRoster
 	export var caseTags as FullRangeIntArray
 
 	// ⭐ **HOW EACH CASE's RAW VALUE WAS WRITTEN** — `"200"`, `"1.1"`, `"application/json"`, `"n"` — the
@@ -9621,6 +9746,9 @@ export type EnumLayout
 	// of a payload-bearing union — payload-free ones included — take the record form (a bare tag in a
 	// box, or the stored tag alone in a word).
 	export var casePayloads as PayloadFieldArrayArray
+	// Entry `i` counts the payload-bearing cases at or before case `i`, so it holds only while no
+	// case's payload arity moves after `addCase`; a stale entry gives wrong word keys, silently.
+	var payloadCasesThrough as PayloadCaseCountArray
 
 	// ⭐ **THE INTERFACE NAMES THIS ENUM/UNION'S `implements` CLAUSE WRITES, AND THOSE OF ITS UNCONDITIONAL
 	// EXTENSIONS** (`ProgramSignatures.recordConformancesOfATypeExtension` appends them) — the twin of
@@ -9683,7 +9811,7 @@ export type EnumLayout
 	export var caseBackingFields as EnumBackingFieldArrayArray
 
 	export static function create(name ByteArray, isUnion bool, conformsTo NameRoster, visibility Visibility, declFilePath FilePath, backing EnumBacking, isSynthesized bool = false) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, isSynthesized: isSynthesized, caseNames: NameRoster.create(0), caseTags: FullRangeIntArray.create(0), caseRawValues: StringArray.create(0), casePayloads: PayloadFieldArrayArray.create(0), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create(0)}
+		return Self{name: name, isUnion: isUnion, isSynthesized: isSynthesized, caseNames: MemberRoster.create(0), caseTags: FullRangeIntArray.create(0), caseRawValues: StringArray.create(0), casePayloads: PayloadFieldArrayArray.create(0), payloadCasesThrough: PayloadCaseCountArray.create(0), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create(0)}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -9703,10 +9831,10 @@ export type EnumLayout
 		self.conformsTo = names
 	end 'recordConformances'
 
-	// Append one declared case. THE one writer of all FIVE columns, so they cannot drift — a caller
-	// that pushed a name and forgot the payloads would shift every later case's payloads onto the
-	// wrong case. A payload-free case passes an empty array, and every case that is not backed by a
-	// constant struct passes an empty array.
+	// Append one declared case. THE one writer of all the case columns, so they cannot drift — a
+	// caller that pushed a name and forgot the payloads would shift every later case's payloads
+	// onto the wrong case. A payload-free case passes an empty array, and every case that is not
+	// backed by a constant struct passes an empty array.
 	//
 	// ⚠ Both empties are spelled at the call site rather than defaulted, so the sentence above stays
 	// literally true: there is no argument this writer can supply on a caller's behalf.
@@ -9718,6 +9846,7 @@ export type EnumLayout
 		self.caseNames.push(caseName)
 		self.caseTags.push(tag)
 		self.caseRawValues.push(rawValue)
+		self.payloadCasesThrough.push(self.payloadCasesBefore(self.payloadCasesThrough.count() as CaseIndex) + (1 if payloads.count() > 0 else 0))
 		self.casePayloads.push(payloads)
 		self.caseBackingFields.push(backingFields)
 		self.declaresRawValues = self.declaresRawValues or declaresRawValue
@@ -9734,6 +9863,10 @@ export type EnumLayout
 	// resolved until every file has folded, and an id remap rewrites the same slots for the same reason. It
 	// takes a whole array where the struct side sets one cell, because a `PayloadField`'s columns are `let`.
 	export function retypeCasePayloads(index CaseIndex, payloads PayloadFieldArray)
+		if payloads.count() != self.payloadArityAt(index) 'arityMoved'
+			panic("EnumLayout.retypeCasePayloads: case {index} of `{self.kindWord()} {String.from(self.name)}` declares {self.payloadArityAt(index)} payload slot(s) and the replacement holds {payloads.count()} — a retype rewrites the slots one for one")
+		end 'arityMoved'
+
 		try self.casePayloads.set(index, value: payloads) otherwise panic("EnumLayout.retypeCasePayloads: casePayloads.set OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'retypeCasePayloads'
 
@@ -9813,15 +9946,11 @@ export type EnumLayout
 	end 'tagOfIndex'
 
 	export function payloadCasesBefore(limit CaseIndex) returns CaseIndex
-		var count = 0 as CaseIndex
+		if limit == 0 'noCaseBefore'
+			return 0
+		end 'noCaseBefore'
 
-		for i in 0 upto limit 'eachCase'
-			if self.payloadArityAt(i) > 0 'carriesAPayload'
-				count = count + 1
-			end 'carriesAPayload'
-		end 'eachCase'
-
-		return count
+		return try self.payloadCasesThrough.get(limit - 1) otherwise panic("EnumLayout.payloadCasesBefore: payloadCasesThrough.get OOB at {limit - 1} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'payloadCasesBefore'
 
 	// Declaration index + 1 while the union fits the tag mask, so a small union's words are what they
@@ -9973,7 +10102,6 @@ export type EnumLayout
 		return ProvenIntRange.create(lowest, high: highest)
 	end 'tagRange'
 
-	// A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
 	export function indexOfCase(wanted ByteArray) returns CaseIndex throws MapError
 		return (try self.caseNames.positionOfName(wanted)) as CaseIndex
 	end 'indexOfCase'
@@ -10012,10 +10140,11 @@ export type EnumLayout
 		writer.unsigned(self.backing.ordinal as CacheUnsigned)
 		writer.flag(self.declaresRawValues)
 		cacheWriteEnumBackingStruct(writer, value: self.backingStruct)
-		cacheWriteNameRoster(writer, value: self.caseNames)
+		cacheWriteMemberRoster(writer, value: self.caseNames)
 		cacheWriteFullRangeIntArray(writer, value: self.caseTags)
 		cacheWriteStringArray(writer, value: self.caseRawValues)
 		cacheWritePayloadFieldArrayArray(writer, value: self.casePayloads)
+		cacheWritePayloadCaseCountArray(writer, value: self.payloadCasesThrough)
 		cacheWriteNameRoster(writer, value: self.conformsTo)
 		cacheWriteEnumBackingFieldArrayArray(writer, value: self.caseBackingFields)
 	end 'cacheWrite'
@@ -10031,14 +10160,15 @@ export type EnumLayout
 		let f_backing = try cacheReadEnumBacking(reader)
 		let f_declaresRawValues = try reader.flag()
 		let f_backingStruct = try cacheReadEnumBackingStruct(reader)
-		let f_caseNames = try cacheReadNameRoster(reader)
+		let f_caseNames = try cacheReadMemberRoster(reader)
 		let f_caseTags = try cacheReadFullRangeIntArray(reader)
 		let f_caseRawValues = try cacheReadStringArray(reader)
 		let f_casePayloads = try cacheReadPayloadFieldArrayArray(reader)
+		let f_payloadCasesThrough = try cacheReadPayloadCaseCountArray(reader)
 		let f_conformsTo = try cacheReadNameRoster(reader)
 		let f_caseBackingFields = try cacheReadEnumBackingFieldArrayArray(reader)
 
-		return Self{name: f_name, isUnion: f_isUnion, isSynthesized: f_isSynthesized, caseNames: f_caseNames, caseTags: f_caseTags, caseRawValues: f_caseRawValues, casePayloads: f_casePayloads, conformsTo: f_conformsTo, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: f_caseBackingFields}
+		return Self{name: f_name, isUnion: f_isUnion, isSynthesized: f_isSynthesized, caseNames: f_caseNames, caseTags: f_caseTags, caseRawValues: f_caseRawValues, casePayloads: f_casePayloads, payloadCasesThrough: f_payloadCasesThrough, conformsTo: f_conformsTo, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: f_caseBackingFields}
 	end 'cacheRead'
 
 	static function cacheReadFrozen(reader LibraryCacheReader) returns immutable EnumLayout throws LibraryCacheDamage
@@ -10053,7 +10183,7 @@ export type EnumLayout
 		let f_declaresRawValues = try reader.flag()
 		let f_backingStruct = try cacheReadEnumBackingStruct(reader)
 
-		let built = Self{name: f_name, isUnion: f_isUnion, isSynthesized: f_isSynthesized, caseNames: NameRoster.create(0), caseTags: FullRangeIntArray.create(0), caseRawValues: StringArray.create(0), casePayloads: PayloadFieldArrayArray.create(0), conformsTo: NameRoster.create(0), visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: EnumBackingFieldArrayArray.create(0)} as isolated Self
+		let built = Self{name: f_name, isUnion: f_isUnion, isSynthesized: f_isSynthesized, caseNames: MemberRoster.create(0), caseTags: FullRangeIntArray.create(0), caseRawValues: StringArray.create(0), casePayloads: PayloadFieldArrayArray.create(0), payloadCasesThrough: PayloadCaseCountArray.create(0), conformsTo: NameRoster.create(0), visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: EnumBackingFieldArrayArray.create(0)} as isolated Self
 
 		let count_caseNames = try reader.count()
 		built.caseNames.reserve(count_caseNames)
@@ -10096,6 +10226,14 @@ export type EnumLayout
 			end 'eachCasePayloadsItem'
 		end 'eachCasePayloads'
 
+		let count_payloadCasesThrough = try reader.count()
+		built.payloadCasesThrough.reserve(count_payloadCasesThrough)
+
+		for _ in 0 upto count_payloadCasesThrough 'eachPayloadCasesThrough'
+			let item = (try reader.boundedUnsigned(0, high: 65535)) as CaseIndex
+			built.payloadCasesThrough.push(item)
+		end 'eachPayloadCasesThrough'
+
 		let count_conformsTo = try reader.count()
 		built.conformsTo.reserve(count_conformsTo)
 
@@ -10115,8 +10253,8 @@ export type EnumLayout
 		return freeze built
 	end 'cacheReadFrozen'
 
-	static function cacheLayoutBytes() returns CacheSize128
-		return sizeof(EnumLayout) as CacheSize128
+	static function cacheLayoutBytes() returns CacheSize136
+		return sizeof(EnumLayout) as CacheSize136
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

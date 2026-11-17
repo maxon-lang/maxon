@@ -90,6 +90,11 @@ class Emitter:
         if text in config.CUSTOM_TYPES:
             return Node("custom", name=text, text=text)
 
+        if text in config.CONTAINER_TYPES:
+            kind, element = config.CONTAINER_TYPES[text]
+
+            return Node(kind, text=text, alias=text, elem=element, elem_readonly=False)
+
         if text == config.BUILTIN_STRING:
             return Node("string", text=text)
 

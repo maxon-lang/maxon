@@ -70,7 +70,7 @@ class Plan:
         kind, name = item
 
         if kind in ALIAS_KINDS:
-            path = self.tree.aliases[name].path
+            path = self.tree.types[name].path if name in config.CONTAINER_TYPES else self.tree.aliases[name].path
 
             return config.GENERATED_HOST if self.is_library_path(path) else path
 
@@ -84,7 +84,7 @@ class Plan:
         kind, name = item
         ranks = []
 
-        if kind == "type":
+        if kind == "type" or name in config.CONTAINER_TYPES:
             return [VISIBILITY_RANK[self.tree.types[name].visibility]]
 
         if name in seen:
@@ -287,6 +287,11 @@ def declaration_span(lines, name):
 
 
 def alias_line(lines, name):
+    if name in config.CONTAINER_TYPES:
+        _, end = declaration_span(lines, name)
+
+        return end
+
     for index, line in enumerate(lines):
         match = ALIAS.match(line)
 
@@ -408,7 +413,7 @@ def schema_text(plan, order):
     lines = []
     described = set()
     names = [item[1] for item in order if item[0] == "type"]
-    names += sorted(config.CUSTOM_TYPES | config.SCHEMA_HOST_TYPES)
+    names += sorted(config.CUSTOM_TYPES | config.SCHEMA_HOST_TYPES | set(config.CONTAINER_TYPES))
 
     for name in names:
         if name in described or name not in plan.tree.types:
@@ -419,7 +424,10 @@ def schema_text(plan, order):
 
     for item in order:
         if item[0] == "alias":
-            lines.append("alias %s = %s" % (item[1], plan.tree.aliases[item[1]].target))
+            if item[1] in config.CONTAINER_TYPES:
+                lines.append("container %s = %s of %s" % ((item[1],) + config.CONTAINER_TYPES[item[1]]))
+            else:
+                lines.append("alias %s = %s" % (item[1], plan.tree.aliases[item[1]].target))
 
     for name in sorted(emitter.touched_aliases):
         lines.append("alias %s = %s" % (name, plan.tree.aliases[name].target))
