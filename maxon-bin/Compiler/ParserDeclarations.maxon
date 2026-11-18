@@ -9380,12 +9380,9 @@ extension Parser
 			let base = try self.consumeGenericBaseName()
 			try self.consume(TokenKind.with)
 
-			// ⭐ **A NESTED INSTANCE READS ITS SIZE THROUGH THE SAME DOOR THE TOP-LEVEL ONE DOES (review
-			// finding 5).** Without it `typealias X = Box with (FixedArray with 3 Int)` died as
-			// `E2010 Expected 'a type' but got 'integer literal'` — the raw token complaint the top-level
-			// spelling stopped giving the moment `FixedArray` existed — instead of reaching E2069 or the element
-			// gate. This arm had already been taught the OTHER `FixedArray`-specific fact (`inlineElement` below),
-			// so the asymmetry was an omission and not a decision.
+			// ⭐ **A NESTED INSTANCE READS ITS SIZE THROUGH THE SAME DOOR THE TOP-LEVEL ONE DOES.** A skipped
+			// read leaves `typealias X = Box with (FixedArray with 3 Int)` at `E2010 Expected 'a type' but got
+			// 'integer literal'` instead of E2069 or the element gate.
 			let subSize = try self.readSizedBaseElementCount(base.written)
 
 			// The canonical base, for the top-level arm's reason: a nested `__ManagedMemory with T` must
@@ -9399,7 +9396,7 @@ extension Parser
 			end 'aNestedSharedValue'
 
 			self.noteGenericSpelling(base, baseName: subBaseName, argCount: subCount)
-			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, shape: subQualified if subQualified.qualifiesArgs() else subSize))
+			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, shape: subQualified if subQualified.qualifiesArgs() else subSize, anchor: NestedInstanceAnchor.writtenAt(base.anchor.line, nameColumn: base.anchor.column)))
 			nodes.append(subNodes)
 			return qualifier
 		end 'nested'
@@ -9438,7 +9435,7 @@ extension Parser
 
 	function pushEnclosingInstanceNodes(nodes GenericArgNodeArray)
 		let owner = self.enclosingTypeName()
-		nodes.push(GenericArgNode.instanceHeader(owner, argCount: self.enclosingTypeParams.count() as FieldIndex, shape: InstanceShape.unsized))
+		nodes.push(GenericArgNode.instanceHeader(owner, argCount: self.enclosingTypeParams.count() as FieldIndex, shape: InstanceShape.unsized, anchor: NestedInstanceAnchor.unwritten))
 
 		for paramName in self.enclosingTypeParams 'eachParameter'
 			nodes.push(GenericArgNode.leaf(MaxonType.typeParameter(typeParamTokenFor(owner, paramName: paramName))))

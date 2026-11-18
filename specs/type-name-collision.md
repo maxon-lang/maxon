@@ -139,10 +139,12 @@ first one, and a rejected claimant never displaces it, so a THIRD instantiation 
 reported against the same incumbent the second was, at its own line, rather than against a claimant
 that was itself refused.
 
-Only a top-level `typealias` records a source anchor, so an instantiation NESTED inside another
-(`Wrap with (Pair with …)`) has none: the report falls back to the other claimant's alias, and when
-neither has one it is whole-program (`line == 0`, the anchorless form E3001 uses). Blaming the
-enclosing alias instead would name a line whose own instantiation is fine.
+Each written instantiation records a source anchor of its own: a top-level `typealias` at its name, and an
+instantiation NESTED inside its arguments (`Wrap with (Pair with …)`) at its own base name. The report
+lands at the later claimant's first written site and names the other claimant, so a nested claimant is
+blamed at its own `Pair`, not at the enclosing alias, whose own instantiation is fine. Only an
+instantiation written nowhere has no anchor, and then the report is whole-program (`line == 0`, the
+anchorless form E3001 uses).
 
 It is decided in the FRONT END, over the interned instantiations, **not** at symbol-emission time: a
 diagnostic raised where the symbol is minted has no user span to land on, and would blame a file the
@@ -1292,11 +1294,11 @@ end 'main'
 ```
 
 
-<!-- test: error.nested-instantiation-reported-at-the-aliased-one -->
-Only a top-level `typealias X = Base with Args` records a source anchor; a NESTED instantiation is
-interned as it is resolved and has none of its own. When the newcomer is the nested one the report
-falls back to the INCUMBENT's alias — the line that names the other half of the pair — rather than at
-the enclosing `Wrap` alias, whose own instantiation is fine.
+<!-- test: error.nested-instantiation-reported-at-its-own-name -->
+A NESTED instantiation records a source anchor of its own, at its base name, as a top-level
+`typealias X = Base with Args` does at its name. When the newcomer is the nested one the report lands
+at that nested `Pair` and names the INCUMBENT too, rather than at the enclosing `Wrap` alias, whose own
+instantiation is fine.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -1333,16 +1335,60 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:29:11: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
-error E3062: <fragment>:30:11: unused typealias: 'W1'
+error E3062: <fragment>:29:11: unused typealias: 'P1'
+error E3006: <fragment>:30:27: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+```
+
+
+<!-- test: error.an-alias-written-after-a-nested-instantiation-is-reported-at-its-own-name -->
+The mirror: the nested instantiation is written first, so the alias is the later claim and the report
+lands at the alias's own name.
+```maxon
+typealias Small = int(0 to 100)
+
+type Box
+	export var v as Small
+end 'Box'
+
+type Str
+	export var v as Small
+end 'Str'
+
+type Box_Int
+	export var v as Small
+end 'Box_Int'
+
+type Int_Str
+	export var v as Small
+end 'Int_Str'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+type Wrap uses Z
+	export var only as Z
+end 'Wrap'
+
+typealias W1 = Wrap with (Pair with (Box, Int_Str))
+typealias P1 = Pair with (Box_Int, Str)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3062: <fragment>:29:11: unused typealias: 'W1'
+error E3006: <fragment>:30:11: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box, Int_Str)` and `Pair with (Box_Int, Str)` compile to that same name
 ```
 
 
 <!-- test: error.nested-instantiations-compile-to-one-name -->
 The corner where NEITHER claimant is named by a `typealias`: both colliding instantiations are nested,
-inside two DIFFERENT outer generics, so the outer pair does not collide and nothing carries an anchor.
-The collision is real and is still reported — whole-program, the anchorless form E3001 uses — naming
-both instantiations, because pointing at either enclosing alias would blame a line that is correct.
+inside two DIFFERENT outer generics, so the outer pair does not collide. The later-written one is
+reported at its own base name, naming both instantiations, because pointing at either enclosing alias
+would blame a line that is correct.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -1384,8 +1430,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3062: <fragment>:33:11: unused typealias: 'W1'
-error E3062: <fragment>:34:11: unused typealias: 'H1'
-error E3006: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+error E3006: <fragment>:34:27: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
 ```
 
 

@@ -642,7 +642,11 @@ end 'Tagged'
 - Several interfaces on one parameter: `where T is Hashable and Equatable`.
 - Several parameters: `where K is Hashable, V is Cloneable`.
 - An instantiation whose argument does not conform is **E3017** (`Type 'X' does not satisfy constraint
-  'Digest' required by type parameter 'T' of 'Tagged'`).
+  'Digest' required by type parameter 'T' of 'Tagged'`). Each written `Base with Args` is judged once, where it
+  is written: at a `typealias`'s name, at the base name of an instance written inside its arguments
+  (`typealias Tallies = Array with (Map with (Unhashable, Tally))` reports at `Map`), at a literal, or at a bare
+  generic name that the enclosing generic type binds. An alias used as an argument is judged only at its own
+  declaration.
 - A constraint can bind an associated type: `where S is Cursor with E`.
 - In the body, `T.member` reaches a member through the parameter, whatever top-level type or alias shares
   its spelling. A `static` requirement dispatches on a concrete type, so calling one through `T`

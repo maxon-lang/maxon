@@ -1832,7 +1832,11 @@ end 'Tagged'
 - Several interfaces on one parameter: `where T is Hashable and Equatable`.
 - Several parameters: `where K is Hashable, V is Cloneable`.
 - An instantiation whose argument does not conform is **E3017** (`Type 'X' does not satisfy constraint
-  'Digest' required by type parameter 'T' of 'Tagged'`).
+  'Digest' required by type parameter 'T' of 'Tagged'`). Each written `Base with Args` is judged once, where it
+  is written: at a `typealias`'s name, at the base name of an instance written inside its arguments
+  (`typealias Tallies = Array with (Map with (Unhashable, Tally))` reports at `Map`), at a literal, or at a bare
+  generic name that the enclosing generic type binds. An alias used as an argument is judged only at its own
+  declaration.
 - A constraint can bind an associated type: `where S is Cursor with E`.
 - In the body, `T.member` reaches a member through the parameter, whatever top-level type or alias shares
   its spelling. A `static` requirement dispatches on a concrete type, so calling one through `T`
@@ -7118,7 +7122,7 @@ that takes `consuming self` contains `destruct self`; either one alone is **E322
   call are [E3224](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3224): each would keep the value past the code
   that must consume it. A `spawn` of a factory that cannot throw takes a linear argument, which the factory
   consumes; a factory that may throw takes none (E3224), because a factory that fails starts no service and drops
-  the value. A value lent to code that does not own it, such as a parameter of a function that does not
+  the value. A linear type argument is reported where the instantiation is written, as E3017 is. A value lent to code that does not own it, such as a parameter of a function that does not
   take it or `self` of a method that does not take `consuming self`, is consumed only by its owner: passing,
   returning or building it into a union there is E3224.
 - **No linear value is live across a wait.** An `await`, a send with a `sendTimeout:` and a call that waits
@@ -7187,9 +7191,13 @@ record holding a function value or a promise is refused. The bound judges the ty
 interface-typed field holds is judged at the `freeze` that shares it, in a program that spawns a service.
 `T is isolated` takes the same values and handles, or a `unique` type.
 
-Every instantiation is checked against the bound, and so is every instance it holds in a field, a container or
-a tuple. An argument written inside a generic type `Outer` that is or mentions a parameter of `Outer` is judged
-there, from `Outer`'s own `where` clause alone, once, however many instantiations `Outer` has (none included):
+Each written instantiation is checked against the bound once, where it is written: at a `typealias`'s name, at
+the base name of an instance written inside its arguments (`typealias StepPools = Array with (Pool with Step)`
+reports at `Pool`), at a literal, or at a bare generic name that the enclosing generic type binds (`Pool` inside
+`type Outer uses T` means `Pool with T`). An alias used as an argument is judged only at its own declaration. An
+argument written inside a generic type `Outer` that is or mentions a parameter of `Outer` is judged there, from
+`Outer`'s own `where` clause alone, once per declaring type at its first site, however many instantiations
+`Outer` has (none included):
 a bare `T` meets `sendable` only when `Outer` declares `where T is sendable`, and meets `isolated` only when it
 declares `where T is isolated`; neither proves the other, so a type that fills both kinds of position declares
 both (`where T is sendable and isolated`). An `immutable` argument that mentions a parameter (through an alias,

@@ -4332,7 +4332,7 @@ export union GenericArgNode
 	// instance that is neither a sized or runtime-sized `FixedArray` nor spells an `immutable` argument.
 	// It rides the NODE because the node is all `resolveArgNode` has when it interns the instance, and
 	// the shape is part of that instance's identity (`GenericInstanceRegistry.instanceKey`).
-	instanceHeader(baseName immutable ByteArray, argCount FieldIndex, shape InstanceShape)
+	instanceHeader(baseName immutable ByteArray, argCount FieldIndex, shape InstanceShape, anchor NestedInstanceAnchor)
 end 'GenericArgNode'
 
 // @generated library-cache begin
@@ -4341,7 +4341,7 @@ function cacheWriteGenericArgNode(writer LibraryCacheWriter, value GenericArgNod
 
 	match value 'payload'
 		leaf(a0) then cacheWriteGenericArgNodeLeaf(writer, a0: a0)
-		instanceHeader(a0, a1, a2) then cacheWriteGenericArgNodeInstanceHeader(writer, a0: a0, a1: a1, a2: a2)
+		instanceHeader(a0, a1, a2, a3) then cacheWriteGenericArgNodeInstanceHeader(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 	end 'payload'
 end 'cacheWriteGenericArgNode'
 
@@ -4349,10 +4349,11 @@ function cacheWriteGenericArgNodeLeaf(writer LibraryCacheWriter, a0 MaxonType)
 	cacheWriteMaxonType(writer, value: a0)
 end 'cacheWriteGenericArgNodeLeaf'
 
-function cacheWriteGenericArgNodeInstanceHeader(writer LibraryCacheWriter, a0 immutable ByteArray, a1 FieldIndex, a2 InstanceShape)
+function cacheWriteGenericArgNodeInstanceHeader(writer LibraryCacheWriter, a0 immutable ByteArray, a1 FieldIndex, a2 InstanceShape, a3 NestedInstanceAnchor)
 	writer.bytes(a0)
 	writer.unsigned(a1 as CacheUnsigned)
 	cacheWriteInstanceShape(writer, value: a2)
+	cacheWriteNestedInstanceAnchor(writer, value: a3)
 end 'cacheWriteGenericArgNodeInstanceHeader'
 
 function cacheReadGenericArgNode(reader LibraryCacheReader) returns GenericArgNode throws LibraryCacheDamage
@@ -4375,9 +4376,49 @@ function cacheReadGenericArgNodeInstanceHeader(reader LibraryCacheReader) return
 	let a0 = freeze try reader.bytes()
 	let a1 = (try reader.boundedUnsigned(0, high: 65535)) as FieldIndex
 	let a2 = try cacheReadInstanceShape(reader)
+	let a3 = try cacheReadNestedInstanceAnchor(reader)
 
-	return GenericArgNode.instanceHeader(a0, argCount: a1, shape: a2)
+	return GenericArgNode.instanceHeader(a0, argCount: a1, shape: a2, anchor: a3)
 end 'cacheReadGenericArgNodeInstanceHeader'
+
+// @generated library-cache end
+
+export union NestedInstanceAnchor
+	unwritten
+	writtenAt(nameLine LineNumber, nameColumn ColumnNumber)
+end 'NestedInstanceAnchor'
+
+// @generated library-cache begin
+function cacheWriteNestedInstanceAnchor(writer LibraryCacheWriter, value NestedInstanceAnchor)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break
+		writtenAt(a0, a1) then cacheWriteNestedInstanceAnchorWrittenAt(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteNestedInstanceAnchor'
+
+function cacheWriteNestedInstanceAnchorWrittenAt(writer LibraryCacheWriter, a0 LineNumber, a1 ColumnNumber)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+end 'cacheWriteNestedInstanceAnchorWrittenAt'
+
+function cacheReadNestedInstanceAnchor(reader LibraryCacheReader) returns NestedInstanceAnchor throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives NestedInstanceAnchor.unwritten
+		1 gives try cacheReadNestedInstanceAnchorWrittenAt(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadNestedInstanceAnchor'
+
+function cacheReadNestedInstanceAnchorWrittenAt(reader LibraryCacheReader) returns NestedInstanceAnchor throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+	let a1 = (try reader.unsigned()) as ColumnNumber
+
+	return NestedInstanceAnchor.writtenAt(a0, nameColumn: a1)
+end 'cacheReadNestedInstanceAnchorWrittenAt'
 
 // @generated library-cache end
 
@@ -4674,9 +4715,9 @@ export type GenericAliasEntry
 	// gates say. The bare key is a way to WRITE the type, never a claim on how the compiler QUOTES it.
 	//
 	// ⚠⚠ **AND THE SOURCE ANCHOR MUST NOT RIDE.** `recordGenericAlias` files a `GenericInstantiationSite`
-	// for every entry whose `nameLine` is non-zero, and `instantiationSites()` is what the E3017
-	// where-constraint check walks — so an anchored second copy reports every violation TWICE at the identical
-	// position. The E2012 cycle blame is the same shape one door over (`firstCyclicAliasDecl` picks ONE
+	// for every anchored entry, and for each instance written in its arguments, and `instantiationSites()` is
+	// what the E3017 where-constraint check walks — so an anchored second copy reports every violation TWICE at
+	// the identical position. The E2012 cycle blame is the same shape one door over (`firstCyclicAliasDecl` picks ONE
 	// declaration to report at, and `reportGenericAliasCycle` reads its anchors). One declaration, one anchor:
 	// the qualified copy keeps it, and this one is a NAME rather than a site.
 	export function asBareFileScopeName() returns GenericAliasEntry
@@ -6396,7 +6437,7 @@ end 'genericArgNodesDenoteSame'
 function genericArgNodeDenotesSame(node GenericArgNode, other GenericArgNode) returns bool
 	match node 'node'
 		leaf(argType) then return declaredLeafDenotesSame(other, argType: argType)
-		instanceHeader(baseName, argCount, shape) then return declaredHeaderDenotesSame(other, baseName: baseName, argCount: argCount, shape: shape)
+		instanceHeader(baseName, argCount, shape, _) then return declaredHeaderDenotesSame(other, baseName: baseName, argCount: argCount, shape: shape)
 	end 'node'
 end 'genericArgNodeDenotesSame'
 
@@ -6410,7 +6451,7 @@ end 'declaredLeafDenotesSame'
 function declaredHeaderDenotesSame(other GenericArgNode, baseName ByteArray, argCount FieldIndex, shape InstanceShape) returns bool
 	match other 'other'
 		leaf then return false
-		instanceHeader(otherBase, otherCount, otherSize) then return baseName.equals(otherBase) and argCount == otherCount and shape.sameAs(otherSize)
+		instanceHeader(otherBase, otherCount, otherSize, _) then return baseName.equals(otherBase) and argCount == otherCount and shape.sameAs(otherSize)
 	end 'other'
 end 'declaredHeaderDenotesSame'
 

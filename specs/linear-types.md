@@ -1364,6 +1364,48 @@ end 'main'
 error E3224: <fragment>:21:11: 'Resp' is a linear value and cannot be a type argument of 'Array': a linear value lives only in locals, parameters and message arguments, so no container, promise, generic record or generic function holds one
 ```
 
+<!-- test: a-linear-value-is-refused-as-a-type-argument-of-an-instance-written-inline -->
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function peek() returns Code
+		return self.code
+	end 'peek'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with (Box with Resp)
+
+function main() returns ExitCode
+	let boxes = Boxes.create(0)
+	print("{boxes.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3224: <fragment>:29:31: 'Resp' is a linear value and cannot be a type argument of 'Box': a linear value lives only in locals, parameters and message arguments, so no container, promise, generic record or generic function holds one
+```
+
 <!-- test: a-closure-cannot-capture-a-linear-value -->
 
 ```maxon

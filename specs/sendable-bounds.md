@@ -117,6 +117,184 @@ end 'main'
 error E3215: <fragment>:13:11: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
 ```
 
+<!-- test: a-sendable-bound-refuses-a-function-type-in-an-instance-written-inline-in-an-alias -->
+`Pool with Step` is written inline inside the arguments of `StepPools`. It is its own instantiation site, so it is
+refused once, where its own base name `Pool` is written, and `StepPools` adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+typealias StepPools = Array with (Pool with Step)
+
+function main() returns ExitCode
+	let pools = StepPools.create(0)
+	print("{pools.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:13:35: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-refuses-a-function-type-in-an-instance-written-inline-in-the-argument-of-a-phantom-type -->
+`Keeper uses T` stores no `T`, so `Keeper with (Pool with Step)` is a record of a number. The `Pool with Step` inside
+it is still an instance the program wrote, refused once, where its own base name `Pool` is written.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Keeper uses T
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Keeper'
+
+typealias Kept = Keeper with (Pool with Step)
+
+function main() returns ExitCode
+	let kept = Kept.create()
+	print("{kept.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:21:31: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-refuses-a-function-type-in-an-instance-written-inline-in-the-argument-of-a-holder -->
+`Box uses T` stores its `T`, so `Box with (Pool with Step)` holds a `Pool with Step`. The inner instance is refused
+once, where its own base name `Pool` is written, and the `Box` that holds it adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Box with (Pool with Step)
+typealias BoxLists = Array with Boxes
+
+function main() returns ExitCode
+	let lists = BoxLists.create(0)
+	print("{lists.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:21:29: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-judges-an-alias-used-as-an-argument-only-at-its-own-declaration -->
+`StepPool` names `Pool with Step`. It is refused once, where `StepPool` is declared. `Boxes` and `Pools` take
+`StepPool` as an argument and judge nothing again.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias StepPool = Pool with Step
+typealias Boxes = Box with StepPool
+typealias Pools = Array with StepPool
+
+function main() returns ExitCode
+	let pool = StepPool.create(function(n) gives n + 1)
+	let boxes = Boxes.create(pool)
+	let pools = Pools.create(0)
+	let step = boxes.item.item
+	print("{step(1)} {pools.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:21:11: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-refuses-a-function-type-in-an-instance-written-two-deep-inline -->
+`Pool with Step` is written inside `Box with (...)`, which is written inside `Array with (...)`. Only the innermost
+instance breaks a bound, so it is refused once, where its own base name `Pool` is written.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias Deep = Array with (Box with (Pool with Step))
+
+function main() returns ExitCode
+	let deep = Deep.create(0)
+	print("{deep.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:21:40: 'Step' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
 <!-- test: a-sendable-bound-refuses-an-interface-type -->
 An interface type is not a value: what it holds is whichever conformer was converted to it. A generic type's
 argument cannot be an interface type at all, which is reported as well.
@@ -988,6 +1166,116 @@ end 'main'
 ```
 ```maxoncstderr
 error E3215: <fragment>:13:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-bare-generic-field-type-its-owner-does-not-bound-once -->
+`Outer uses T` declares no bound and holds a field of the bare generic name `Pool`, which means `Pool with T`. The
+instance is refused once, at the field, and the `Pool` written as a parameter type adds no report.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	export var pool as Pool
+
+	static function create(pool Pool) returns Self
+		return Self{pool: pool}
+	end 'create'
+end 'Outer'
+
+typealias StepOuter = Outer with Step
+typealias StepOuters = Array with StepOuter
+
+function main() returns ExitCode
+	let outers = StepOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:14:21: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-a-bare-generic-type-argument-its-owner-does-not-bound -->
+`Outer uses T` declares no bound and writes the bare generic name `Pool` as the argument of `Array`, which means
+`Pool with T`. The instance is refused where the argument is written.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Pools = Array with Pool
+
+	export var pools as Pools
+
+	static function create(pools Pools) returns Self
+		return Self{pools: pools}
+	end 'create'
+end 'Outer'
+
+typealias StepOuter = Outer with Step
+typealias StepOuters = Array with StepOuter
+
+function main() returns ExitCode
+	let outers = StepOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:14:31: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-refuses-two-aliases-of-one-instance-its-owner-does-not-bound-once -->
+`Outer uses T` declares no bound and writes `Pool with T` twice, as `First` and as `Second`. The instance is refused
+once, at `First`, the first place it is written.
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias First = Pool with T
+	typealias Second = Pool with T
+
+	export var first as First
+	export var second as Second
+
+	static function create(first First, second Second) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	print("none\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:11:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
 <!-- test: a-sendable-bound-accepts-a-type-parameter-its-owner-bounds-sendable -->
@@ -2343,7 +2631,87 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:14:12: 'Outer.Maker' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+error E3215: <fragment>:14:32: 'Outer.Maker' is a function type, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: the bound takes a value, a service handle, or an `immutable` type that is not `unique`
+```
+
+<!-- test: a-sendable-bound-refuses-an-instance-written-inline-in-an-alias-in-a-generic-type-at-the-instance -->
+`Pool with T` is written inline inside the arguments of `Deep`, in `Outer`, which declares no bound on `T`. The
+instance is its own instantiation site: it is refused where its own base name `Pool` is written, once, whatever
+`Outer` is instantiated with.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T
+	typealias Deep = Array with (Pool with T)
+
+	export var deep as Deep
+
+	static function create(deep Deep) returns Self
+		return Self{deep: deep}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+typealias TallyOuters = Array with TallyOuter
+
+function main() returns ExitCode
+	let outers = TallyOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3215: <fragment>:13:31: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+```
+
+<!-- test: a-sendable-bound-accepts-an-instance-written-inline-in-an-alias-in-a-generic-type-that-bounds-its-parameter -->
+`Outer` declares `where T is sendable`, which proves the bound of the `Pool with T` written inline inside `Deep`, so
+`Outer with Tally` is built and used.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Pool uses T where T is sendable
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Pool'
+
+type Outer uses T where T is sendable
+	typealias Deep = Array with (Pool with T)
+
+	export var deep as Deep
+
+	static function create(deep Deep) returns Self
+		return Self{deep: deep}
+	end 'create'
+end 'Outer'
+
+typealias TallyOuter = Outer with Tally
+typealias TallyOuters = Array with TallyOuter
+
+function main() returns ExitCode
+	let outers = TallyOuters.create(0)
+	print("{outers.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
 ```
 
 <!-- test: a-sendable-bound-reports-a-fixed-and-an-open-argument-of-one-generic-type-in-the-generic-type -->
@@ -2670,7 +3038,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:21:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+error E3215: <fragment>:21:33: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
 <!-- test: a-sendable-bound-refuses-a-type-parameter-its-owner-does-not-bound-under-an-interface-base -->
@@ -2720,7 +3088,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3215: <fragment>:18:12: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
+error E3215: <fragment>:18:30: 'T' of 'Outer' is not bounded `sendable`, so it cannot be 'T' of 'Pool', which declares `where T is sendable`: declare `where T is sendable` on 'Outer'
 ```
 
 <!-- test: a-sendable-bound-names-a-function-alias-through-an-instance-of-a-generic-type-as-unknown -->

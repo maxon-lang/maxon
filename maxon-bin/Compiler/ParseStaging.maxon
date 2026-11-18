@@ -2290,9 +2290,9 @@ end 'reportTypeNameCollision'
 // against. Built only by `checkTypeSymbolNamespace`, and only for a program that instantiates a generic.
 typealias CompiledTypeNameClaimMap = Map with (ByteArray, GenericInstanceId)
 
-// Where a colliding instantiation was WRITTEN. A top-level `typealias X = Base with Args` records one
-// (`ProgramSignatures.instantiationSites`); a NESTED instantiation and the compiler-synthesized array
-// instances are interned without one.
+// Where a colliding instantiation was WRITTEN. A top-level `typealias X = Base with Args` records one,
+// and so does each instance written inside its arguments (`ProgramSignatures.instantiationSites`); the
+// compiler-synthesized array instances are interned without one.
 union InstantiationAnchor
 	anchored(site GenericInstantiationSite)
 	unanchored
@@ -2642,15 +2642,14 @@ function reportInstantiationPairCollision(project Project, signatures ProgramSig
 	match instantiationAnchor(project, signatures: signatures, newcomer: newcomer, incumbent: incumbent) 'anchor'
 		anchored(site) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: message, line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 
-		// No `typealias` names EITHER instantiation, so both are nested (`Box with (Pair with …)`) and
-		// neither was interned with an anchor. Whole-program then — the anchorless form E3001 uses —
-		// rather than pointing at an enclosing alias whose own instantiation is fine.
+		// Neither instantiation was written in a `typealias` (a synthesized instance has no site).
+		// Whole-program then — the anchorless form E3001 uses.
 		unanchored then reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.duplicateDefinition, message: message))
 	end 'anchor'
 end 'reportInstantiationPairCollision'
 
-// The site a pair collision is reported at: the NEWCOMER's `typealias` if one names it, else the
-// INCUMBENT's, else none.
+// The site a pair collision is reported at: the NEWCOMER's earliest written site (a `typealias` or an
+// instance written in one's arguments) if it has one, else the INCUMBENT's, else none.
 //
 // ⚠ **A LINEAR SCAN OF THE SITE LIST, DELIBERATELY.** It is asked only once a collision has already
 // been found — never on a program that compiles — so a gid⇒site index would cost every build to serve

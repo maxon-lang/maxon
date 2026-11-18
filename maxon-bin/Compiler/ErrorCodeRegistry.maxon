@@ -605,8 +605,10 @@ export enum ErrorCode
 	// name, so the compiler joins its base to its arguments (`Box with String` -> `Box_String`) and
 	// derives every per-type symbol from that string; `_` is a legal name character, so the join is not
 	// injective (`Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` both compile to
-	// `Pair_Box_Int_Str`). Fires from `checkTypeSymbolNamespace` in the compiler, whole-program, after
-	// the instantiations are interned; (e) an `extension` of a type, in a layer above the one that declares
+	// `Pair_Box_Int_Str`). Fires from `checkTypeSymbolNamespace` in the compiler, after the
+	// instantiations are interned, at the later-claiming instantiation's first written site: the name of
+	// its `typealias`, or the base name of an instance written inside a `typealias`'s arguments. The message
+	// names both instantiations. An instantiation written at no site is reported without a position; (e) an `extension` of a type, in a layer above the one that declares
 	// the type, declaring a member the compiler supplies to that type. The layers are the standard library, the
 	// scriptlib packages and the program, lowest first, and the members are `hash` and `equals` of a
 	// payload-free enum, `clone` of a struct or of a union with payloads, `toString` and `clone` of a
@@ -704,7 +706,10 @@ export enum ErrorCode
 	// instance its name resembles: a `type Array_Byte` neither meets nor is met by `ByteArray`.
 	semanticPartialInterfaceImpl = "E3016"
 
-	// A generic argument violates the 'where' constraint declared on the type parameter.
+	// A generic argument violates the 'where' constraint declared on the type parameter. Each written
+	// instantiation is judged once, where it is written: at a `typealias`'s name, at the base name of an
+	// instance written inside its arguments, at a literal, or at a bare generic name that the enclosing
+	// generic type binds. An alias used as an argument is judged only at its own declaration.
 	semanticWhereConstraintViolation = "E3017"
 
 	// A field access names a field the type does not have.
@@ -2511,15 +2516,18 @@ export enum ErrorCode
 	// promise, written `immutable` or not; a plain record, container, tuple or boxed union written bare (the
 	// caller keeps sharing it; write it `immutable`); and a `unique` type (its values move; bound the parameter
 	// with `isolated` instead). `where T is isolated` takes the same values and handles, or a `unique` type.
-	// Every instantiation of the generic type is checked, and so is every instance it holds in a field, a
-	// container or a tuple. An argument written inside a generic type `Outer` that is or mentions a parameter
-	// of `Outer` is judged there, once, from `Outer`'s own `where` clause alone: a bare `T` (or an `immutable`
-	// argument built over it, through aliases, tuples, instance arguments and function types) meets a bound
-	// only when `Outer` declares it on every parameter it mentions, and the message names the first unbounded
-	// one: declare `where T is sendable` on `Outer`. An interface's associated type carries no region bound.
+	// Each written instantiation is checked once, where it is written: at a `typealias`'s name, at the base
+	// name of an instance written inside its arguments (`typealias StepPools = Array with (Pool with Step)`
+	// reports at `Pool`), at a literal, or at a bare generic name that the enclosing generic type binds
+	// (`Pool` inside `type Outer uses T` means `Pool with T`). An alias used as an argument is judged only at
+	// its own declaration. An argument written inside a generic type `Outer` that is or mentions a parameter
+	// of `Outer` is judged there, once per declaring type, at its first site, from `Outer`'s own `where`
+	// clause alone: a bare `T` (or an `immutable` argument built over it, through aliases, tuples, instance
+	// arguments and function types) meets a bound only when `Outer` declares it on every parameter it
+	// mentions, and the message names the first unbounded one: declare `where T is sendable` on `Outer`. An interface's associated type carries no region bound.
 	// A `spawn` that infers a generic service's argument is reported at the factory it calls. A function's or
 	// an extension's `where` clause cannot spell either bound; they belong to a generic type's own `where`
-	// clause. Reported where the program writes the instantiation.
+	// clause.
 	semanticRegionBoundRefused = "E3215"
 
 	// A service type's state can hold a promise. A field of a service type that is a `Promise`, an array of
@@ -2616,7 +2624,8 @@ export enum ErrorCode
 	// other type argument, a tuple item, a closure capture, a promise payload, a message reply, a union stored
 	// in a field, an argument of an `async` call, the result of an `async` call, an argument of an interface or
 	// function value call and an argument of a `spawn` whose factory may throw (it starts no service when it
-	// fails, and drops the value) are refused. A linear value
+	// fails, and drops the value) are refused. A type argument is refused where the instantiation is written,
+	// as E3017 is; an alias used as an argument is refused only at its own declaration. A linear value
 	// lent to code that does not own it (a parameter of a function that does not take it, or `self` of a method
 	// that does not take `consuming self`) is not consumed there, returned or built into a union.
 	// `consuming self` belongs to a method of a `type` that declares a finalizer, and `destruct self`

@@ -2504,6 +2504,33 @@ error E3017: <fragment>:9:11: Type 'NotHashable' does not satisfy constraint 'Ha
 error E3017: <fragment>:9:11: Type 'NotHashable' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
 
+### Where clause constraint violation in an instance written inline
+
+An instance written inside another alias's arguments is its own instantiation site, so its constraint violation is
+reported where its own base name is written:
+
+<!-- test: where-clauses.constraint-violation-in-an-inline-instance -->
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Unhashable
+	var x as Tally
+end 'Unhashable'
+
+typealias Tallies = Array with (Map with (Unhashable, Tally))
+
+function main() returns ExitCode
+	let tallies = Tallies.create(0)
+	print("{tallies.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3017: <fragment>:8:33: Type 'Unhashable' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:8:33: Type 'Unhashable' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
+```
+
 ### User-defined type with where clause
 
 A user-defined generic type can use where clauses:

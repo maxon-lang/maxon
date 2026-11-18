@@ -3847,6 +3847,177 @@ end 'main'
 error E3127: specs/associated-types/error.held-position-nested-binding-disagreement.maxon:67:39: cannot widen 'BadBag' into 'b', which is declared at the existential type 'Bag' with its associated type 'Iter' held at 'Cursor', and that holding's own 'Item' bound to 'Integer' — 'BadBag' binds 'Iter' to 'TextCur', which binds 'Item' to 'String'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'Integer'
 ```
 
+<!-- test: a-holding-written-in-an-instance-inline-in-an-alias-declares-the-binding -->
+⭐⭐ **A HOLDING IS DECLARED BY AN INSTANCE WRITTEN INLINE, NOT ONLY BY A TOP-LEVEL ALIAS.** The only site in this
+program that writes `Bag with (Integer, IntegerCursor)` sits inside the arguments of `Bags`, and it is its own
+instantiation site, so it declares that `Iter` is held at `Cursor`. `total` takes the bare `Bag`: its shared body
+is compiled once against that holding while `UpBag` and `DownBag` bind `Iter` to two different cursors, so the
+dispatch is typed from the holding and each loop walks the cursor its own bag handed back. With no holding the two
+bindings would be the disagreement E3119 refuses. **It answers 0, 10 and 600.**
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function advance(mutable self) throws IterationError
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type UpCursor implements Cursor with Integer
+	var pos as Integer
+	let limit as Integer
+
+	static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	function current() returns Integer
+		return self.pos
+	end 'current'
+
+	function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'UpCursor'
+
+type DownCursor implements Cursor with Integer
+	var pos as Integer
+
+	static function create(start Integer) returns Self throws IterationError
+		if start < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: start}
+	end 'create'
+
+	function current() returns Integer
+		return self.pos * 100
+	end 'current'
+
+	function advance() throws IterationError
+		if self.pos <= 1 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos - 1
+	end 'advance'
+end 'DownCursor'
+
+type UpBag implements Bag with (Integer, UpCursor)
+	let limit as Integer
+
+	static function create(limit Integer) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	function createIterator() returns UpCursor throws IterationError
+		return try UpCursor.create(self.limit)
+	end 'createIterator'
+end 'UpBag'
+
+type DownBag implements Bag with (Integer, DownCursor)
+	let start as Integer
+
+	static function create(start Integer) returns Self
+		return Self{start: start}
+	end 'create'
+
+	function createIterator() returns DownCursor throws IterationError
+		return try DownCursor.create(self.start)
+	end 'createIterator'
+end 'DownBag'
+
+typealias IntegerCursor = Cursor with Integer
+typealias Bags = Array with (Bag with (Integer, IntegerCursor))
+
+function total(source Bag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	let bags = Bags.create(0)
+	print("{bags.count()}\n")
+	print("{total(UpBag.create(4))}\n")
+	print("{total(DownBag.create(3))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+10
+600
+```
+
+<!-- test: error.a-binding-written-in-an-instance-inline-disagrees-with-the-conformers -->
+⭐⭐ **E3125 JUDGES AN INSTANCE WRITTEN INLINE, AT ITS OWN BASE NAME.** The conformer binds `Element` to `Integer` and
+`Seq with Text` is written inside the arguments of `TextSeqs`. That instance is its own instantiation site, so the
+false claim is refused once, at `Seq` and not at the enclosing alias, exactly as the same claim is when `TextSeqs`
+names `Seq with Text` directly.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Text = int(0 to 255)
+
+interface Seq uses Element
+	function current() returns Element
+	function advance(mutable self) throws IterationError
+end 'Seq'
+
+type Upto implements Seq with Integer
+	var pos as Integer
+	let limit as Integer
+
+	static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	function current() returns Integer
+		return self.pos
+	end 'current'
+
+	function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+typealias TextSeqs = Array with (Seq with Text)
+
+function total(source Seq) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	let seqs = TextSeqs.create(0)
+	print("{seqs.count()}\n")
+	print("{total(Upto.create(3))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3125: <fragment>:30:34: this use of 'Seq' binds its associated type 'Element' to 'Text', but 'Upto' binds it to 'Integer' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces
+```
+
 
 ### An INHERITED requirement is substituted by the conformance to the interface that DECLARED it
 

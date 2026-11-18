@@ -723,6 +723,11 @@ release's version as its heading when the release is cut.
   it: E3102. 0.5.0 compiled such a read.
   Fix: hoist the condition into a `let` before the conditional, or read the value before the condition moves it.
 
+- An instance written inside a `typealias`'s arguments is judged against its own base's `where` clause, at its
+  own base name: `typealias Tallies = Array with (Map with (Unhashable, Tally))` is E3017 at `Map`. 0.5.0
+  judged only the outer instance and compiled it.
+  Fix: correct the argument of the nested instance, or give the argument type the interfaces the base requires.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

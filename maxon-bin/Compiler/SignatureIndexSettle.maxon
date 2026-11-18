@@ -5432,7 +5432,8 @@ extension ProgramSignatures
 	// alias (a duplicate typealias is reported elsewhere), exactly as `recordAlias` is.
 	function recordGenericAlias(entry GenericAliasEntry, remap TypeIdRemap)
 		let baseId = self.typeNames.intern(entry.baseName)
-		let args = self.resolveGenericArgs(entry, remap: remap)
+		let filing = nestedSiteFilingOf(entry, sites: self.mainThreadSettled().genericAliasSites)
+		let args = self.resolveGenericArgs(entry, remap: remap, filing: filing)
 		let giid = self.internRow(baseId, args: args, shape: entry.shape)
 
 		// ⭐ **THE PRIOR PROBE** — asked BEFORE the upsert, because after it every name is present. A name
@@ -5467,11 +5468,9 @@ extension ProgramSignatures
 		// Record the instantiation SITE for the E3017 where-constraint check — only when the
 		// alias carries a real source anchor (a top-level `typealias X = Base with Args`; a synthesized alias
 		// has none). The `giid` + anchor is all the check needs: the base's constraints and the substituted args
-		// are read off `giid`.
-		match entry.anchor 'anchor'
-			unanchored then break
-			declaredAt(nameLine, nameColumn, _, _) then self.mainThreadSettled().genericAliasSites.push(GenericInstantiationSite.create(giid, nameLine: nameLine, nameColumn: nameColumn, filePath: entry.filePath))
-		end 'anchor'
+		// are read off `giid`. The outer site goes in ahead of the nested sites `resolveGenericArgs` filed:
+		// diagnostics come out in filing order, and the alias's own line precedes the instances inside it.
+		filing.fileOuter(giid)
 
 		// The alias name, its base name, its ELEMENT SPELLING and each arg's SHAPE ride the hash — a change to
 		// any of them changes what a `IntBox.create(…)` in another file resolves and type-checks against, and
@@ -5520,7 +5519,7 @@ extension ProgramSignatures
 
 		for entry in entries 'eachAlias'
 			let baseId = self.typeNames.intern(entry.baseName)
-			let args = self.resolveGenericArgs(entry, remap: remap)
+			let args = self.resolveGenericArgs(entry, remap: remap, filing: NestedSiteFiling.unfiled)
 			self.mainThreadSettled().interfaceAliases.upsert(entry.aliasName, value: self.internRow(baseId, args: args, shape: entry.shape))
 		end 'eachAlias'
 	end 'recordInterfaceAliases'
@@ -5609,9 +5608,9 @@ extension ProgramSignatures
 	// the instance, and yields `genericInstance(gid)`. The top-level list starts a FRESH cursor; a
 	// nested instance shares its parent's, so both walk the flat tree through the one `resolveArgList`
 	// loop.
-	function resolveGenericArgs(entry GenericAliasEntry, remap TypeIdRemap) returns MaxonTypeArray
+	function resolveGenericArgs(entry GenericAliasEntry, remap TypeIdRemap, filing NestedSiteFiling) returns MaxonTypeArray
 		let cursor = ArgCursor.create()
-		return self.resolveArgList(entry.args, count: entry.argCount, cursor: cursor, remap: remap)
+		return self.resolveArgList(entry.args, count: entry.argCount, cursor: cursor, remap: remap, filing: filing)
 	end 'resolveGenericArgs'
 
 	export function declaredAliasFirstArgument(entry GenericAliasEntry, from TypeNameInterner) returns MaxonType
@@ -5626,35 +5625,37 @@ extension ProgramSignatures
 			adopted.push(carried)
 		end 'eachNode'
 
-		return self.resolveArgNode(adopted, cursor: ArgCursor.create(), remap: TypeIdRemap.unmoved())
+		return self.resolveArgNode(adopted, cursor: ArgCursor.create(), remap: TypeIdRemap.unmoved(), filing: NestedSiteFiling.unfiled)
 	end 'declaredAliasFirstArgument'
 
 	// Resolve `count` consecutive pre-order arg nodes from `nodes` at `cursor`, advancing it past each — the
 	// ONE loop the top-level alias args and a nested instance's args share (they differ only in whether the
 	// cursor is fresh or their parent's). A nested instance is interned before the outer arg that holds it.
-	function resolveArgList(nodes GenericArgNodeArray, count FieldIndex, cursor ArgCursor, remap TypeIdRemap) returns MaxonTypeArray
+	function resolveArgList(nodes GenericArgNodeArray, count FieldIndex, cursor ArgCursor, remap TypeIdRemap, filing NestedSiteFiling) returns MaxonTypeArray
 		let out = MaxonTypeArray.create(count, zeroed: false)
 
 		for _ in 0 upto count 'each'
-			out.push(self.resolveArgNode(nodes, cursor: cursor, remap: remap))
+			out.push(self.resolveArgNode(nodes, cursor: cursor, remap: remap, filing: filing))
 		end 'each'
 
 		return out
 	end 'resolveArgList'
 
-	function resolveArgNode(nodes GenericArgNodeArray, cursor ArgCursor, remap TypeIdRemap) returns MaxonType
+	function resolveArgNode(nodes GenericArgNodeArray, cursor ArgCursor, remap TypeIdRemap, filing NestedSiteFiling) returns MaxonType
 		let node = try nodes.get(cursor.pos) otherwise panic("ProgramSignatures.resolveArgNode: cursor {cursor.pos} out of range for a {nodes.count()}-node arg tree — the pre-order flattening and its counts disagree")
 		cursor.pos = cursor.pos + 1
 		return match node 'k'
 			leaf(argType) gives self.canonicalInstanceArg(remapMaxonType(argType, remap: remap))
-			instanceHeader(baseName, argCount, shape) gives self.internNestedNode(baseName, argCount: argCount, shape: shape, nodes: nodes, cursor: cursor, remap: remap)
+			instanceHeader(baseName, argCount, shape, anchor) gives self.internNestedNode(baseName, argCount: argCount, shape: shape, anchor: anchor, nodes: nodes, cursor: cursor, remap: remap, filing: filing)
 		end 'k'
 	end 'resolveArgNode'
 
-	function internNestedNode(baseName ByteArray, argCount FieldIndex, shape InstanceShape, nodes GenericArgNodeArray, cursor ArgCursor, remap TypeIdRemap) returns MaxonType
+	function internNestedNode(baseName ByteArray, argCount FieldIndex, shape InstanceShape, anchor NestedInstanceAnchor, nodes GenericArgNodeArray, cursor ArgCursor, remap TypeIdRemap, filing NestedSiteFiling) returns MaxonType
 		let baseId = self.typeNames.intern(baseName)
-		let args = self.resolveArgList(nodes, count: argCount, cursor: cursor, remap: remap)
-		return MaxonType.genericInstance(self.internRow(baseId, args: args, shape: shape))
+		let args = self.resolveArgList(nodes, count: argCount, cursor: cursor, remap: remap, filing: filing)
+		let gid = self.internRow(baseId, args: args, shape: shape)
+		filing.fileNested(gid, anchor: anchor)
+		return MaxonType.genericInstance(gid)
 	end 'internNestedNode'
 
 	// Fold one case's NAME, TAG and PAYLOAD SLOTS into the enum's hash. Split out so the SIGNED tag
@@ -12345,3 +12346,36 @@ function insertInDeclaringFileOrder(claims TypeNameClaimArray, segmentStart Elem
 
 	claims.insert(at, value: claim)
 end 'insertInDeclaringFileOrder'
+
+union NestedSiteFiling
+	unfiled
+	filedInto(sites GenericInstantiationSiteArray, filePath FilePath, outer NestedInstanceAnchor, firstIndex ElementIndex)
+
+	function fileOuter(gid GenericInstanceId)
+		match self 'filing'
+			unfiled then return
+			filedInto(sites, filePath, outer, firstIndex) then fileSiteAt(sites, gid: gid, anchor: outer, filePath: filePath, at: firstIndex)
+		end 'filing'
+	end 'fileOuter'
+
+	function fileNested(gid GenericInstanceId, anchor NestedInstanceAnchor)
+		match self 'filing'
+			unfiled then return
+			filedInto(sites, filePath, _, _) then fileSiteAt(sites, gid: gid, anchor: anchor, filePath: filePath, at: sites.count())
+		end 'filing'
+	end 'fileNested'
+end 'NestedSiteFiling'
+
+function nestedSiteFilingOf(entry GenericAliasEntry, sites GenericInstantiationSiteArray) returns NestedSiteFiling
+	return match entry.anchor 'anchor'
+		unanchored gives NestedSiteFiling.unfiled
+		declaredAt(nameLine, nameColumn, _, _) gives NestedSiteFiling.filedInto(sites, filePath: entry.filePath, outer: NestedInstanceAnchor.writtenAt(nameLine, nameColumn: nameColumn), firstIndex: sites.count())
+	end 'anchor'
+end 'nestedSiteFilingOf'
+
+function fileSiteAt(sites GenericInstantiationSiteArray, gid GenericInstanceId, anchor NestedInstanceAnchor, filePath FilePath, at ElementIndex)
+	match anchor 'anchor'
+		unwritten then return
+		writtenAt(nameLine, nameColumn) then sites.insert(at, value: GenericInstantiationSite.create(gid, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath))
+	end 'anchor'
+end 'fileSiteAt'

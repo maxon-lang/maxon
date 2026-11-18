@@ -6018,7 +6018,7 @@ extension Parser
 		// the question to have an answer in.
 		if self.enclosingTypeParams.count() != 0 'insideATypeParameterScope'
 			match self.bareGenericInstanceInScope(name) 'scoped'
-				instance(gid) then return MaxonType.genericInstance(gid)
+				instance(gid) then return self.writtenScopedInstance(gid, at: tok)
 				none then break
 			end 'scoped'
 		end 'insideATypeParameterScope'
@@ -6322,6 +6322,11 @@ extension Parser
 			instance(gid) then return ConstructorInstance.instance(gid)
 		end 'scoped'
 	end 'bareGenericInstanceInScope'
+
+	function writtenScopedInstance(gid GenericInstanceId, at Token) returns MaxonType
+		self.recordInferredInstantiation(gid, at: at)
+		return MaxonType.genericInstance(gid)
+	end 'writtenScopedInstance'
 
 	// ⭐⭐ **A CALL RESULT NAMING A BARE GENERIC TYPE IS READ IN THE CALLEE'S OWN SCOPE** — the READ-DOOR
 	// repair of a swept return type, and the reason the type-reference arm alone is not enough.
