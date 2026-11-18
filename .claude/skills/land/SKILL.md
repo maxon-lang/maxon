@@ -75,7 +75,7 @@ and its note (§4); **the gates, the commit, the submit** (§8–§9).
 | **filtered specs** | many | each agent's own loop | the loop, not a gate |
 | **§8 gates** (final filtered specs, codecs, lint, self-compile, seed chain, docs check) | once | **you, §8** | ⛔ no agent runs any; the documenter runs no tests. Full suite, wasm lane, tree corpora: CI |
 | **`scale-test` ladder** | once to read | **you**: read §4, the note in §9; the door mints the row; plus the optimizer's before/after | ⛔ not the implementer's: a pre-review reading attributes nothing |
-| **`git commit`/`push`/`rebase`, `land.sh submit`** | once | **you, §9** | ⛔ no agent commits, pushes, rebases, stashes, submits or opens a worktree |
+| **`git commit`/`push`/`rebase`, `land.sh submit`** | once | **you, §9**; when §8's seed-chain gate applies, the commit is made there and amended to the final tree | ⛔ no agent commits, pushes, rebases, stashes, submits or opens a worktree |
 
 Without this table each brief's thoroughness runs the suite 3–5 times per change, once gating. **An agent
 reports what it suspects but cannot cheaply confirm**: it feeds a gate that runs anyway.
@@ -273,7 +273,7 @@ every change. ⛔ **No agent runs any part of this.** `$M` is `./maxon-bin/.maxo
 | **Filtered tree corpora and IR specs**: `$M test <tests/dir> --filter=…`, `spec-test ir-specs --filter=<spec>/`, per touched corpus case or `ir-specs/` spec | `0 fail` / `failed: 0`. A moved pin is re-minted (`--update-required --filter=<spec>/`) and staged (`git add -A ir-specs/ specs/`): `situations.md`. One target's emitted code changed: also `--target=<lane>` (compiled, not run: any host) |
 | **LINT**: `$M lint maxon-bin` · `$M lint --tests tests/<corpus>` · `bash scripts/lint-tree.sh <group>` | `lint maxon-bin` when the diff touches `maxon-bin/` (`--target=<lane>` for a lane's `#if` branch); `lint --tests` per touched corpus; `lint-tree.sh` per other touched group (`script-programs`, `multicore-stress`, `manifests`). After the build, with its compiler. Exit 0, one `Linted …` line per `lint`, no unclean subject |
 | **SELF-COMPILE**: `$M build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds a file declaring types, or adds or tightens a non-lint diagnostic**: its rules' first meeting with the compiler's source. Exit 0, last stdout line `Compiled -> <path>` (`--rebuild` forces the compile, ~1 min); output discarded |
-| **Seed chain**: `build-from-seed.sh` on a throwaway clone (`compiler-workflow`) | **Where the tree's sources start using a declaration, intrinsic, form, rule or runtime behaviour the change made legal or required, or the change alters a rule the seed applies to the compiler's source.** Exit 0, or a refusal (any failure but E6002, a locked slot), which lands via `land.yml` (§9) |
+| **Seed chain**: make §9's commit now, then `scripts/land.sh verdict HEAD` on it (`compiler-workflow`); run before the commit, it builds the base and proves nothing. A later change is amended into that commit, and this gate runs again only when the amend changed a seed input (the list in `docs/RELEASING.md`'s "Prove the seed", the same test the plan applies before it proves a merged tree again); §9 lands that commit | **Where the tree's sources start using a declaration, intrinsic, form, rule or runtime behaviour the change made legal or required, or the change alters a rule the seed applies to the compiler's source.** Exit 0, or a refusal (the failure whose message names a lane), which lands via `land.yml` (§9). Any other failure is the run's own error, not a verdict |
 | **Codecs**: `python3 scripts/library-cache/generate-codecs.py --check` | exit 0; on 1, run without `--check` and stage the rewrite |
 | **Documentation**: `node website/scripts/sync-docs.mjs --check` | exit 0. A user-visible change: each doc-coverage gate its surface owns, `0 fail` — `maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents` (also gates the MCP `instructions` against `docs/WRITING_MAXON_CODE.md`), `tests/docs`; else state nothing is user-visible. ⚠ Red after a new diagnostic: §6 missed its registry doc comment |
 | **No leftovers**: `python3 scripts/check-ignored-files.py` | exit 0, every change: no untracked path, no ignored path off `scripts/allowed-ignored-paths.txt`. Exit 1: `situations.md` |
@@ -292,7 +292,8 @@ own commit.
 ## 9. Commit and land through the door
 
 **ONE commit, on `main`**, holding the whole change: compiler source, spec cases, the documentation and
-regenerated site pages, every re-minted `TargetIr` pin. ⛔ Never a commit
+regenerated site pages, every re-minted `TargetIr` pin. When §8 ran the seed-chain gate, that gate's commit
+is this one, amended to the final tree. ⛔ Never a commit
 per piece or a partial landing "to follow": the gates licensed the whole tree. **The message carries what
 the diff cannot**: the wrong answer that motivated it, the mechanism, the cases red → green, the gate
 figures measured. ⚠ **Never a figure you did not measure**: it looks exactly like one taken. **When §4

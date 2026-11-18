@@ -208,13 +208,15 @@ faults on the first load.
 ## Landing a commit with its own seed
 
 The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins. A commit it refuses
-(E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002, which is a locked slot)
-lands with a seed frozen from it by `land.yml`, never by `git push origin main` and never by a seed frozen on this
+(E2015, E3004 or any other build failure that `scripts/land.sh verdict` reports on a native lane) lands with
+a seed frozen from it by `land.yml`, never by `git push origin main` and never by a seed frozen on this
 machine.
 
-**`/land` §8's seed-chain gate** is that check: on a throwaway clone at a short path, with the diff applied
-and the pinned seed fetched (`scripts/fetch-seed.sh`), run `scripts/build-from-seed.sh`. Exit 0 passes;
-any failure but E6002 is a refusal.
+**`/land` §8's seed-chain gate** is that check, run on §9's commit made first: `scripts/land.sh verdict
+HEAD`. It fetches the seed the commit pins and builds the commit with it for every native lane, as
+`land.yml`'s plan does, in a worktree under `temp/land-verdict/`, which is removed when the run passes, and
+kept and named when it fails. Exit 0 passes. A refusal is the failure whose message names a lane (`… refuses
+<commit> on <lane>`); any other failure, such as fetching the seed, is the run's own error, not a verdict.
 
 The commit goes on top of a bootstrap chain: commit first the intermediate tree that the pinned seed builds
 — the compiler change, before any source uses what it adds; more than one commit when the change needs

@@ -35,9 +35,13 @@ the tree is the one the seed does not contain yet. So the commit and a seed froz
 pinned together, by [`land.yml`](../.github/workflows/land.yml), before `main` moves. `main` never holds a
 commit its pinned seed refuses.
 
-**The seed chain is how a refusal is found:** `scripts/build-from-seed.sh` in a clean clone with the pinned
-seed. Any failure there is a refusal, except E6002, which is a slot the build could not replace: its
-message names what stood in the way.
+**The seed chain is how a refusal is found:** `scripts/land.sh verdict [<commit>]` (default `HEAD`) is the
+plan's verdict, run locally. In a git worktree at `temp/land-verdict/tree`, the seed the commit pins builds the
+commit for every native lane of `maxon-bin/targets.tsv` on this one machine: this host's lane first, with
+`scripts/build-from-seed.sh`, then each other lane's `maxon-bin` with `--target`, one after another. The first
+lane that fails ends it, named with its build's tail. A refusal is that failure, whose message names the lane
+(`… refuses <commit> on <lane>`); any other failure, such as fetching the seed, is the run's own error. Its
+work directory, `temp/land-verdict/`, is removed when the run passes, and kept and named when it fails.
 
 #### The bootstrap chain
 
@@ -86,16 +90,16 @@ with either key anywhere else fails the plan: `move it into the final paragraph`
 [`scripts/land.sh`](../scripts/land.sh) subcommands, one per job.
 
 1. **plan** (`contents: read`, no secret) classifies the branch by the pinned seed's verdict on its head
-   tree and its commits since its base, the merge-base of `origin/main` and the head, and does everything
-   that builds:
+   tree (`scripts/land.sh verdict`'s, every native lane built on this one runner) and its commits since
+   its base, the merge-base of `origin/main` and the head, and does everything that builds:
 
    | Commits | Pinned seed | Result |
    |---|---|---|
    | 0 | — | error: nothing to land |
-   | 1 | builds it | **ordinary** |
-   | more than 1 | builds the head | error: an ordinary land is one commit |
-   | 1 | refuses it | error: the seed's diagnostic, and the fix — commit the intermediate tree before it |
-   | more than 1 | refuses the head | **chain** |
+   | 1 | builds it on every native lane | **ordinary** |
+   | more than 1 | builds the head on every native lane | error: an ordinary land is one commit |
+   | 1 | refuses it on a lane | error: the lane, the seed's diagnostic, and the fix — commit the intermediate tree before it |
+   | more than 1 | refuses the head on a lane | **chain** |
 
    A branch that changes `scripts/seed-tag`, holds a merge commit, or changes a row of the scale-history
    tables in `docs/optimization-log.md` by hand is refused; the last names the `Scale-Note:` trailer. An
@@ -110,7 +114,8 @@ with either key anywhere else fails the plan: `move it into the final paragraph`
    - **Prove the seed.** When the merge changed a seed input — `maxon-bin/`, `stdlib/`, `runtime/`,
      `vendor/`, `project.maxon`, `maxon.maxtasks`, `scripts/seed-tag`, `scripts/build-from-seed.sh`,
      `scripts/fetch-seed.sh`, `scripts/fetch-vendor.sh`, `scripts/lib/` — relative to the head the plan already
-     built, the seed pinned at `main`'s tip builds the merged tree, and a refusal bounces the land. A merge
+     built, the seed pinned at `main`'s tip builds the merged tree for every native lane, as the verdict
+     does, and a refusal on any lane bounces the land. A merge
      that changed none skips the build. Everything else, including a semantic conflict between disjoint files, is
      `ci.yml`'s on `main`.
    - **Mint the row.** With a `Scale-Note:`, the plan runs `maxon scale-test --note=<note>` in the merged tree
@@ -138,8 +143,8 @@ with either key anywhere else fails the plan: `move it into the final paragraph`
 6. **pin** (`contents: read`, no secret) reads `main`'s tip as the plan did and merges `S` onto it as `S'`:
    the same author, date and message, the same `Bootstrap-Chain:` trailers, and a `Frozen-From: <S>` trailer
    when `S'` differs from `S`. When the merge changed a seed input, it fetches the published seed and builds
-   the merged tree's `maxon-bin` with it once for every native target, with `--target`, on this one runner.
-   A refusal fails the job, **retract** deletes the seed and the land bounces: `rebase the chain onto
+   the merged tree with it for every native lane, as the verdict does, on this one runner.
+   A refusal on any lane fails the job, **retract** deletes the seed and the land bounces: `rebase the chain onto
    origin/main and submit again`. The job then writes the pin commit on `S'` — the tag in `scripts/seed-tag`,
    and a message that names `S`. The **land** job, which holds the push credential, runs no compiler, so the
    merge and the build of the merged tree happen here.

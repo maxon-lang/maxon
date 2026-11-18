@@ -11,6 +11,8 @@
 #   scripts/land.sh await <branch> <head> [--after=<run id>]
 #                                          # wait for the land.yml run of <head> on <branch>; prints main's new sha
 #   scripts/land.sh chain <base> <head>    # build the bootstrap chain base..head; prints the head's compiler
+#   scripts/land.sh verdict [<commit>]     # the plan's verdict: does the seed <commit> pins (default HEAD) build
+#                                          # it for every native lane; names the lane that refuses it
 #   scripts/land.sh plan <head>            # land.yml's jobs; they read LAND_* from the environment
 #   scripts/land.sh freeze
 #   scripts/land.sh prove <lane>
@@ -28,6 +30,7 @@ cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/seed.sh
 . scripts/lib/scale-tables.sh
+. scripts/lib/scratch-dir.sh
 
 AnnotationsFd=3
 eval "exec $AnnotationsFd>&1"
@@ -52,16 +55,22 @@ ChainRefSuffix="-chain"
 JobPlan="plan"
 JobSkipped="skipped"
 SubmitBranchPrefix="land/"
-LandWorkDirectory="temp/land-branch"
+BranchWorkDirectory="temp/land-branch"
+VerdictWorkDirectory="temp/land-verdict"
+
+case "${1:-}" in
+	verdict) LandWorkDirectory="$VerdictWorkDirectory" ;;
+	*) LandWorkDirectory="$BranchWorkDirectory" ;;
+esac
+
 ChainTree="$LandWorkDirectory/tree"
 ChainCompilers="$LandWorkDirectory/compilers"
 ProveOutput="$LandWorkDirectory/prove/maxon"
-VerdictLog="$LandWorkDirectory/verdict.log"
+SeedProofDirectory="$LandWorkDirectory/seed-proof"
 SeedAtBase="$LandWorkDirectory/seed"
 SeedAtTip="$LandWorkDirectory/tip-seed"
-MergedBuildLog="$LandWorkDirectory/merged.log"
+SeedAtCommit="$LandWorkDirectory/commit-seed"
 ChainSeed="$LandWorkDirectory/chain-seed"
-PinBuildDirectory="$LandWorkDirectory/pin"
 ScaleTestLog="$LandWorkDirectory/scale-test.log"
 ScaleLogAtBase="$LandWorkDirectory/scale-log-base.md"
 ScaleLogAtHead="$LandWorkDirectory/scale-log-head.md"
@@ -275,6 +284,80 @@ prepare_tree() {
 
 build_prepared_tree() {
 	(cd "$ChainTree" && ./scripts/build-from-seed.sh) > "$1" 2>&1
+}
+
+seed_builds_compiler() {
+	local tree="$1" target="$2" output="$3"
+
+	(cd "$tree" && "$(maxon_downloaded_path .)" build maxon-bin "--target=$target" "--output=$output")
+}
+
+seed_verdict() {
+	local seed="$1" commit="$2" host target exe_ext built
+
+	host="$(maxon_host_target)"
+	proof_lanes="$host"
+
+	for target in $MaxonTargets; do
+		[ "$target" = "$host" ] || proof_lanes="$proof_lanes $target"
+	done
+
+	proof_verdict="$VerdictAccepted"
+	proof_refused_lane=""
+	proof_log=""
+	prepare_tree "$commit" "$seed"
+	rm -rf "$SeedProofDirectory"
+	mkdir -p "$SeedProofDirectory"
+
+	for target in $proof_lanes; do
+		proof_log="$SeedProofDirectory/$target.log"
+		built=0
+		echo "land.sh: the seed builds $(short "$commit") for $target" >&2
+
+		if [ "$target" = "$host" ]; then
+			build_prepared_tree "$proof_log" || built=$?
+		else
+			exe_ext="$(maxon_target_exe_ext "$target")"
+			mkdir -p "$SeedProofDirectory/$target"
+			seed_builds_compiler "$ChainTree" "$target" "$repo_root/$SeedProofDirectory/$target/maxon$exe_ext" > "$proof_log" 2>&1 \
+				|| built=$?
+		fi
+
+		if [ "$built" -ne 0 ]; then
+			proof_verdict="$VerdictRefused"
+			proof_refused_lane="$target"
+			return 0
+		fi
+	done
+}
+
+fail_refused() {
+	local refusal="$1" remedy="$2"
+
+	tail -n "$VerdictTailLines" "$proof_log" >&2
+	fail "$refusal on $proof_refused_lane (its build's tail is above) — $remedy"
+}
+
+require_seed_builds() {
+	local seed="$1" commit="$2" refusal="$3" remedy="$4"
+
+	seed_verdict "$seed" "$commit"
+	[ "$proof_verdict" = "$VerdictAccepted" ] || fail_refused "$refusal" "$remedy"
+}
+
+prove_unless_proved() {
+	local proved="$1" commit="$2" seed="$3" refusal="$4" remedy="$5"
+
+	shift 5
+
+	if ! seed_inputs_differ "$proved" "$commit"; then
+		proof_outcome="$ProofSkipped"
+		return 0
+	fi
+
+	"$@"
+	require_seed_builds "$seed" "$commit" "$refusal" "$remedy"
+	proof_outcome="$ProofBuilt"
 }
 
 walk_chain() {
@@ -553,11 +636,8 @@ classify() {
 
 	case "$verdict/$commits" in
 		"$VerdictAccepted/1") printf '%s' "$KindOrdinary" ;;
-		"$VerdictAccepted/"*) fail "the pinned seed accepts $head, and an ordinary land is one commit, not $commits — squash the branch onto $Remote/$Branch" ;;
-		"$VerdictRefused/1")
-			tail -n "$VerdictTailLines" "$VerdictLog" >&2
-			fail "the pinned seed refuses $head (its build's tail is above), and the branch carries no bootstrap chain — commit the intermediate tree the pinned seed accepts before it, so that tree's compiler builds $head"
-			;;
+		"$VerdictAccepted/"*) fail "the pinned seed accepts $head on every native lane, and an ordinary land is one commit, not $commits — squash the branch onto $Remote/$Branch" ;;
+		"$VerdictRefused/1") fail_refused "the pinned seed refuses $head" "the branch carries no bootstrap chain: commit the intermediate tree the pinned seed accepts before it, so that tree's compiler builds $head" ;;
 		"$VerdictRefused/"*) printf '%s' "$KindChain" ;;
 		*) fail "no classification for a $verdict head of $commits commits" ;;
 	esac
@@ -664,7 +744,7 @@ require_seed_of_head() {
 }
 
 command_plan() {
-	local head land note mode tip base count merges pin_changes verdict kind classified native merged proof="" chain="" date="" landed="" frozen="" tag=""
+	local head land note mode tip base count merges pin_changes kind classified native merged proof="" chain="" date="" landed="" frozen="" tag=""
 	local seed="${LAND_SEED_INPUT:-}" reused=""
 
 	require_env LAND_EVENT
@@ -699,16 +779,9 @@ command_plan() {
 		classified="reusing the seed $seed"
 	else
 		fetch_pinned_seed "$base" "$SeedAtBase"
-		prepare_tree "$head" "$SeedAtBase"
-
-		if build_prepared_tree "$VerdictLog"; then
-			verdict="$VerdictAccepted"
-		else
-			verdict="$VerdictRefused"
-		fi
-
-		kind="$(classify "$head" "$count" "$verdict")"
-		classified="the pinned seed's verdict: $verdict"
+		seed_verdict "$SeedAtBase" "$head"
+		kind="$(classify "$head" "$count" "$proof_verdict")"
+		classified="the pinned seed's verdict: $proof_verdict${proof_refused_lane:+ on $proof_refused_lane}"
 	fi
 
 	native="$(./scripts/targets/matrix.sh json native)"
@@ -740,17 +813,10 @@ command_plan() {
 		"$KindOrdinary")
 			merged="$(merge_onto "$tip" "$base" "$head")"
 
-			if seed_inputs_differ "$head" "$merged"; then
+			prove_unless_proved "$head" "$merged" "$SeedAtTip" "the seed pinned at $(short "$tip") does not build $(short "$head") merged onto it" "rebase by hand and submit again" \
 				fetch_pinned_seed "$tip" "$SeedAtTip"
-				prepare_tree "$merged" "$SeedAtTip"
-				build_prepared_tree "$MergedBuildLog" \
-					|| { tail -n "$VerdictTailLines" "$MergedBuildLog" >&2; fail "the seed pinned at $(short "$tip") does not build $(short "$head") merged onto it (the build's tail is above) — rebase by hand and submit again"; }
-				proof="$ProofBuilt"
-			else
-				git -C "$ChainTree" checkout --quiet --detach "$merged"
-				proof="$ProofSkipped"
-			fi
-
+			proof="$proof_outcome"
+			git -C "$ChainTree" checkout --quiet --detach "$merged"
 			landed="$merged"
 
 			if [ -n "$note" ]; then
@@ -787,6 +853,26 @@ command_chain() {
 	walk_chain "$base" "$head"
 }
 
+verdict_on_exit() {
+	local status="$1"
+
+	scratch_dir_on_exit "$status" "$LandWorkDirectory" "land.sh verdict" 0 \
+		|| echo "land.sh: $LandWorkDirectory could not be removed — remove it by hand" >&2
+	git worktree prune \
+		|| echo "land.sh: git worktree prune failed — run it by hand" >&2
+}
+
+command_verdict() {
+	local commit tag
+
+	commit="$(git rev-parse --verify "${1:-HEAD}^{commit}")"
+	tag="$(pinned_tag_at "$commit")"
+	trap 'verdict_on_exit $?' EXIT
+	fetch_pinned_seed "$commit" "$SeedAtCommit"
+	require_seed_builds "$SeedAtCommit" "$commit" "the pinned seed $tag refuses $(short "$commit")" "it lands as a bootstrap chain (docs/RELEASING.md)"
+	summary "the pinned seed $tag builds $(short "$commit") on every native lane: $proof_lanes"
+}
+
 append_chain_notes() {
 	local commit seed subject
 
@@ -818,12 +904,6 @@ command_freeze() {
 	cp -R "$ChainTree/$SeedDistDirectory" "$SeedDistDirectory"
 	seed_release_require_assets "$LAND_TAG"
 	append_chain_notes
-}
-
-seed_builds_compiler() {
-	local tree="$1" target="$2" output="$3"
-
-	(cd "$tree" && "$(maxon_downloaded_path .)" build maxon-bin "--target=$target" "--output=$output")
 }
 
 command_prove() {
@@ -868,46 +948,24 @@ command_publish() {
 	summary "published $LAND_TAG on $(short "$LAND_LANDED"), its chain at $LAND_TAG$ChainRefSuffix"
 }
 
-cross_build_merged() {
-	local merged="$1" tip="$2" seed target exe_ext log
-
-	seed="$ChainSeed$MAXON_EXE_EXT"
-	./scripts/fetch-seed.sh "$LAND_TAG" "$(maxon_host_target)" "--output=$seed"
-	prepare_tree "$merged" "$seed"
-	rm -rf "$PinBuildDirectory"
-
-	for target in $MaxonTargets; do
-		exe_ext="$(maxon_target_exe_ext "$target")"
-		log="$PinBuildDirectory/$target.log"
-		mkdir -p "$PinBuildDirectory/$target"
-		echo "land.sh: the seed $LAND_TAG builds $(short "$merged") for $target" >&2
-		seed_builds_compiler "$ChainTree" "$target" "$repo_root/$PinBuildDirectory/$target/maxon$exe_ext" > "$log" 2>&1 \
-			|| { tail -n "$VerdictTailLines" "$log" >&2; fail "the seed $LAND_TAG does not build $(short "$merged"), the chain's $(short "$LAND_LANDED") merged onto $(short "$tip"), for $target (the build's tail is above) — rebase the chain onto $Remote/$Branch and submit again"; }
-	done
-}
-
 command_pin() {
-	local tip merged pin proof
+	local tip merged pin seed host
 
 	require_env LAND_MODE LAND_TAG
 	recreate_landed
 	tip="$(standing_tip "$LAND_MODE" "$MomentPlan")"
 	merged="$(chain_merged_onto "$tip" "$LAND_BASE" "$LAND_LANDED")"
-
-	if seed_inputs_differ "$LAND_LANDED" "$merged"; then
-		cross_build_merged "$merged" "$tip"
-		proof="$ProofBuilt"
-	else
-		proof="$ProofSkipped"
-	fi
-
+	seed="$ChainSeed$MAXON_EXE_EXT"
+	host="$(maxon_host_target)"
+	prove_unless_proved "$LAND_LANDED" "$merged" "$seed" "the seed $LAND_TAG does not build $(short "$merged"), the chain's $(short "$LAND_LANDED") merged onto $(short "$tip")" "rebase the chain onto $Remote/$Branch and submit again" \
+		./scripts/fetch-seed.sh "$LAND_TAG" "$host" "--output=$seed"
 	pin="$(make_pin "$merged" "$LAND_LANDED" "$LAND_TAG")"
 
 	output tip "$tip"
 	output merged "$merged"
 	output pin "$pin"
 
-	summary "the chain's $(short "$LAND_LANDED") merged onto $(short "$tip") as $(short "$merged"), pinned to $LAND_TAG by $(short "$pin") — the seed's build of the merged tree: $proof"
+	summary "the chain's $(short "$LAND_LANDED") merged onto $(short "$tip") as $(short "$merged"), pinned to $LAND_TAG by $(short "$pin") — the seed's build of the merged tree: $proof_outcome"
 }
 
 seed_published_on() {
@@ -1340,6 +1398,7 @@ case "$subcommand" in
 	submit) command_submit "$@" ;;
 	await) command_await "$@" ;;
 	chain) command_chain "$@" ;;
+	verdict) command_verdict "$@" ;;
 	plan) command_plan "$@" ;;
 	freeze) command_freeze ;;
 	prove) command_prove "$@" ;;
@@ -1348,5 +1407,5 @@ case "$subcommand" in
 	land) command_land ;;
 	consume) command_consume ;;
 	retract) command_retract ;;
-	*) fail "usage: land.sh <submit|await|chain|plan|freeze|prove|publish|pin|land|consume|retract> (docs/RELEASING.md)" ;;
+	*) fail "usage: land.sh <submit|await|chain|verdict|plan|freeze|prove|publish|pin|land|consume|retract> (docs/RELEASING.md)" ;;
 esac

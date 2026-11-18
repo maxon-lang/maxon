@@ -46,15 +46,16 @@ that only a rule in this tree makes used is E3092, on every lane). A seed-built 
 seed's rules, never this tree's. The cure is a new seed frozen from the refused commit, which lands with it
 through `land.yml` instead of `git push`, from a bootstrap chain of commits the pinned seed can build
 through; `docs/RELEASING.md` owns the procedure and the `compiler-workflow` skill runs it. Land it without
-asking: publishing the seed and pushing its pin are standing-authorized (user ruling). When an editor's lock
-stops `build-from-seed.sh`, prove the chain by hand: `.bootstrap/maxon.exe build maxon-bin
---output=temp/<task>/c1.exe`, then `temp/<task>/c1.exe build maxon-bin --output=temp/<task>/c2.exe`.
+asking: publishing the seed and pushing its pin are standing-authorized (user ruling). **`scripts/land.sh
+verdict [<commit>]` finds a refusal**: the seed the commit pins builds it for every native lane, and the first
+lane that fails is named. A lane can refuse what another accepts. It builds in a worktree of its own, so a
+lock on this checkout's slot does not stop it.
 
 ⛔ **A COMPILER THAT STARTS DEPENDING ON A RUNTIME BEHAVIOUR THE SAME CHANGE ADDS NEEDS THE SEED CHAIN.**
 When the compiler's own code relies on a transfer, scheduler, allocator or walk semantic the change
 introduces, every local self-compile stays green, because the slot compiler is always a post-change
 builder; CI builds from the pinned seed, whose runtime lacks it, so seed → C1 → C2 can die (exit 96). Run
-`scripts/fetch-seed.sh` then `scripts/build-from-seed.sh` before pushing. Stage the dependency behind a
+`scripts/land.sh verdict` on the commit before pushing. Stage the dependency behind a
 builder-set `static let` capability that defaults to the old-safe path, as `FrontEndPool.RuntimeSharesAnyGraph`
 does (a seed-built `C1` runs its front end in process), and remove it once a release carries the runtime.
 
