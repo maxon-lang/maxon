@@ -2,6 +2,14 @@
 
 Class issue: #248 · Priority: P2
 
+## Goal
+
+The region model and the compiler stay two independent judges of one corpus, and the tree records every program's fate: an agreeing spec case, a disagreement with an owner, or a counted skip. The model lives in this tree, so a ruling and the model's switch for it land together.
+
+- **Done when:** the generator fails on an unowned disagreement; the translator writes only what the model judged, or skips by name; the ledger has no `translator` rows; every faithful disagreement is also a spec case.
+- **Not the goal:** making either judge follow the other by construction, or generating one from the other: the model is worth having because it is built differently.
+- **Between two designs that both satisfy a stage, take** a named skip over a translation the model did not judge, and a failing generator over a row with no owner.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked
@@ -13,11 +21,14 @@ last stage.
 | [ ] | 1 | The generator records every disagreement in a checked-in ledger and fails on an unowned, stale or unmapped one |  |  |  |
 | [ ] | 2 | The translator has one door each for expressibility, binding kind and place, so it never writes a program the model did not judge | 1 |  |  |
 | [ ] | 3 | The translator's send has one door that never changes what the model judged, and a translation bucket entry or run-time failure fails the generator (`/plan-and-land`) | 2 |  |  |
-| [ ] | 4 | Model round fa26: the model follows the rulings the compiler already follows, and the specs and ledger are regenerated from it | 3 |  | Open question 3: #253's diverging handler, whether the model gains a handler that diverges (recommended, as a switch in this round) or the shape is left to a compiler spec |
+| [ ] | 5 | The model's checker, oracle and hand corpora live in this tree, and the generator reads them from there | 3 |  |  |
+| [ ] | 6 | Every faithful disagreement is a spec case the generator writes from the ledger, pinned to the compiler's current answer | 3 |  |  |
+| [ ] | 4 | Model round fa26: the model follows the rulings the compiler already follows, and the specs and ledger are regenerated from it | 5, 6 |  | Open question 3: #253's diverging handler, whether the model gains a handler that diverges (recommended, as a switch in this round) or the shape is left to a compiler spec |
 
 ## Rulings
 
-- Open question 1: the region model moves in-tree: its checker, its oracle and its hand corpora live in this repository.
+- Open question 1: the region model moves in-tree: its checker, its oracle and its hand corpora live in this repository (stage 5).
+- Open question 2: every faithful disagreement is also a spec case, in `specs/model-open.md` (stage 6).
 
 ## Problem
 
@@ -114,15 +125,28 @@ Each stage regenerates `specs/model-*.md`, so the stages share an area and land 
    - Shown by: the ledger gate. Hand-FA14 `s-nofactory-send-live` and `a-sp-factory-sends` become agreeing refusals (R-LIN-DROP); finding-AA `send-full-await` runs to exit 0; hand-AP `g1-service-field` and hand-FA15 `c6-factory-param` leave the `translation` bucket. The verdict diff of the whole regeneration is read: every case whose expectation flips is explained by one of the three send changes. Hand-AC `wc-send-let-promise-linear` (#253) is re-read under open question 3.
    - This stage's approach needs a survey (which positions can propagate a send error, and what `.cancel()` does to a reply promise), so it is planned before it is landed.
 
+5. **The model moves in-tree.** Made before stage 4.
+   - Changes: the model's checker, its run-time oracle and its hand corpora (everything `model_corpus.py` imports, and the finding families it reads) are copied into this tree; the campaign reports stay out. The generator finds the model in the tree and takes no checkout argument. The model's own tests run from the tree. `docs/SPECS.md`'s "Model-derived specs" gives the one command.
+   - Area: a new directory for the model beside `scripts/model-specs/`, `model_corpus.py`, `generate.py`, `docs/SPECS.md`.
+   - Depends on: stage 3.
+   - Needs: the capmodel checkout stages 1 to 3 were run against. A session without one parks this stage and stage 4.
+   - Shown by: a regeneration from the in-tree model writes `specs/model-*.md` and the ledger byte for byte as the checkout did, and the ledger's stamp is then the tree's.
+
+6. **A disagreement is a spec case.**
+   - Changes: the generator writes each ledger row whose side is `model`, `compiler` or `corpus` as a case in `specs/model-open.md`, pinned to the compiler's current answer, its prose naming the owing side, the ruling and the issue. A `by-construction` row is not written: it is never run.
+   - Area: `scripts/model-specs/generate.py`, `spec_writer.py`, new `specs/model-open.md`, `docs/SPECS.md`.
+   - Depends on: stage 3, so no row is a translator's.
+   - Shown by: `spec-test --filter=model-open` is green; a row removed from the ledger removes its case; the commit that closes a disagreement turns its case red until the regeneration moves it to an agreeing file.
+
 4. **Model round fa26, and the specs follow it.**
-   - Changes, in the model:
+   - Changes, in the model, which is in this tree after stage 5:
      - accepting more, each behind its own switch: an I3 recovery that does not count a read reaching nothing of the result (#254); an I4 recovery that counts plain payloads only (#255); a renamed owned message parameter stored as a move (#256); MERGE-ARMS-ALT over call arms, with the R-LIN-COND lift for linear arms (#257, #30 readings R-a and R-f); the diverging handler, if open question 3 says so (#253);
      - refusing only: an unmarked linear-union message parameter is outer data to a window (#258, rulings 45.7, 41 part 1, 42 item 3); a call given a unique argument whose type has a plain part is not a clean call, whatever the argument's freshness (#259, ruling 44 point 1); a field store compares record types (#267);
      - the hand program `bm-nowin-keep` stores `y.p` (#267).
    - Evidence the round owes: for each switch, its tests and a mutation gate; a hand corpus of the programs the members name and their variants; one gadget per accepting switch at 2,000 programs per oracle; a verdict diff over the corpus programs the switches can touch; the standing tests; one red team on the changed surface. The refusing switches owe their tests and the verdict diff. #257's own list stands: the ten corpus programs; a call arm in each of the `cond`, `match` and `try … otherwise` merges and nested; `m1-arm-moves-arm-names` and `-rev`; a consuming-call arm against a bare arm of one linear variable; refused controls (a call arm that only reads, a linear variable moved in one arm only, two different linear variables).
    - Changes, in this tree: `DEFAULT_RULESET` and `HAND_FAMILIES` in `model_corpus.py`, the ledger's header, the regenerated `specs/model-*.md`, and the removal of every `model` and `corpus` row the round closes.
-   - Area: the capmodel repository; here `scripts/model-specs/model_corpus.py`, `ledger.tsv`, `specs/model-*.md`.
-   - Depends on: stage 3 (so the round's verdict diff is not mixed with translator churn), and open questions 1 and 3.
+   - Area: the in-tree model; `scripts/model-specs/model_corpus.py`, `ledger.tsv`, `specs/model-*.md`.
+   - Depends on: stages 5 and 6 (so the round is a commit here, and its verdict diff is not mixed with translator churn), and open question 3.
    - Discharges: #253, #254, #255, #256, #257, #258, #259, #267.
    - Shown by: the ledger gate, which fails on the fa25 ledger once the model accepts or refuses the named programs, and passes when their rows are gone.
 

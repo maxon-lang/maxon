@@ -2,6 +2,14 @@
 
 Class issue: #311 · Priority: P1
 
+## Goal
+
+For one program, target, defines and command, everything the compiler emits, caches, allocates and reports is equal under every hash seed, install location, working directory, listing order and lint setting, and one gate varies each of those.
+
+- **Done when:** the environment gate is green on every axis it varies, and each stage's defect is one the gate was red for first.
+- **Not the goal:** the two-rebuild fixpoint check, which stays out of CI, or sorting an input to hide an order: the loader's order stays what it is.
+- **Between two designs that both satisfy a stage, take** the one that fixes the order where it becomes observable (the emission, the report, the mint) over one that orders the input, and one whose rule a gate or a lint can check over a convention at each site.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

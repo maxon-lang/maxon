@@ -2,6 +2,14 @@
 
 Class issue: #308 · Priority: P1
 
+## Goal
+
+The compiler is linear in every dimension of the program. An answer that depends only on a key is computed once, kept by its owner and reached through that owner, and a ladder per dimension shows it.
+
+- **Done when:** each ladder the plan names doubles its time when its dimension doubles; the raw scans the plan lists have no caller outside their one owner.
+- **Not the goal:** a constant-factor speed-up. A stage that makes nothing superlinear linear, or that a ladder does not show, is not this plan's.
+- **Between two designs that both satisfy a stage, take** the one in which the owner keeps the answer over a cache beside each asker, and the one whose evidence is a doubling ladder over one whose evidence is a timing.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

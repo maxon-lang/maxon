@@ -38,7 +38,7 @@ plan). In short:
 | [runtime-entries](runtime-entries.md): A runtime entry is one row of one table, read by the usage scan, the target check, the installers and the stdlib gates: no fact about it comes from its name's prefix | #153 | P1 | 5 | B | 3 |  |
 | [debug-rows](debug-rows.md): A local's debug facts are ops the passes carry: a version sits at its assignment, a scope end in its block, and a value id is minted once per function | #145 | P2 | 5 | B | 4 |  |
 | [debug-host](debug-host.md): Every operation on a held program's lifecycle answers a typed outcome: a release is refused by name while a stop the session sent is uncollected, and no wait for a program's end expires in silence | #313 | P2 | 3 | B | 5 |  |
-| [region-model](region-model.md): Every region-model corpus program has one checked-in fate: an agreeing spec case, an owned ledger row or a counted skip, and the translator writes only what the model judged | #248 | P2 | 4 | B | 6 |  |
+| [region-model](region-model.md): Every region-model corpus program has one checked-in fate: an agreeing spec case, an owned ledger row or a counted skip, and the translator writes only what the model judged | #248 | P2 | 6 | B | 6 |  |
 
 Queues A and B run side by side, one session each; a queue takes its plans in turn order.
 `map-string-cost` and `structural-equality` are one queue for one session: their stages wait on each other.

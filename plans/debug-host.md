@@ -2,6 +2,14 @@
 
 Class issue: #313 · Priority: P2
 
+## Goal
+
+An operation on a held program's lifecycle answers a typed outcome that names its cause, and no wait on a program's end expires without a reply.
+
+- **Done when:** each member's failure reaches the reader, and a test log, as its own named reason; no backend lifecycle call answers `bool`.
+- **Not the goal:** a single state type for the session (open question 1), or a change to #281's and #292's rulings.
+- **Between two designs that both satisfy a stage, take** the one that keeps the program held and says why over one that releases or ends it in a state the session does not know.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

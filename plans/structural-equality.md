@@ -2,6 +2,14 @@
 
 Class issue: #312 · Priority: P1
 
+## Goal
+
+#78's rulings 11 and 11a are implemented: one verdict per type supplies `equals`, `compare`, `hash` and `clone`, so they cannot disagree, and every `Map` and `Set` hashes under its own seed.
+
+- **Done when:** every door (operator, method call, conformance, `where` check, table) reads the verdict; the stdlib and compiler twins of the leaf members are gone; the verdict's ladder is linear.
+- **Not the goal:** a change to #78. A question #78 does not answer goes to its `design` issue, not into this plan.
+- **Between two designs that both satisfy a stage, take** the one that refuses at compile time with the reason path over one that decides at run time, and one walk of the fields over a walk per member.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

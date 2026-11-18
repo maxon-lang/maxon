@@ -2,6 +2,14 @@
 
 Class issue: #145 · Priority: P2
 
+## Goal
+
+What a debugger is told about a local survives every optimisation pass, because a version and a scope end are ops the passes carry, and a value id is never minted twice.
+
+- **Done when:** every member's program shows the right value at the right line; the side table's keys into IR are gone; the executable is byte-identical with and without the sidecar over every `tests/debug` fixture.
+- **Not the goal:** a new debugger feature, or any change to the code a build without debug locals emits.
+- **Between two designs that both satisfy a stage, take** the one that teaches the central rosters about the two ops over one that teaches each pass.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

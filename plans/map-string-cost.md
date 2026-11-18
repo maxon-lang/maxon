@@ -2,6 +2,14 @@
 
 Class issue: #82 · Priority: P1
 
+## Goal
+
+`Map`, `Set`, `String` and the seeded hash cost what Go's do on the rows under "Measurements", for concrete, generic and library code alike.
+
+- **Done when:** each Measurements row is at Go's figure or the stage records why not, measured as an interleaved A/B; an element operation has one door that every kind of code reaches.
+- **Not the goal:** a faster hash function for its own sake (the hash is not the Map gap), or a fast path for `String` keys that other element kinds do not get.
+- **Between two designs that both satisfy a stage, take** the one that gives generic and library code the door concrete code already has over a special case for one caller or one type. A figure decides between two designs, never a reading.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

@@ -2,6 +2,14 @@
 
 Class issue: #18 · Priority: P1
 
+## Goal
+
+A declaration is identified by a resolved value (origin, layer, owner, kind) made in one place. Text is written from it only for a diagnostic, a mangled symbol and a cache file, and nothing reads an identity back out of text.
+
+- **Done when:** every member's program resolves the declaration the scoping rules name; the mint and un-mint helpers over rendered keys, the path sentinel and the per-layer name sets are gone.
+- **Not the goal:** a change to what a name resolves to under today's scoping rules, or packages (#37), which waits on this plan.
+- **Between two designs that both satisfy a stage, take** the one in which the wrong lookup has no spelling (a typed key, a typed reader) over one that keeps text and adds a check.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

@@ -2,6 +2,14 @@
 
 Class issue: #53 · Priority: P2
 
+## Goal
+
+A constant is one fact with one declaration. A copy exists only across a boundary no name can cross, in one of three checked forms, and a gate finds any other copy.
+
+- **Done when:** the gate is green over `maxon-bin/`, `stdlib/` and the boundaries the plan names, and red for a planted copy of each kind.
+- **Not the goal:** a change to how top-level names are scoped.
+- **Between two designs that both satisfy a stage, take** removing the boundary that forces the copy over checking the copy.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

@@ -26,8 +26,12 @@ a turn on a question. Whatever the plan does not answer — a question with no r
 contradicts the design, a finding that widens a stage — goes to a `planner` agent, which rules as the
 user would:
 
-- Brief it with the stage's section, the design points at issue, what the code shows, the options and
-  your recommendation. Ask for one ruling and its reason, nothing wider.
+- Brief it with the plan's "Goal" section, the stage's section, the design points at issue, what the code
+  shows, the options and your recommendation. Ask for one ruling and its reason, nothing wider.
+- **The Goal decides.** The ruling is the option that serves the plan's goal and its "done when", stays
+  out of its "not the goal", and follows its rule for choosing between two designs. Where the Goal is
+  silent, `AGENTS.md` decides (fix the class, break freely, a deterministic error over degraded code),
+  then what Go does.
 - Record the ruling under the plan's "Rulings", marked `unreviewed`, with the question in one line and
   the option it rejected, in the stage's commit. Then carry on.
 - Batch the questions a stage raises into one dispatch where they are known together.
@@ -45,7 +49,8 @@ that waits on it, say why in the plan file, and carry on with the stages that do
 
 ## 1. Make each stage
 
-Read the plan's stage table, its rulings and its design once. Do not survey the code against the plan:
+Read the plan's goal, its stage table, its rulings and its design once. Every brief, to a planner or an
+implementer, opens with the Goal section. Do not survey the code against the plan:
 each stage meets its own facts when it starts.
 
 Take the first stage whose "Done" cell is empty and whose "Waits on" is satisfied: every stage it names

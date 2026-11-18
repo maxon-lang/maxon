@@ -2,6 +2,14 @@
 
 Class issue: #309 · Priority: P0
 
+## Goal
+
+No construct can miss an ownership or region rule. A fact about a value is written at one of four doors and every rule reads the one record, so a construct added later inherits every rule without naming any of them.
+
+- **Done when:** every member's program gets the verdict #30 rules; `heldResults`, `windowBirths`, `latentBirths` and `joinedVariables` are gone; a gate refuses a rider written outside the four doors.
+- **Not the goal:** a change to any ruling of #30. A program's verdict changes only where a member shows the compiler departing from a ruling.
+- **Between two designs that both satisfy a stage, take** the one under which a missed case does not compile (a private writer, a `match` with no default) over one that relies on each site remembering. Where soundness and accepting more programs pull apart, soundness wins: refuse.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

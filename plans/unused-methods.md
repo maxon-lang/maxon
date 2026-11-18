@@ -2,6 +2,14 @@
 
 Class issue: #69 · Priority: P2
 
+## Goal
+
+`maxon lint` reports a method nothing uses, as it reports an unused top-level declaration, and its census counts only tokens that can name a declaration.
+
+- **Done when:** the compiler and the stdlib lint clean under the new rule, with every finding either removed or used.
+- **Not the goal:** a whole-program reachability analysis, or a finding a conformance or the compiler itself accounts for.
+- **Between two designs that both satisfy a stage, take** a use decided from a resolved reference over one decided from a spelling.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

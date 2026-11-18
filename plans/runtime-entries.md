@@ -2,6 +2,14 @@
 
 Class issue: #153 · Priority: P1
 
+## Goal
+
+Every fact about a runtime entry (its signature, its owner, the hosts that provide it, what a call turns on, whether it throws) is a field of one row in one table, and a callee with no row is a compiler panic that names it.
+
+- **Done when:** the usage scan, the target check, the installers and the stdlib gate read rows; no predicate answers from a name's prefix; a mention and a use are told apart by the row.
+- **Not the goal:** a change to what the runtime provides or to any entry's behaviour.
+- **Between two designs that both satisfy a stage, take** a field on the row over a predicate, and a panic on a missing row over a default.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked

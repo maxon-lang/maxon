@@ -2,6 +2,14 @@
 
 Class issue: #310 · Priority: P0
 
+## Goal
+
+A generic body's verdict and its emitted code depend on its bounds alone, never on which instances the rest of the program names, and every instance the program writes or infers is judged exactly once.
+
+- **Done when:** every member's program gets its ruled verdict at the declaration or at the instance's own base name; `valueIsManagedHeap` and the direct `typeParameter` tag comparisons are gone; no body reads the program's instance rows.
+- **Not the goal:** specialisation, faster generic code, or a new generics feature. Cost of generic code is `map-string-cost`'s.
+- **Between two designs that both satisfy a stage, take** the one that makes "what does an opaque value do here" impossible to leave unanswered, and that refuses at the declaration, naming the bound, whatever the bounds cannot prove.
+
 ## Stage order
 
 One stage is one local commit, which ticks its box. A stage starts when every stage it waits on is ticked
