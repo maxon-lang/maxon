@@ -41,8 +41,15 @@ For each stage, in order:
    never worked around. Re-run only the cases of a stage whose files the rebase touched.
 3. **Watch the stage's spec set red.** The plan's "Shown by" line is its floor. There is no scout: the
    plan names the functions and files.
-4. **Write the code through implementer agents,** on the model each piece needs. A brief carries the
-   stage's own section of the plan and the design points it cites, never the whole plan file.
+4. **Write the code through implementer agents.** A brief carries the stage's own section of the plan
+   and the design points it cites, never the whole plan file.
+   **Every agent runs on the cheapest model that can do its piece** (`/land`'s `brief.md`, "The model for
+   each stage"), chosen per piece and named in the dispatch:
+   - `haiku` for a mechanical piece: a rename, a re-pin, a tick, a doc line;
+   - `sonnet` for the spec author, the documenter, and a contained piece whose approach the plan settles,
+     which is most stages;
+   - `opus` for a piece that is cross-pass or soundness-sensitive, involves performance or concurrency, or
+     leaves a design choice open; for a diagnosis; for `optimize`; and for a review.
 5. **The stage's own cases green, and nothing wider.** Until §2, a run is `--filter`ed to the cases the
    stage wrote or re-pinned and the cases of a spec file it edited: never a whole spec file's suite for
    safety, a corpus, `ir-specs` unfiltered, a second target, or a lane. What a stage breaks elsewhere is
