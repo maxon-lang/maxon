@@ -10,6 +10,11 @@ works it from start to finish. `plans/README.md` puts every plan in one of two q
 its own queue, so no plan is claimed. Given a queue letter, take that queue's first plan, in turn order,
 whose "Done" cell is empty. The stages are local commits; `main` receives the plan once, as one commit.
 
+**A plan is worked in its own worktree, on its own branch, never on local `main`:**
+`git worktree add temp/<plan>/tree -b plan/<plan>-stages origin/main`. The checkout is shared with other
+sessions, whose resets and pushes of `main` would drop or publish a stage commit sitting there. The branch
+is never pushed: a pushed branch starts the landing workflow.
+
 **A plan is the maintainer's, not the fleet's.** Send no `REQUEST` and run no `fleet.mjs` for it, whatever
 `maxon.fleetRepo` says.
 
@@ -70,7 +75,7 @@ For each stage, in order:
 6. **`code-review` per stage only in `ownership` and `generics`**, where a slip is a soundness hole: one
    round, by an agent that did not write the code, blockers only. Every other plan is reviewed in §2.
 7. **Write no comments and no documentation.** Both are written once, in §2, on the plan's final shape.
-8. **Commit locally, on `main`, and push nothing.** The commit holds the stage's code and spec cases and
+8. **Commit on `plan/<plan>-stages`, and push nothing.** The commit holds the stage's code and spec cases and
    ticks the stage's box. Its message carries what §2's message will need: the mechanism, the cases red
    to green, the figures measured, and any `RELEASE_NOTES.md` entry the stage owes, written out.
 
@@ -86,10 +91,10 @@ fresh one resumes from the ticks.
 
 When every stage is ticked or `deferred`:
 
-1. **Keep the stage commits** on a local branch, `plan/<plan>-stages`, and never push it: a pushed
-   branch starts the landing workflow. It is what a red after the landing is bisected over.
-2. **Squash the stage commits into one commit** on top of `origin/main` (`git reset --soft origin/main`
-   after a final rebase). `main` takes one commit per landing; a branch of several is read as a bootstrap
+1. **Leave `plan/<plan>-stages` as it is:** it is what a red after the landing is bisected over.
+2. **Squash the stage commits into one commit** on a second local branch cut from it after a final
+   rebase (`git switch -c plan/<plan>`, then `git reset --soft origin/main`), and land that branch as
+   `/land` §9 lands a session's own branch. `main` takes one commit per landing; a branch of several is read as a bootstrap
    chain.
 3. **`code-review` over the whole diff**, one round, blockers only, for every plan §1 did not review
    per stage.
