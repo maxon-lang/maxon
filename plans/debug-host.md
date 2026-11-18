@@ -12,7 +12,7 @@ last stage.
 |---|---|---|---|---|---|
 | [ ] | 1 | The released program's end is awaited in one place, and its expiry is a reply that says the program has not ended |  |  |  |
 | [ ] | 2 | A release answers a typed refusal that names its cause, and the ptrace lane refuses to release while a stop it sent is owed | #281, #292 |  |  |
-| [ ] | 3 | A held program's end is the session's own reap: a stub's exit packet is a claim, and a stub that exits without handing the program back is a typed outcome | 2, #292 |  |  |
+| [ ] | 3 | A held program's end is the session's own reap: a stub's exit packet is a claim, and a stub that exits without handing the program back is a typed outcome (`/plan-and-land`) | 2, #292 |  |  |
 
 ## Problem
 

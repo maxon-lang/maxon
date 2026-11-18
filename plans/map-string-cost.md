@@ -15,10 +15,10 @@ last stage.
 | [ ] | 3 | The Map rows are re-measured on both hosts and #106's gate (shared body at least 1.2 times a specialised body) is read | 1, 2 |  |  |
 | [ ] | 4 | The software hash tier multiplies with the target's own high multiply, and the software pair mix is emitted once |  |  |  |
 | [ ] | 5 | A store of a managed element whose kind the compiler knows is inline: release the occupant, store the value |  |  |  |
-| [ ] | 6 | An element read that is only read borrows: the retain/release pair cancels when every use between only reads the value | 1 |  |  |
+| [ ] | 6 | An element read that is only read borrows: the retain/release pair cancels when every use between only reads the value (`/plan-and-land`) | 1 |  |  |
 | [ ] | 7 | A short key's hash is one runtime call that takes the seed as an argument, with no separate seed load and no span guard | [structural-equality](structural-equality.md) 4 |  |  |
-| [ ] | 8 | Map and Set are one table core with control words, capped tables, and a rehash that moves keys with no retain or release; two commits | 3, [structural-equality](structural-equality.md) 4, [structural-equality](structural-equality.md) 5 |  | Open questions 2 and 3: the table's storage shape (three columns per capped table, recommended, or a compiler-owned group storage kind) and whether the cached hash column is dropped (recommended on equal readings) or kept |
-| [ ] | 9 | A generic type is compiled per instantiation, so a method costs the same at one call site or at ten; starts only if stage 3 confirms #106's gate | 3 |  | Stage 3's reading of #106's gate: starts only if the gate is confirmed; otherwise withdrawing #106 is the maintainer's decision |
+| [ ] | 8 | Map and Set are one table core with control words, capped tables, and a rehash that moves keys with no retain or release; two commits (`/plan-and-land`) | 3, [structural-equality](structural-equality.md) 4, [structural-equality](structural-equality.md) 5 |  | Open questions 2 and 3: the table's storage shape (three columns per capped table, recommended, or a compiler-owned group storage kind) and whether the cached hash column is dropped (recommended on equal readings) or kept |
+| [ ] | 9 | A generic type is compiled per instantiation, so a method costs the same at one call site or at ten; starts only if stage 3 confirms #106's gate (`/plan-and-land`) | 3 |  | Stage 3's reading of #106's gate: starts only if the gate is confirmed; otherwise withdrawing #106 is the maintainer's decision |
 | deferred | 10 | The closing measurement: every Map and hash row re-measured on both hosts, each at 1.0 or below against Go or each remaining term naming an open issue | 1, 2, 3, 4, 5, 6, 7, 8, 9 |  |  |
 
 ## Problem

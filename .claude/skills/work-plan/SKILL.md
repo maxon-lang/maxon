@@ -46,6 +46,12 @@ For each stage, in order:
    never worked around. Re-run only the cases of a stage whose files the rebase touched.
 3. **Watch the stage's spec set red.** The plan's "Shown by" line is its floor. There is no scout: the
    plan names the functions and files.
+   **A stage its table row or its section marks `/plan-and-land` gets a `planner` first,** and no other
+   stage does: the plan left that stage's approach open. Brief it with the stage's section, the design
+   points it cites and the files it names, and ask for the approach and the pieces, nothing wider. Write
+   its answer into the stage's section, in this stage's commit, and brief the implementers from that.
+   A planner also runs when an implementer reports that the code contradicts the plan's design, before
+   the user is asked: its reading is what the question carries.
 4. **Write the code through implementer agents.** A brief carries the stage's own section of the plan
    and the design points it cites, never the whole plan file.
    **Every agent runs on the cheapest model that can do its piece** (`/land`'s `brief.md`, "The model for

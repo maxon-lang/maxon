@@ -12,7 +12,7 @@ last stage.
 |---|---|---|---|---|---|
 | [ ] | 1 | The generator records every disagreement in a checked-in ledger and fails on an unowned, stale or unmapped one |  |  |  |
 | [ ] | 2 | The translator has one door each for expressibility, binding kind and place, so it never writes a program the model did not judge | 1 |  |  |
-| [ ] | 3 | The translator's send has one door that never changes what the model judged, and a translation bucket entry or run-time failure fails the generator | 2 |  |  |
+| [ ] | 3 | The translator's send has one door that never changes what the model judged, and a translation bucket entry or run-time failure fails the generator (`/plan-and-land`) | 2 |  |  |
 | [ ] | 4 | Model round fa26: the model follows the rulings the compiler already follows, and the specs and ledger are regenerated from it | 3 |  | Open question 3: #253's diverging handler, whether the model gains a handler that diverges (recommended, as a switch in this round) or the shape is left to a compiler spec |
 
 ## Rulings

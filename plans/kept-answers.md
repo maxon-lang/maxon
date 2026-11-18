@@ -15,9 +15,9 @@ last stage.
 | [ ] | 3 | A record literal's labelled-field succession is answered from one per-literal count, never a layout walk |  | 2, 4, 7 |  |
 | [ ] | 4 | One per-body mention index answers 'where is this name mentioned next' for every asker, allocating per distinct name |  | 2, 3, 7 |  |
 | [ ] | 5 | `rowsOfBase` is the only door to the instances of a base; `RowSetQuery.dropDiverges` and its whole-registry scan are deleted |  |  |  |
-| [ ] | 6 | The two recursive instance questions are kept per `GenericInstanceId`, so chains of nested instance aliases check in linear time | 1 |  | Where do kept type answers live for a front-end worker? (recommended: in the signature settle, read-only afterwards; alternative: lazily, journaled as `deepCloneAnswers` is) |
-| [ ] | 7 | One kept transfer verdict per (subject, kind) holds the promise reach, opaque-slot refusal, clone gate, blocker and strategy | 6, [generics](generics.md) 7 | 2, 3, 4 |  |
-| [ ] | 8 | An open generic chain of `sendable`-bounded instances is linear in every compile phase | 7 |  |  |
+| [ ] | 6 | The two recursive instance questions are kept per `GenericInstanceId`, so chains of nested instance aliases check in linear time (`/plan-and-land`) | 1 |  | Where do kept type answers live for a front-end worker? (recommended: in the signature settle, read-only afterwards; alternative: lazily, journaled as `deepCloneAnswers` is) |
+| [ ] | 7 | One kept transfer verdict per (subject, kind) holds the promise reach, opaque-slot refusal, clone gate, blocker and strategy (`/plan-and-land`) | 6, [generics](generics.md) 7 | 2, 3, 4 |  |
+| [ ] | 8 | An open generic chain of `sendable`-bounded instances is linear in every compile phase (`/plan-and-land`) | 7 |  |  |
 | deferred | 9 | A std-pass worker builds each step's workspace once for its life and reuses it across functions |  |  |  |
 | deferred | 10 | A backend worker owns its op variant facts and takes its ABI table `immutable`, with no per-worker clone |  |  |  |
 | deferred | 11 | Whether a target provides every host facility is settled once per compile, not per function and spawn site |  |  |  |

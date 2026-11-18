@@ -10,15 +10,15 @@ last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
-| [ ] | 1 | A declaration carries its origin and layer as fields; no path sentinel and no path-set classification remain |  | 2, 3, 4, 5, 6, 7, 8, 9 |  |
+| [ ] | 1 | A declaration carries its origin and layer as fields; no path sentinel and no path-set classification remain (`/plan-and-land`) |  | 2, 3, 4, 5, 6, 7, 8, 9 |  |
 | [ ] | 2 | A canonical tuple layout has no file: its origin is compilerOwned and its elements are resolved in the file of the spelling that mints it | 1 |  |  |
 | [ ] | 3 | A member lookup resolves over the methods the reader's own layer can see | 1 |  |  |
 | [ ] | 4 | An extension that declares a static its primitive already has is a duplicate member, E3006 |  |  |  |
-| [ ] | 5 | One written-name resolver and a structured declaration key replace every door's own name resolution and the rendered inner-alias key | 1 |  |  |
+| [ ] | 5 | One written-name resolver and a structured declaration key replace every door's own name resolution and the rendered inner-alias key (`/plan-and-land`) | 1 |  |  |
 | [ ] | 6 | The language server resolves a written type name through the one resolver, with its enclosing type or extension as the site | 5 |  |  |
 | [ ] | 7 | A door refuses a name by the kind it resolved to: a ranged alias has no from construction and no statics, under its own error code | 5 |  |  |
 | [ ] | 8 | One mismatch renderer takes both types and the reader, names each side as the reader sees it, and panics when the two sides still read alike | 1 | 5 |  |
-| [ ] | 9 | A type-name id carries the interner space it indexes, and every read through the wrong interner fails |  | 1, 5 | Open question 2: how an id carries its space (#214): (a) static type parameter, (b) dynamic tag in the high bits, (c) wait for #36 stage 3's per-package id spaces; recommended (b) |
+| [ ] | 9 | A type-name id carries the interner space it indexes, and every read through the wrong interner fails (`/plan-and-land`) |  | 1, 5 | Open question 2: how an id carries its space (#214): (a) static type parameter, (b) dynamic tag in the high bits, (c) wait for #36 stage 3's per-package id spaces; recommended (b) |
 
 ## Rulings
 

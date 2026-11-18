@@ -11,7 +11,7 @@ last stage.
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
 | [ ] | 1 | A value id is minted once per function: IrFunction carries the next value id and no pass recomputes it by walking the body |  |  |  |
-| [ ] | 2 | A binding's version is a debugBind op in the function's own op stream at its assignment, carried by every pass as any op is | 1 |  |  |
+| [ ] | 2 | A binding's version is a debugBind op in the function's own op stream at its assignment, carried by every pass as any op is (`/plan-and-land`) | 1 |  |  |
 | [ ] | 3 | A scope end is a debugScopeEnd op in its block, so a block split or clone carries it and the scope can never lose a tail | 2 |  |  |
 | [ ] | 4 | Folded words or memory is stated by the debugBind source at the pass that removes the stores, not inferred from whether a binding has rows | 2, 3 | 3 |  |
 | [ ] | 5 | A pass that changes a named value's representation rewrites its binding: a register-pair tuple result reads unavailable | 4 | 3 |  |

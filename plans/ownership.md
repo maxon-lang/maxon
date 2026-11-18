@@ -18,10 +18,10 @@ last stage.
 | [ ] | W1 | One predicate answers whether a value is the whole of its region, and every door asks it and adds only its own action | V1, V3 |  |  |
 | [ ] | O1 | One predicate answers whether a position opens its value or moves it, so a moving position is never checked as a one-call open | W1 |  |  |
 | [ ] | B1 | One binding door judges the source of every binding form: a plain binding, a destructuring binding and a tuple assignment alike | V1 |  |  |
-| [ ] | LP1 | A loop header's hold and sole-or-co-owned bit are provisional until the loop closes, then sealed and re-judged by a reliance ledger | V1, V3, E1 |  |  |
+| [ ] | LP1 | A loop header's hold and sole-or-co-owned bit are provisional until the loop closes, then sealed and re-judged by a reliance ledger (`/plan-and-land`) | V1, V3, E1 |  |  |
 | [ ] | LP2 | The existing loop settles for moves, freshness, capability and cell-occupant exclusivity are riders and reliances of one ledger | LP1 |  |  |
-| [ ] | C1 | A call takes a held value only when the callee lets nothing of it leave, read from a per-parameter mask over the callee's body | V1 |  |  |
-| [ ] | C2 | Whether a parameter is fed comes from a per-parameter mask over the callee's value flow, not from token scans of its spelling | C1 |  |  |
+| [ ] | C1 | A call takes a held value only when the callee lets nothing of it leave, read from a per-parameter mask over the callee's body (`/plan-and-land`) | V1 |  |  |
+| [ ] | C2 | Whether a parameter is fed comes from a per-parameter mask over the callee's value flow, not from token scans of its spelling (`/plan-and-land`) | C1 |  |  |
 
 ## Rulings
 

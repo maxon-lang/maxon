@@ -17,7 +17,7 @@ last stage.
 | [ ] | 5 | A member read through a concrete instance is typed through its receiver's arguments before any predicate judges it | 1 | 3, 4 |  |
 | [ ] | 6 | A generic function body is checked once at its declaration against its `where` bounds, whether or not anything calls it | 2, 3 |  | Are generic function bodies checked once at their declaration, against `where` bounds? (recommended: yes) |
 | [ ] | 7 | Every per-instance type fact is memoized once per `GenericInstanceId`, and every walk asks the table | 1 |  |  |
-| [ ] | 8 | A spawn at the enclosing generic type's parameters compiles and runs at every instantiation | 4, #106 |  | How does a `spawn` inside a generic body start a service at the enclosing type's parameters (#242)? (a) under #106 the body is concrete per instantiation; (b) without #106 the descriptor carries the behaviour pair. Decide after #106's gate is read. |
+| [ ] | 8 | A spawn at the enclosing generic type's parameters compiles and runs at every instantiation (`/plan-and-land`) | 4, #106 |  | How does a `spawn` inside a generic body start a service at the enclosing type's parameters (#242)? (a) under #106 the body is concrete per instantiation; (b) without #106 the descriptor carries the behaviour pair. Decide after #106's gate is read. |
 
 ## Rulings
 
