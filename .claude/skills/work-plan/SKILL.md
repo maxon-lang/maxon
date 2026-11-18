@@ -54,6 +54,10 @@ For each stage, in order:
    the user is asked: its reading is what the question carries.
 4. **Write the code through implementer agents.** A brief carries the stage's own section of the plan
    and the design points it cites, never the whole plan file.
+   **Every piece gets a fresh agent.** Split the stage into pieces before dispatching, and never continue
+   an implementer into the next piece, a follow-up or a later stage by message: its context carries
+   everything it has read, so each further turn is slower and dearer than a new agent with a narrow brief.
+   A message to a running agent is for a correction to the piece it is on.
    **Every agent runs on the cheapest model that can do its piece** (`/land`'s `brief.md`, "The model for
    each stage"), chosen per piece and named in the dispatch:
    - `haiku` for a mechanical piece: a rename, a re-pin, a tick, a doc line;
