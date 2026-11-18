@@ -1141,6 +1141,7 @@ export type VarInfo
 
 	export var isEnrolled = false
 	export var enrolledAt = 0 as ElementIndex
+	var nameSlot = 0 as ElementIndex
 
 	export var brandKey as immutable ByteArray
 
@@ -1259,9 +1260,13 @@ export type VarInfo
 	end 'moveStateValue'
 
 	// `movedFrom` and `boundValue` are written only through these setters, because each write owes the
-	// move ledger a note (`MoveLedger.noteDirty`). Gated by
-	// `tests/cli/owned-binding-move-state-is-written-through-the-ledger-setters.maxtest`.
+	// move ledger a note (`noteWritten`). Gated by the
+	// owned-binding-move-state-is-written-through-the-ledger-setters test.
 	export function setMovedFrom(moved bool, ledger MoveLedger)
+		if moved and not self.movedFrom 'goesMoved'
+			ledger.logMove(self)
+		end 'goesMoved'
+
 		self.movedFrom = moved
 		self.noteWritten(ledger)
 	end 'setMovedFrom'
@@ -1295,6 +1300,8 @@ export type VarInfo
 	end 'setBoundValue'
 
 	export function noteWritten(ledger MoveLedger)
+		ledger.noteName(self)
+
 		if self.isEnrolled 'anOwnedBinding'
 			ledger.noteDirty(self.enrolledAt)
 		end 'anOwnedBinding'
@@ -1370,11 +1377,11 @@ export type VarInfo
 		let f_brandId = (try reader.unsigned()) as TypeNameId
 		let f_brandKey = freeze try reader.bytes()
 
-		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, moveSite: MoveSite.unlocated, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, isEnrolled: false, enrolledAt: 0, brandKey: f_brandKey}
+		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, moveSite: MoveSite.unlocated, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, isEnrolled: false, enrolledAt: 0, nameSlot: 0, brandKey: f_brandKey}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize232
-		return sizeof(VarInfo) as CacheSize232
+	static function cacheLayoutBytes() returns CacheSize240
+		return sizeof(VarInfo) as CacheSize240
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -9982,6 +9989,7 @@ export type EnumLayout
 	// of a payload-bearing union — payload-free ones included — take the record form (a bare tag in a
 	// box, or the stored tag alone in a word).
 	export var casePayloads as PayloadFieldArrayArray
+
 	// Entry `i` counts the payload-bearing cases at or before case `i`, so it holds only while no
 	// case's payload arity moves after `addCase`; a stale entry gives wrong word keys, silently.
 	var payloadCasesThrough as PayloadCaseCountArray

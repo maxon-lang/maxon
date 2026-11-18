@@ -2544,3 +2544,2432 @@ end 'main'
 ```maxoncstderr
 error E3200: <fragment>:46:39: 'idSlot(u)' crosses to the service it is sent to only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
 ```
+
+<!-- test: error.an-element-read-subject-holds-its-container -->
+`match try a.get(0) otherwise panic("one")` reads an element of `a`, so the `match` holds `a` itself, and a binding arm does not send it (rulings 49 and 50).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeAll(a Slots) returns Count
+		self.taken = self.taken + (a.count() as Count)
+		return self.taken
+	end 'takeAll'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then break
+		held(t) then got = (try await s.takeAll(a) otherwise 0) + t.n
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:40:43: cannot hand 'a' to the service it is sent to: 'a' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: error.a-pop-from-an-element-read-subject-is-not-sent -->
+`a.pop()` in an arm that binds nothing is legal (ruling 45.1), but its result is taken out of `a`, which the `match` holds, so it is not the whole of its region at the send (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then break
+		held then got = try await s.take(try a.pop() otherwise panic("one")) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:45:36: 'try a.pop() otherwise panic("one")' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-swap-out-of-a-matched-self-field-is-not-sent -->
+`match h.u` holds `h`, the root of the path, so what `swap h.u with Slot.empty` takes out of the matched field is held and is not sent (ruling 50 points 1 and 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(1)))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match h.u 'm'
+		empty then break
+		held then got = try await s.take(swap h.u with Slot.empty) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:50:36: 'swap h.u with Slot.empty' crosses to the service it is sent to only as the whole of its region, and it may still name 'h', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-pop-result-is-not-a-spawn-argument -->
+What `a.pop()` takes out of `a` is held by the `match` over `a.get(0)`, so it is not a `spawn` factory's argument (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Keeper
+	var u as Slot
+
+	static function create(x Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return match self.u 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+	end 'peek'
+end 'Keeper'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	var k = spawn Keeper.create(Slot.empty)
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then break
+		held then k = spawn Keeper.create(try a.pop() otherwise panic("one"))
+	end 'm'
+
+	print("{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:41:37: 'try a.pop() otherwise panic("one")' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-pop-result-is-not-a-reply -->
+What `a.pop()` takes out of `a` is held by the `match` over `a.get(0)`, so a service method does not return it to its sender from the arm (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Vault
+	var served as Count
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function give() returns Slot
+		let a = Slots.create(0)
+		a.push(Slot.held(Token.create(1)))
+		self.served = self.served + 1
+
+		match try a.get(0) otherwise panic("one") 'm'
+			empty then break
+			held then return try a.pop() otherwise panic("one")
+		end 'm'
+
+		return Slot.empty
+	end 'give'
+end 'Vault'
+
+function main() returns ExitCode
+	let v = spawn Vault.create()
+	let r = try await v.give() otherwise Slot.empty
+
+	let n = match r 'r'
+		empty gives 0
+		held(t) gives t.n
+	end 'r'
+
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:33:21: 'try a.pop() otherwise panic("one")' crosses to the sender awaiting the reply only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-pop-result-is-not-in-an-isolated-position -->
+What `a.pop()` takes out of `a` is held by the `match` over `a.get(0)`, so it is not an `isolated` parameter's argument (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+function isoSlot(x isolated Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(t) gives t.n
+	end 'c'
+end 'isoSlot'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then break
+		held then got = isoSlot(try a.pop() otherwise panic("one"))
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:33:27: 'try a.pop() otherwise panic("one")' crosses to an `isolated` position only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-swap-result-is-not-an-isolated-factory-argument -->
+What `swap h.u with Slot.empty` takes out of the matched field is held by the `match` over `h.u`, so it is not an `isolated` factory parameter's argument (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b isolated Box)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+type Keeper
+	var u as isolated Slot
+
+	static function create(x isolated Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return match self.u 'c'
+			empty gives 0
+			held(b) gives b.n
+		end 'c'
+	end 'peek'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Box.create(1)))
+	var k = spawn Keeper.create(Slot.empty)
+
+	match h.u 'm'
+		empty then break
+		held then k = spawn Keeper.create(swap h.u with Slot.empty)
+	end 'm'
+
+	print("{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:46:37: 'swap h.u with Slot.empty' crosses to an `isolated` position only as the whole of its region, and it may still name 'h', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-swap-result-is-not-an-isolated-reply -->
+What `swap h.u with Slot.empty` takes out of the matched field is held by the `match` over `h.u`, so a method that `returns isolated` does not return it from the arm (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b isolated Box)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+type Vault
+	var served as Count
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function give() returns isolated Slot
+		let h = Holder.create(Slot.held(Box.create(1)))
+		self.served = self.served + 1
+
+		match h.u 'm'
+			empty then break
+			held then return swap h.u with Slot.empty
+		end 'm'
+
+		return Slot.empty
+	end 'give'
+end 'Vault'
+
+function main() returns ExitCode
+	let v = spawn Vault.create()
+	let r = try await v.give() otherwise panic("gone")
+
+	let n = match r 'r'
+		empty gives 0
+		held(b) gives b.n
+	end 'r'
+
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:38:21: 'swap h.u with Slot.empty' crosses to an `isolated` position only as the whole of its region, and it may still name 'h', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-swap-result-is-not-in-an-isolated-position -->
+What `swap h.u with Slot.empty` takes out of the matched field is held by the `match` over `h.u`, so it is not an `isolated` parameter's argument (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b isolated Box)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+function isoSlot(x isolated Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(b) gives b.n
+	end 'c'
+end 'isoSlot'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Box.create(1)))
+	var got = 0 as Count
+
+	match h.u 'm'
+		empty then break
+		held then got = isoSlot(swap h.u with Slot.empty)
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:38:27: 'swap h.u with Slot.empty' crosses to an `isolated` position only as the whole of its region, and it may still name 'h', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-call-result-is-not-a-spawn-argument -->
+`idSlot(u)` may hand back `u`, which its `match` still holds, so the result is not a `spawn` factory's argument (ruling 50 point 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Keeper
+	var u as Slot
+
+	static function create(x Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return match self.u 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+	end 'peek'
+end 'Keeper'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	var k = spawn Keeper.create(Slot.empty)
+
+	match u 'm'
+		empty then k = spawn Keeper.create(idSlot(u))
+		held then break
+	end 'm'
+
+	print("{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:41:38: 'idSlot(u)' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-call-result-is-not-a-reply -->
+`idSlot(u)` may hand back `u`, which its `match` still holds, so a service method does not return it to its sender from the arm (ruling 50 point 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Vault
+	var served as Count
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function give() returns Slot
+		let u = Slot.held(Token.create(1))
+		self.served = self.served + 1
+
+		match u 'm'
+			empty then return idSlot(u)
+			held then break
+		end 'm'
+
+		return Slot.empty
+	end 'give'
+end 'Vault'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let v = spawn Vault.create()
+	let r = try await v.give() otherwise Slot.empty
+
+	let n = match r 'r'
+		empty gives 0
+		held(t) gives t.n
+	end 'r'
+
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:29:22: 'idSlot(u)' crosses to the sender awaiting the reply only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-call-result-is-not-in-an-isolated-position -->
+`idSlot(u)` may hand back `u`, which its `match` still holds, so the result is not an `isolated` parameter's argument (ruling 50 point 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+function isoSlot(x isolated Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(t) gives t.n
+	end 'c'
+end 'isoSlot'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	var got = 0 as Count
+
+	match u 'm'
+		empty then got = isoSlot(idSlot(u))
+		held then break
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:33:28: 'idSlot(u)' crosses to an `isolated` position only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-renamed-held-result-is-not-sent -->
+`r` is assigned what `a.pop()` took out of `a`, which the `match` holds, so `r` is held too and is not sent (ruling 50 point 1: a binding a held value is moved into).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let s = spawn Taker.create()
+	var r = Slot.empty
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then r = try a.pop() otherwise panic("one") and fallthrough
+		held then got = try await s.take(r) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:46:36: 'r' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-holder-that-stored-a-held-value-is-not-sent -->
+`box` is a holder that `a.pop()`'s held result was stored into a field of, so `box` is held too and is not sent (ruling 50 point 1: a holder a held value is stored into).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.empty}
+	end 'create'
+end 'Bag'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeBag(b Bag) returns Count
+		let weight = match b.item 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + weight
+		return self.taken
+	end 'takeBag'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let box = Bag.create()
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then box.item = try a.pop() otherwise panic("one") and fallthrough
+		held then got = try await s.takeBag(box) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:54:39: 'box' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-root-whose-field-alias-stored-a-held-value-is-not-sent -->
+`inner` is a destructured alias of the tuple field `crate.pr`, and what `a.pop()` took out of `a` was stored into it, so `crate`, the root the alias names, is held too and is not sent (ruling H-10: a holder chain through a destructured alias).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.empty}
+	end 'create'
+end 'Bag'
+
+typealias Pair = (Bag, Count)
+
+type Crate
+	var pr as Pair
+
+	static function create() returns Self
+		return Self{pr: (Bag.create(), 0)}
+	end 'create'
+end 'Crate'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeCrate(c Crate) returns Count
+		let (b, _) = c.pr
+		let weight = match b.item 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + weight
+		return self.taken
+	end 'takeCrate'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let crate = Crate.create()
+	let (inner, _) = crate.pr
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then inner.item = try a.pop() otherwise panic("one") and fallthrough
+		held then got = try await s.takeCrate(crate) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:66:41: 'crate' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-root-whose-field-alias-is-matched-is-not-sent -->
+`inner` is a destructured alias of the tuple field `crate.pr` and the `match` holds it across its arms, so `crate`, the root the alias names, is held and is not sent from an arm (ruling H-10: the subject's alias chain).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.empty}
+	end 'create'
+end 'Bag'
+
+typealias Pair = (Bag, Count)
+
+type Crate
+	var pr as Pair
+
+	static function create() returns Self
+		return Self{pr: (Bag.create(), 0)}
+	end 'create'
+end 'Crate'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeCrate(c Crate) returns Count
+		let (b, _) = c.pr
+		let weight = match b.item 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + weight
+		return self.taken
+	end 'takeCrate'
+end 'Taker'
+
+function main() returns ExitCode
+	let crate = Crate.create()
+	crate.pr.0.item = Slot.held(Token.create(2))
+	let (inner, _) = crate.pr
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match inner.item 'm'
+		empty then break
+		held then got = try await s.takeCrate(crate) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:63:41: cannot hand 'crate' to the service it is sent to: 'crate' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: error.a-root-two-holders-up-whose-field-alias-stored-a-held-value-is-not-sent -->
+`inner` aliases a tuple field of `shelf.cr`, a holder two hops below `shelf`, and what `a.pop()` took out of `a` was stored into it, so `shelf` is held too and is not sent (ruling H-10: the chain is followed to the root).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.empty}
+	end 'create'
+end 'Bag'
+
+typealias Pair = (Bag, Count)
+
+type Crate
+	var pr as Pair
+
+	static function create() returns Self
+		return Self{pr: (Bag.create(), 0)}
+	end 'create'
+end 'Crate'
+
+type Shelf
+	var cr as Crate
+
+	static function create() returns Self
+		return Self{cr: Crate.create()}
+	end 'create'
+end 'Shelf'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeShelf(sh Shelf) returns Count
+		let (b, _) = sh.cr.pr
+		let weight = match b.item 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + weight
+		return self.taken
+	end 'takeShelf'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let shelf = Shelf.create()
+	let (inner, _) = shelf.cr.pr
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then inner.item = try a.pop() otherwise panic("one") and fallthrough
+		held then got = try await s.takeShelf(shelf) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:74:41: 'shelf' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: a-root-whose-field-alias-stored-an-unheld-value-is-sent -->
+`inner` is a destructured alias of the tuple field `crate.pr`, but what is stored into it is a fresh `Slot.empty`, which no `match` holds, so `crate` stays free and is sent (ruling H-10, accepted control).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.empty}
+	end 'create'
+end 'Bag'
+
+typealias Pair = (Bag, Count)
+
+type Crate
+	var pr as Pair
+
+	static function create() returns Self
+		return Self{pr: (Bag.create(), 0)}
+	end 'create'
+end 'Crate'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeCrate(c Crate) returns Count
+		let (b, _) = c.pr
+		let weight = match b.item 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + weight
+		return self.taken
+	end 'takeCrate'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.empty)
+	let crate = Crate.create()
+	let (inner, _) = crate.pr
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then inner.item = Slot.empty and fallthrough
+		held then got = try await s.takeCrate(crate) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+
+<!-- test: error.a-root-whose-plain-field-alias-stored-a-held-value-is-not-an-isolated-argument -->
+`inner` is a plain alias of the field `crate.bag`, whose `Bag` holds no unique value, and what `a.pop()` took out of `a` was stored through it, so `crate`, the root the alias names, is held and is not an `isolated` parameter's argument (ruling H-11). The case pins the order of two refusals: without the holder chain the same program is refused as "'crate' is not isolated".
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.empty}
+	end 'create'
+end 'Bag'
+
+type Crate
+	var bag as Bag
+	var n as Count
+
+	static function create() returns Self
+		return Self{bag: Bag.create(), n: 3}
+	end 'create'
+end 'Crate'
+
+function take(c isolated Crate) returns Count
+	return c.n
+end 'take'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Box.create(2)))
+	let crate = Crate.create()
+	let inner = crate.bag
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then inner.item = try a.pop() otherwise panic("one") and fallthrough
+		held then got = take(crate)
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:49:24: 'crate' crosses to an `isolated` position only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-root-whose-plain-field-alias-is-matched-is-not-an-isolated-argument -->
+`inner` is a plain alias of the field `crate.bag`, whose `Bag` holds no unique value, and the `match` holds `inner.item` across its arms, so `crate`, the root the alias names, is matched by the arm too and is not an `isolated` parameter's argument from it (ruling H-11). The case pins the order of two refusals: without the holder chain the same program is refused as "'crate' is not isolated".
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+type Bag
+	var item as Slot
+
+	static function create() returns Self
+		return Self{item: Slot.held(Box.create(2))}
+	end 'create'
+end 'Bag'
+
+type Crate
+	var bag as Bag
+	var n as Count
+
+	static function create() returns Self
+		return Self{bag: Bag.create(), n: 3}
+	end 'create'
+end 'Crate'
+
+function take(c isolated Crate) returns Count
+	return c.n
+end 'take'
+
+function main() returns ExitCode
+	let crate = Crate.create()
+	let inner = crate.bag
+	var got = 0 as Count
+
+	match inner.item 'm'
+		empty then break
+		held then got = take(crate)
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:45:24: cannot hand 'crate' to an `isolated` position: 'crate' is matched by the arm this call is in, which lends it to its bindings; move it before or after the `match`
+```
+
+<!-- test: a-swap-and-a-pop-in-an-arm-that-binds-nothing-are-accepted -->
+In an arm that binds no payload, whether it names a payload case (`held then`) or not (`empty then`), `pop` and `swap` on the matched subject stay legal, and what they take out goes on after the `match` (ruling 45.1; ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Pod
+	empty
+	held(b isolated Box)
+end 'Pod'
+
+type Holder
+	var u as isolated Pod
+
+	static function create(u isolated Pod) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+function weigh(x Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(t) gives t.n
+	end 'c'
+end 'weigh'
+
+function pour(x isolated Pod) returns Count
+	return match x 'c'
+		empty gives 0
+		held(b) gives b.n
+	end 'c'
+end 'pour'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let h = Holder.create(Pod.empty)
+	var popped = Slot.empty
+	var moved = Pod.empty as isolated Pod
+
+	match try a.get(0) otherwise panic("one") 'p'
+		empty then break
+		held then popped = try a.pop() otherwise panic("one")
+	end 'p'
+
+	match h.u 'q'
+		empty then moved = swap h.u with Pod.held(Box.create(3))
+		held then break
+	end 'q'
+
+	let first = weigh(popped)
+	let second = pour(moved)
+	let third = pour(swap h.u with Pod.empty)
+	print("{first} {second} {third}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 0 3
+```
+
+<!-- test: error.a-held-value-crosses-from-a-subject-that-is-a-var -->
+A `var` is held like a `let`: what `a.pop()` takes out of the `var` `a` is held by the `match` over `a.get(0)`, so it is not sent, and `a` is reassigned only after the `match` (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function main() returns ExitCode
+	var a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let s = spawn Taker.create()
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then break
+		held then got = try await s.take(try a.pop() otherwise panic("one")) otherwise 0
+	end 'm'
+
+	a = Slots.create(0)
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:45:36: 'try a.pop() otherwise panic("one")' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-value-crosses-from-a-subject-that-is-a-mutable-parameter -->
+A `mutable` parameter is held like a local: what `a.pop()` takes out of the `mutable` parameter `a` is held by the `match` over `a.get(0)`, so it is not sent (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+typealias Slots = Array with Slot
+
+function relay(a mutable Slots, s Taker.handle) returns Count
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		empty then break
+		held then got = try await s.take(try a.pop() otherwise panic("one")) otherwise 0
+	end 'm'
+
+	return got
+end 'relay'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let s = spawn Taker.create()
+	print("{relay(a, s: s)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:42:36: 'try a.pop() otherwise panic("one")' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-value-crosses-from-a-subject-that-is-a-self-field -->
+`match self.u` in a method holds `self`, the root of the path, so what `swap self.u with Slot.empty` takes out of the matched field is not sent (ruling 48 point 1; ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+type Shelf
+	var u as isolated Slot
+
+	static function create(x isolated Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	function relay(s Taker.handle) returns Count
+		var got = 0 as Count
+
+		match self.u 'm'
+			empty then break
+			held then got = try await s.take(swap self.u with Slot.empty) otherwise 0
+		end 'm'
+
+		return got
+	end 'relay'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create(Slot.held(Token.create(1)))
+	let s = spawn Taker.create()
+	print("{shelf.relay(s)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:47:37: 'swap self.u with Slot.empty' crosses to the service it is sent to only as the whole of its region, and it may still name 'self', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-value-crosses-from-a-subject-that-is-a-local-inside-modify -->
+A local declared inside a `modify` is held like any other: what `a.pop()` takes out of it is held by the `match` over `a.get(0)`, so it is not a `spawn` factory's argument (ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Keeper
+	var n as Count
+
+	static function create(x Slot) returns Self
+		let n = match x 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Count
+		return self.n
+	end 'size'
+end 'Keeper'
+
+function main() returns ExitCode
+	let b = Box.create(1) as isolated Box
+
+	modify b 'open'
+		let a = Slots.create(0)
+		a.push(Slot.held(Token.create(2)))
+
+		match try a.get(0) otherwise panic("one") 'm'
+			empty then break
+			held then let _ = spawn Keeper.create(try a.pop() otherwise panic("one"))
+		end 'm'
+	end 'open'
+
+	let k = spawn Keeper.create(Slot.empty)
+	print("{try await k.size() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:53:42: 'try a.pop() otherwise panic("one")' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-value-crosses-from-a-subject-that-is-an-acquired-state-inside-acquire -->
+Inside `acquire`, the name `s` is the acquired state and resolves to the binding it shadows, so what `s.a.pop()` takes out of the state is held by the `match` over `s.a.get(0)` and is not a `spawn` factory's argument (#235; ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Vault
+	var a as Slots
+
+	static function create(x Slot) returns Self
+		let a = Slots.create(0)
+		a.push(x)
+		return Self{a: a}
+	end 'create'
+end 'Vault'
+
+type Keeper
+	var n as Count
+
+	static function create(x Slot) returns Self
+		let n = match x 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Count
+		return self.n
+	end 'size'
+end 'Keeper'
+
+function main() returns ExitCode
+	let s = spawn Vault.create(Slot.held(Token.create(2)))
+
+	acquire s 'a1'
+		match try s.a.get(0) otherwise panic("one") 'm'
+			empty then break
+			held then let _ = spawn Keeper.create(try s.a.pop() otherwise panic("one"))
+		end 'm'
+	end 'a1' otherwise 'gone'
+		let _ = 0 as Count
+	end 'gone'
+
+	let k = spawn Keeper.create(Slot.empty)
+	print("{try await k.size() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:52:42: 'try s.a.pop() otherwise panic("one")' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 's', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-value-crosses-from-a-subject-that-is-an-isolated-local-inside-its-own-modify -->
+Inside its own `modify` an `isolated` local is open region data and the `match` lends from it, so what `a.pop()` takes out of it is held by the `match` over `a.get(0)` and is not a `spawn` factory's argument (#235; ruling 50 point 2).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Keeper
+	var n as Count
+
+	static function create(x Slot) returns Self
+		let n = match x 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		return Self{n: n}
+	end 'create'
+
+	export function size() returns Count
+		return self.n
+	end 'size'
+end 'Keeper'
+
+function main() returns ExitCode
+	let a = Slots.create(0) as isolated Slots
+
+	modify a 'open'
+		a.push(Slot.held(Token.create(2)))
+
+		match try a.get(0) otherwise panic("one") 'm'
+			empty then break
+			held then let _ = spawn Keeper.create(try a.pop() otherwise panic("one"))
+		end 'm'
+	end 'open'
+
+	let k = spawn Keeper.create(Slot.empty)
+	print("{try await k.size() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:44:42: 'try a.pop() otherwise panic("one")' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-swap-result-is-not-a-spawn-argument -->
+A crossing door is chosen by the parameter's declaration, so a held `swap` result handed to an unmarked `spawn` factory parameter meets the `spawn` door, which refuses it because it may still name the holder the `match` holds (ruling 50 point 2). The case pins the order of two refusals: without the hold the same `swap` result is refused at the unmarked factory parameter as "'create' hands back mutable data of the isolated region it opens", as `error.an-unheld-swap-result-is-opened-by-an-unmarked-spawn-parameter` shows.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+type Keeper
+	var u as Slot
+
+	static function create(x Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return match self.u 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+	end 'peek'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(1)))
+	var k = spawn Keeper.create(Slot.empty)
+
+	match h.u 'm'
+		empty then break
+		held then k = spawn Keeper.create(swap h.u with Slot.empty)
+	end 'm'
+
+	print("{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:46:37: 'swap h.u with Slot.empty' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 'h', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.an-unheld-swap-result-is-opened-by-an-unmarked-spawn-parameter -->
+A swap result is isolated, so an unmarked `spawn` factory parameter opens it rather than crossing it, and this pin goes red if a swap result ever slips through the unmarked spawn door.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+type Keeper
+	var u as Slot
+
+	static function create(x Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return match self.u 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+	end 'peek'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(1)))
+	var k = spawn Keeper.create(Slot.empty)
+
+	k = spawn Keeper.create(swap h.u with Slot.empty)
+
+	print("{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3201: <fragment>:44:19: 'create' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+```
+
+<!-- test: error.a-held-swap-result-is-not-a-reply -->
+What `swap h.u with Slot.empty` takes out of the matched field is held by the `match` over `h.u`, so a service method does not return it to its sender from the arm through an unmarked return (ruling 50 point 2; #282). The case pins the order of two refusals: without the hold the same `return` is refused as "'swap h.u with Slot.empty' is isolated, the result is not `isolated`".
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+type Vault
+	var served as Count
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function give() returns Slot
+		let h = Holder.create(Slot.held(Token.create(1)))
+		self.served = self.served + 1
+
+		match h.u 'm'
+			empty then break
+			held then return swap h.u with Slot.empty
+		end 'm'
+
+		return Slot.empty
+	end 'give'
+end 'Vault'
+
+function main() returns ExitCode
+	let v = spawn Vault.create()
+	let r = try await v.give() otherwise Slot.empty
+
+	let n = match r 'r'
+		empty gives 0
+		held(t) gives t.n
+	end 'r'
+
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:38:21: 'swap h.u with Slot.empty' crosses to the sender awaiting the reply only as the whole of its region, and it may still name 'h', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-call-subjects-argument-stays-put-in-a-binding-arm -->
+A call subject holds the arguments that can reach its result, so `match next(v)` holds `v` and the `held(x)` arm may not reassign it (ruling 50 point 4, the roots a call subject adds stay put).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function next(b Box) returns Slot
+	if b.n < 3 'more'
+		return Slot.held(Box.create(b.n + 1))
+	end 'more'
+	return Slot.empty
+end 'next'
+
+function main() returns ExitCode
+	var v = Box.create(0)
+
+	for _ in 0 upto 5 'lap'
+		match next(v) 'm'
+			empty then break
+			held(x) then v = Box.create(x.n)
+		end 'm'
+	end 'lap'
+
+	print("{v.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:30:17: 'v' roots what 'm' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: error.an-element-read-subjects-container-stays-put-in-a-binding-arm -->
+An element read subject `match try xs.get(i) otherwise …` holds `xs` (the container it reads, not the index `i`), so the `held(b)` arm may not reassign it (ruling 50 point 4, the roots a call subject adds stay put).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+function main() returns ExitCode
+	var xs = Slots.create(0)
+	xs.push(Slot.held(Box.create(2)))
+	let i = 0 as ElementIndex
+
+	match try xs.get(i) otherwise panic("none") 'm'
+		empty then break
+		held(b) then xs = Slots.create(b.n)
+	end 'm'
+
+	print("{xs.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3203: <fragment>:26:16: 'xs' roots what 'm' lends or iterates and cannot be reassigned or passed by reference inside it
+```
+
+<!-- test: a-call-result-bound-before-the-match-leaves-its-argument-free -->
+Binding the call's result first (`let r = next(v)`) makes `r` the subject, so `v` is free to be reassigned in the binding arm.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function next(b Box) returns Slot
+	if b.n < 3 'more'
+		return Slot.held(Box.create(b.n + 1))
+	end 'more'
+	return Slot.empty
+end 'next'
+
+function main() returns ExitCode
+	var v = Box.create(0)
+
+	for _ in 0 upto 5 'lap'
+		let r = next(v)
+		match r 'm'
+			empty then break
+			held(x) then v = Box.create(x.n)
+		end 'm'
+	end 'lap'
+
+	print("{v.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: a-value-type-field-of-the-matched-record-is-sent-from-a-binding-arm -->
+A value-type field (`generation`) of the held root `self` is a copy, so a binding arm of `match self.slot` may send it to a service.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function note(g Count) returns Count
+		self.taken = self.taken + g
+		return self.taken
+	end 'note'
+end 'Taker'
+
+type Shelf
+	var slot as Slot
+	var generation as Count
+
+	static function create(x Slot) returns Self
+		return Self{slot: x, generation: 4}
+	end 'create'
+
+	function relay(s Taker.handle) returns Count
+		var got = 0 as Count
+
+		match self.slot 'm'
+			empty then break
+			held(t) then got = (try await s.note(self.generation) otherwise 0) + t.n
+		end 'm'
+
+		return got
+	end 'relay'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create(Slot.held(Token.create(1)))
+	let s = spawn Taker.create()
+	print("{shelf.relay(s)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: a-value-type-argument-of-a-call-subject-is-reassigned-in-a-binding-arm -->
+`k` is an `int` argument of the call subject, and a value type is never a root (ruling 50 point 4), so the `held(x)` arm reassigns it.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+function next(b Box, step Count) returns Slot
+	if step < 3 'more'
+		return Slot.held(Box.create(step + b.n))
+	end 'more'
+	return Slot.empty
+end 'next'
+
+function main() returns ExitCode
+	let v = Box.create(0)
+	var k = 0 as Count
+
+	for _ in 0 upto 5 'lap'
+		match next(v, step: k) 'm'
+			empty then break
+			held(x) then k = x.n + 1
+		end 'm'
+	end 'lap'
+
+	print("{k}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: a-value-type-argument-of-a-call-subject-is-sent-from-a-binding-arm -->
+`k` is an `int` argument of the call subject, so it is no root of the `match` and the `held(x)` arm sends it to a service (ruling 50 point 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function note(g Count) returns Count
+		self.taken = self.taken + g
+		return self.taken
+	end 'note'
+end 'Taker'
+
+function next(b Box, step Count) returns Slot
+	return Slot.held(Box.create(b.n + step))
+end 'next'
+
+function main() returns ExitCode
+	let v = Box.create(1)
+	let s = spawn Taker.create()
+	let k = 4 as Count
+	var got = 0 as Count
+
+	match next(v, step: k) 'm'
+		empty then break
+		held(x) then got = (try await s.note(k) otherwise 0) + x.n
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9
+```
+
+<!-- test: an-element-read-subjects-index-is-reassigned-in-a-binding-arm -->
+`match try xs.get(i) otherwise …` holds `xs` and not the index `i`, so the `held` arm reassigns `i` (ruling 50 point 4).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	empty
+	held(b Box)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+function main() returns ExitCode
+	let xs = Slots.create(0)
+	xs.push(Slot.held(Box.create(2)))
+	var i = 0 as ElementIndex
+
+	match try xs.get(i) otherwise panic("none") 'm'
+		empty then break
+		held then i = i + 1
+	end 'm'
+
+	print("{i}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: error.a-copy-of-a-matched-root-is-not-sent-after-the-statement -->
+`w = a` copies the root `a` of the holding `match` in one statement, and the copy is sent in the next, so it is held too (ruling 1: a value's hold is decided when it is minted).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+typealias Slots = Array with Slot
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function takeAll(a Slots) returns Count
+		self.taken = self.taken + (a.count() as Count)
+		return self.taken
+	end 'takeAll'
+end 'Taker'
+
+function main() returns ExitCode
+	let a = Slots.create(0)
+	a.push(Slot.held(Token.create(2)))
+	let s = spawn Taker.create()
+	var w = Slots.create(0)
+	var got = 0 as Count
+
+	match try a.get(0) otherwise panic("one") 'm'
+		held then w = a and fallthrough
+		empty then got = try await s.takeAll(w) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:41:40: 'w' crosses to the service it is sent to only as the whole of its region, and it may still name 'a', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-closures-call-result-is-not-sent -->
+`f` captures `u`, which the `match` holds, so what `f()` returns may still name `u` and is not sent to a service (ruling 50 points 3 and 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Taker
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Taker'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	let s = spawn Taker.create()
+	var f = function() gives Slot.empty
+	var got = 0 as Count
+
+	match u 'm'
+		empty then f = function() gives idSlot(u) and fallthrough
+		held then got = try await s.take(f()) otherwise 0
+	end 'm'
+
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:47:36: 'f()' crosses to the service it is sent to only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-closures-call-result-is-not-a-spawn-argument -->
+`f` captures `u`, which the `match` holds, so what `f()` returns may still name `u` and is not a `spawn` factory's argument (ruling 50 points 3 and 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Keeper
+	var u as Slot
+
+	static function create(x Slot) returns Self
+		return Self{u: x}
+	end 'create'
+
+	export function peek() returns Count
+		return 0
+	end 'peek'
+end 'Keeper'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let u = Slot.held(Token.create(1))
+	var k = spawn Keeper.create(Slot.empty)
+	var f = function() gives Slot.empty
+	let got = 0 as Count
+
+	match u 'm'
+		empty then f = function() gives idSlot(u) and fallthrough
+		held then k = spawn Keeper.create(f())
+	end 'm'
+
+	print("{got}{try await k.peek() otherwise 0}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:41:37: 'f()' crosses to the service the `spawn` starts only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```
+
+<!-- test: error.a-held-closures-call-result-is-not-a-reply -->
+`f` captures `u`, which the `match` holds, so what `f()` returns may still name `u` and a service method does not return it to its sender (ruling 50 points 3 and 1).
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Vault
+	var taken as Count
+
+	static function create() returns Self
+		return Self{taken: 0}
+	end 'create'
+
+	export function give() returns Slot
+		let u = Slot.held(Token.create(1))
+		var f = function() gives Slot.empty
+
+		match u 'm'
+			empty then f = function() gives idSlot(u) and fallthrough
+			held then return f()
+		end 'm'
+	end 'give'
+
+	export function take(s Slot) returns Count
+		let n = match s 'c'
+			empty gives 0
+			held(t) gives t.n
+		end 'c'
+
+		self.taken = self.taken + n
+		return self.taken
+	end 'take'
+end 'Vault'
+
+function idSlot(x Slot) returns Slot
+	return x
+end 'idSlot'
+
+function main() returns ExitCode
+	let v = spawn Vault.create()
+	let got = try await v.give() otherwise Slot.empty
+	let n = match got 'g'
+		empty gives 0
+		held(t) gives t.n
+	end 'g'
+
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3200: <fragment>:30:21: 'f()' crosses to the sender awaiting the reply only as the whole of its region, and it may still name 'u', which the `match` 'm' holds across its arms; hand it over before or after the `match`
+```

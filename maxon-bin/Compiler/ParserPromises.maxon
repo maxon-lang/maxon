@@ -1775,12 +1775,14 @@ extension Parser
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames), range: SourceRange.between(anchor, last: rparenTok))
 
 		self.noteFunctionValueCallSite(func, opIdx: callOpIndex, args: args, argAnchors: argAnchors)
-		self.noteResultCapabilityThrough(result, carrier: callee, declared: self.indirectResultCapabilityDeclared(governing))
+		let declared = self.indirectResultCapabilityDeclared(governing)
+		self.noteResultCapabilityThrough(result, carrier: callee, declared: declared)
 
 		if not self.valueIsAValueType(result) and self.nameIsListed(self.frozenResultClosures, name: self.internedName(governing)) 'aClosureHandingBackFrozenData'
 			self.setValueCapability(result, capability: ValueCapability.immutable)
 		end 'aClosureHandingBackFrozenData'
 
+		self.standCallResultOnItsInputs(result, declared: declared, inputs: args)
 		self.recordDeferredArgumentBindings(pending, callResult: result)
 		self.recordBrandHandOversToFunctionValue(places, opIndex: callOpIndex, range: SourceRange.between(anchor, last: rparenTok))
 		return result

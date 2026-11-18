@@ -49,6 +49,7 @@ SKIPPED_FIELDS = {
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
     ("VarInfo", "isEnrolled"): "false",
     ("VarInfo", "enrolledAt"): "0",
+    ("VarInfo", "nameSlot"): "0",
     ("VarInfo", "moveSite"): "MoveSite.unlocated",
     ("IrBlock", "opsHeld"): "false",
     ("IrFunction", "ownership"): "ColumnOwnership.everything()",

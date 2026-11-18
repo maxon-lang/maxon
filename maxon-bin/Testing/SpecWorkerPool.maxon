@@ -1345,8 +1345,10 @@ type WorkerOutput
 	export function kept() returns isolated WorkerDrain
 		match self.failure 'failure'
 			stated(reason) then return WorkerDrain.unreadable(reason)
-			unstated then return WorkerDrain.lines(self.takeKept())
+			unstated then break
 		end 'failure'
+
+		return WorkerDrain.lines(self.takeKept())
 	end 'kept'
 
 	function keep(text String)
@@ -1735,6 +1737,7 @@ type PersistentWorkerHandle
 
 	function shutDown() returns (WorkerLeaving, WorkerHeard)
 		let leaving = self.leave()
+
 		// Heard before `release`: hearing ends the tree through this handle, and a released one
 		// addresses whatever process next takes the slot.
 		let heard = self.heardOnStderr()

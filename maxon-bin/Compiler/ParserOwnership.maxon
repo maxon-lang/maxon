@@ -3862,10 +3862,10 @@ extension Parser
 		end 'propagate'
 
 		let fork = self.openTryFork(func, flag: flag, result: result, anchor: tryTok, leg: leg)
-		let enclosingStart = self.bodyState.statementStart
+		let enclosingStart = self.currentStatementStart()
 		let enclosingFacts = self.suspendStatementFacts()
 		let handler = try self.parseOtherwiseHandler(func, result: result, flag: fork.errFlag, fused: fork.errFused, target: target, resultUsed: resultUsed, tryTok: tryTok)
-		self.bodyState.statementStart = enclosingStart
+		self.enterStatementStart(enclosingStart)
 		self.resumeStatementFacts(enclosingFacts)
 		let errEnd = self.bodyState.currentBlock
 		let errMoveMark = self.captureMoveMark()
@@ -4756,7 +4756,7 @@ extension Parser
 	end 'bindCaughtError'
 
 	function declareCaughtErrorBinding(name ByteArray, anchor Token, varType MaxonType, value ValueId) returns VarInfo throws SourceParseError
-		return try self.bodyState.scope.declareValueBinding(name, varType: varType, kind: BindingKind.let, value: value, brandId: UnnamedTypeId) otherwise throw SourceParseError.localShadowsSelfField(String.from(name), typeName: String.from(self.enclosingTypeName()), line: anchor.line, column: anchor.column)
+		return try self.bodyState.scope.declareValueBinding(name, varType: varType, kind: BindingKind.let, value: value, brandId: UnnamedTypeId, ledger: self.bodyState.moveLedger) otherwise throw SourceParseError.localShadowsSelfField(String.from(name), typeName: String.from(self.enclosingTypeName()), line: anchor.line, column: anchor.column)
 	end 'declareCaughtErrorBinding'
 
 	// ⭐ **A SCALAR ENUM ERROR'S VALUE, RECOVERED FROM THE FLAG.** The flag carries `ordinal + bias`
@@ -4794,7 +4794,7 @@ extension Parser
 		let flagType = self.signatures.libraryAliasType(FullRangeIntAliasName, into: self.artifact.typeNames)
 		let typedFlag = self.emitRetaggedCastValue(flag, targetType: flagType, range: SourceRange.ofToken(binder.anchor))
 
-		_ = try self.bodyState.scope.declareValueBinding(bindingName, varType: flagType, kind: BindingKind.let, value: typedFlag, brandId: UnnamedTypeId) otherwise throw SourceParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingTypeName()), line: binder.anchor.line, column: binder.anchor.column)
+		_ = try self.bodyState.scope.declareValueBinding(bindingName, varType: flagType, kind: BindingKind.let, value: typedFlag, brandId: UnnamedTypeId, ledger: self.bodyState.moveLedger) otherwise throw SourceParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingTypeName()), line: binder.anchor.line, column: binder.anchor.column)
 		self.bodyState.errorUnionBindings.push(ErrorUnionBinding.create(bindingName, flag: typedFlag, info: info))
 	end 'declareErrorUnionBinding'
 
@@ -4961,7 +4961,7 @@ extension Parser
 		let unionBindingDepth = self.bodyState.errorUnionBindings.count()
 
 		let errEnd = try self.parseBlockBody(func, block: errBlock, label: labelTok.value)
-		self.bodyState.scope.popScope()
+		self.bodyState.scope.popScope(self.bodyState.moveLedger)
 		self.closeDebugScopesAbove(handlerDebugFloor, endsIn: errEnd)
 
 		let matchedTheBinding = self.bodyState.tryBindingMatched
@@ -5476,7 +5476,7 @@ extension Parser
 
 		try self.parseDivergingTerminalForm(func, block: self.bodyState.currentBlock)
 
-		self.bodyState.scope.popScope()
+		self.bodyState.scope.popScope(self.bodyState.moveLedger)
 		self.closeDebugScopesAbove(handlerDebugFloor, endsIn: self.bodyState.currentBlock)
 
 		while self.bodyState.errorUnionBindings.count() > unionBindingDepth 'closeUnionScope'
@@ -9484,6 +9484,11 @@ extension Parser
 	function retainBorrowedAggregate(source ValueId, range SourceRange) returns ValueId
 		let retained = self.emitRetainCall(source, range: range)
 		self.markValueOwnsHeap(retained, exclusivity: OwnedHeapExclusivity.coOwned)
+
+		if self.valueIsASlotRead(source) 'aRetainedFieldRead'
+			self.bodyState.standings.recordCopy(retained, copiedFrom: CopiedFrom.retainedFieldRead(source))
+		end 'aRetainedFieldRead'
+
 		return retained
 	end 'retainBorrowedAggregate'
 
@@ -9548,6 +9553,7 @@ extension Parser
 		self.carryFact(ValueFact.bufferElements, to: to, from: from, source: source, path: path)
 		self.markBufferSurfaceSlots(to, surface: bodySlotSurface(source, value: from))
 		self.carryBrandOrigin(to, from: from, source: source, path: path)
+		self.carryStanding(to, from: from, path: path)
 
 		if not self.bodyState.vacantUnions.isEmpty() and self.valueIsLinear(to) 'aCopyOfALinearValue'
 			self.bodyState.vacantCopies.push(VacantCopy.create(to, source: from))
@@ -9584,8 +9590,36 @@ extension Parser
 			bufferSurface then self.markBufferSurface(to, origin: self.internedName(self.brandIdIn(source, value: from)))
 			sizedContainerBuffer then self.markSizedContainerBuffer(to, origin: self.internedName(self.brandIdIn(source, value: from)))
 			bufferElements then self.markBufferSurfaceElements(to)
+			heldByAMatch then self.bodyState.standings.takeHold(to, hold: source.standings.holdOf(from))
 		end 'fact'
 	end 'applyFact'
+
+	function carryStanding(to ValueId, from ValueId, path ValueCarryPath)
+		if not factCrossesPath(ValueFact.heldByAMatch, path: path) 'noHoldCrosses'
+			return
+		end 'noHoldCrosses'
+
+		match path 'path'
+			capture then panic("carryStanding: a capture path was refused by factCrossesPath above")
+			cellStore then break
+			value or
+			cellLoad or
+			part or
+			copy then self.recordCopyWhileStandingsAreRecorded(to, from: from)
+		end 'path'
+
+		self.takeHoldOfOne(to, input: from)
+	end 'carryStanding'
+
+	function recordCopyWhileStandingsAreRecorded(to ValueId, from ValueId)
+		if self.standingsAreRecorded() 'recorded'
+			self.bodyState.standings.recordCopy(to, copiedFrom: CopiedFrom.copyOf(from))
+		end 'recorded'
+	end 'recordCopyWhileStandingsAreRecorded'
+
+	function standingsAreRecorded() returns bool
+		return self.bodyState.subjectDepth > 0 or not self.bodyState.matchHolds.isEmpty()
+	end 'standingsAreRecorded'
 
 	function carryBrand(to ValueId, from ValueId, source FunctionBodyState, path ValueCarryPath)
 		if path == ValueCarryPath.cellStore 'aCellWearsItsBindingsBrand'

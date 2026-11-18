@@ -4678,10 +4678,10 @@ extension Parser
 			// machine class, and `x = 99.0` on such a parameter was E3009 ("cannot implicitly convert 'float'
 			// to 'int'") until this resolved it. A ranged INT alias stays `named` on purpose: its NAME is what
 			// carries the signedness `valueIsUnsigned` reads.
-			return try self.bodyState.scope.declareCellBinding(paramName, varType: self.resolveFloatAliasType(paramType, scopeFilePath: self.job.path), kind: paramKind, cell: paramValue, epoch: self.mintCellEpoch(CellOccupantExclusivity.coOwned), isParameter: true, crossesByReference: true, brandId: brandId)
+			return try self.bodyState.scope.declareCellBinding(paramName, varType: self.resolveFloatAliasType(paramType, scopeFilePath: self.job.path), kind: paramKind, cell: paramValue, epoch: self.mintCellEpoch(CellOccupantExclusivity.coOwned), isParameter: true, crossesByReference: true, brandId: brandId, ledger: self.bodyState.moveLedger)
 		end 'arrivesAsACellAddress'
 
-		return try self.bodyState.scope.declareParameterBinding(paramName, varType: paramType, kind: paramKind, value: paramValue, brandId: brandId)
+		return try self.bodyState.scope.declareParameterBinding(paramName, varType: paramType, kind: paramKind, value: paramValue, brandId: brandId, ledger: self.bodyState.moveLedger)
 	end 'declareParameterOrCellBinding'
 
 	function bindParameters(func IrFunction, consume CalleeConsume, paramNames NameRoster, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexArray) throws SourceParseError
@@ -6690,7 +6690,7 @@ extension Parser
 	function parseStatementBody(func IrFunction, block IrBlock, head StatementHead) returns IrBlock throws SourceParseError
 		self.bodyState.currentBlock = block
 		let lateFloor = self.bodyState.lateReads.count()
-		self.bodyState.statementStart = self.pos
+		self.enterStatementStart(self.statementStartHere())
 		self.bodyState.statementHead = self.pos
 		self.bodyState.statementOpFloor = self.artifact.module.ops.count()
 		self.bodyState.statementDeferralFloor = self.artifact.deferredChains.count()
@@ -7842,7 +7842,7 @@ extension Parser
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
-		let binding = try self.bodyState.scope.declareValueBinding(nameTok.value, varType: self.typeOf(boundValue), kind: kind, value: boundValue, brandId: self.brandIdOf(boundValue)) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
+		let binding = try self.bodyState.scope.declareValueBinding(nameTok.value, varType: self.typeOf(boundValue), kind: kind, value: boundValue, brandId: self.brandIdOf(boundValue), ledger: self.bodyState.moveLedger) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
 		self.keyAdoptableLocal(nameTok, kind: kind, value: boundValue)
 		self.trackDebugLocal(binding)
 
@@ -8614,7 +8614,7 @@ extension Parser
 	// drops exactly once, and a terminated
 	// edge has already dropped, so this routine only unwinds the TRACKING lists and emits nothing.
 	function closeBlock(mark BlockMark, endsIn IrBlock)
-		self.bodyState.scope.popScope()
+		self.bodyState.scope.popScope(self.bodyState.moveLedger)
 
 		while self.bodyState.mutableVars.count() > mark.mutableCount 'drainVars'
 			self.popMutableVar()
@@ -9150,7 +9150,7 @@ extension Parser
 		let crossesByReference = true
 		let filled = try self.fillFreshCell(boundValue, declared: declared, crossesByReference: crossesByReference, rhsWasBareLocal: rhsWasBareLocal, anchor: nameTok)
 		self.carryCapability(boundValue, target: filled.cell)
-		let binding = try self.bodyState.scope.declareCellBinding(nameTok.value, varType: declared, kind: BindingKind.var, cell: filled.cell, epoch: filled.epoch, isParameter: false, crossesByReference: crossesByReference, brandId: self.brandIdOf(boundValue)) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
+		let binding = try self.bodyState.scope.declareCellBinding(nameTok.value, varType: declared, kind: BindingKind.var, cell: filled.cell, epoch: filled.epoch, isParameter: false, crossesByReference: crossesByReference, brandId: self.brandIdOf(boundValue), ledger: self.bodyState.moveLedger) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
 		self.keyAdoptableLocal(nameTok, kind: BindingKind.var, value: boundValue)
 		self.trackDebugLocal(binding)
 		self.enrolOwnedBinding(binding)

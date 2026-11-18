@@ -1733,6 +1733,11 @@ extension Parser
 		self.bodyState.elementReads = withValueMarked(self.bodyState.elementReads, value: value)
 	end 'markElementRead'
 
+	function shedSlotReadMarks(value ValueId)
+		unmarkValue(self.bodyState.overwritableSlotReads, value: value)
+		unmarkValue(self.bodyState.elementReads, value: value)
+	end 'shedSlotReadMarks'
+
 	function valueIsAStorageRead(value ValueId) returns bool
 		return valueIsMarked(self.bodyState.overwritableSlotReads, value: value) or valueIsMarked(self.bodyState.elementReads, value: value)
 	end 'valueIsAStorageRead'
@@ -2576,7 +2581,7 @@ extension Parser
 
 		// A use-site phrase is spelled from `statementStart`; left at a fresh body's 0 it would spell the
 		// file up to every use in the closure.
-		self.bodyState.statementStart = self.pos
+		self.enterStatementStart(self.statementStartHere())
 		self.bodyState.outerBodyStart = savedBody.outerBodyStart
 		self.bodyState.resultOrigin = resultOriginOf(declaredResult)
 		self.bodyState.boundParams = savedBody.boundParams
@@ -2722,6 +2727,11 @@ extension Parser
 		let destructor = self.closureEnvDestructor(closureName, releasedSlots: releasedSlots, captureNames: captureNamesSnapshot, capturedTypes: capturedTypesSnapshot, closureLayout: lifted.closureLayout, anchor: functionTok)
 		let result = self.buildClosureEnv(closureName, captureCount: captureCount as EnvSlotIndex, capturedValues: capturedValuesSnapshot, capturedTypes: capturedTypesSnapshot, destructor: destructor, anchor: functionTok)
 		self.carryReadOnlyCaptures(result, captured: capturedValuesSnapshot, captureNames: captureNamesSnapshot, captureAnchors: captureAnchorsSnapshot)
+
+		if not self.bodyState.matchHolds.isEmpty() 'aHoldIsOpen'
+			self.standOnInputs(result, rowInputs: ValueIdArray.create(0), holdInputs: self.capturedRecordsOf(capturedValuesSnapshot))
+		end 'aHoldIsOpen'
+
 		return result
 	end 'parseClosureExpression'
 

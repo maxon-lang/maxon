@@ -23,11 +23,29 @@ release's version as its heading when the release is cut.
   E3214. A call that only reads it stays legal.
   Fix: write through the binding, or make the write, copy or store before or after the `match`.
 
-- Inside a `match` arm that binds a payload, the variable the `match` reads (`s` in `match s`, `h` in
-  `match h.u`) stays put, whatever the union holds: reassigning it, rebinding it in a tuple assignment or
-  passing it to a `mutable` parameter there is E3203 (`'s' roots what 'which' lends or iterates and cannot
-  be reassigned or passed by reference inside it`). An arm that binds nothing may still reassign it.
-  Fix: assign the variable after the `match`, from a value the arm gives.
+- Inside a `match` arm that binds a payload, each variable the `match` reads stays put, whatever the union
+  holds: `s` in `match s`, `h` in `match h.u`, the container `xs` in `match try xs.get(i) otherwise …` and an
+  argument `v` of a call subject in `match next(v)`. Reassigning it, rebinding it in a tuple assignment or
+  passing it to a `mutable` parameter there is E3203 (`'v' roots what 'm' lends or iterates and cannot be
+  reassigned or passed by reference inside it`). An arm that binds nothing may still reassign it, and an
+  argument or index of a value type (`i` in `xs.get(i)`) stays free.
+  Fix: assign the variable after the `match`, from a value the arm gives; for a call subject, bind the result
+  first (`let r = next(v)`) and match `r`.
+
+- Inside a `match` that lends its subject, a value made from a variable the `match` holds is held too, and is
+  not sent, handed to a `spawn` factory or replied inside the `match`: a call result the held variable can
+  reach (`idSlot(u)` in `match u`), the result of a closure that captured it, an element popped out of a
+  matched container (`a.pop()` in `match try a.get(0) otherwise …`), a copy (`w = a`), and a record a held
+  value is stored into (`box.item = a.pop()`), also through a field alias made before the `match` (after
+  `let inner = crate.b`, `inner.item = a.pop()` holds `crate`). That is E3200 (``'idSlot(u)' crosses to the
+  service it is sent to only as the whole of its region, and it may still name 'u', which the `match` 'm'
+  holds across its arms; hand it over before or after the `match` ``). The `match` holds the container of an
+  element read, each argument of a call subject whose type is not a value type, and every record on a field
+  path (`self` in `match self.f`, `crate` in `match inner.u`), and sending one of them there is E3214
+  (``cannot hand 'a' to the service it is sent to: 'a' is matched by the arm this call is in, which lends it
+  to its bindings; move it before or after the `match` ``).
+  Fix: hand the value over before or after the `match`. Binding a field-path subject with `let` before the
+  `match` holds the same records, so move the send out of the `match`.
 
 - A variable moved before an `if` and refilled in only some of its branches is moved after the `if`, so a
   read of it there is E3102.

@@ -5,12 +5,22 @@ let MovedFromWrite = ".movedFrom = "
 let BoundValueWrite = ".boundValue = "
 let SetterMovedFromWrite = "self.movedFrom = "
 let SetterBoundValueWrite = "self.boundValue = "
+let ScopeSourceName = "Scope.maxon"
+let ScopeSourceDirectory = "Maxon"
+let InstallDoor = "function install("
+let InstallDoorEnd = "end 'install'"
+let PopScopeDoor = "export function popScope("
+let PopScopeDoorEnd = "end 'popScope'"
+let MembershipUpsert = "vars.upsert("
+let MembershipRemove = "vars.remove("
 
 typealias LineNumber = int(0 to u64.max)
+typealias FoundCount = int(0 to u64.max)
 
 test 'an owned binding is moved and rebound only through the setters that tell the move ledger'
 	let offenders = StringArray.create(0)
-	collectDirectWrites(compilerSourceRoot(), into: offenders)
+	let symbolTables = collectDirectWrites(compilerSourceRoot(), into: offenders)
+	Expect.equal(symbolTables, expected: 1 as FoundCount, message: "the gate found {symbolTables} copies of {ScopeSourceDirectory}/{ScopeSourceName} under '{CompilerSourceRoot}', not one, so it did not check the symbol table's membership writes")
 
 	var listed = ""
 
@@ -18,15 +28,16 @@ test 'an owned binding is moved and rebound only through the setters that tell t
 		listed.append("\n  {offender}")
 	end 'eachOffender'
 
-	Expect.isEmpty(listed, message: "these lines write `movedFrom` or `boundValue` directly. The exit-drop chains cache their release decisions per owned binding and revalidate only the positions the move ledger was told about, so an unreported write is read stale: write through `VarInfo.setMovedFrom`, `VarInfo.setBoundValue` or `Scope.setValue`, which report it.{listed}")
+	Expect.isEmpty(listed, message: "these lines write `movedFrom` or `boundValue` directly. The exit-drop chains cache their release decisions per owned binding and revalidate only the positions the move ledger was told about, so an unreported write is read stale: write through `VarInfo.setMovedFrom`, `VarInfo.setBoundValue` or `Scope.setValue`, which report it. A binding enters or leaves the symbol table only in `Scope.install` and `Scope.popScope`, which tell the ledger's live-name index.{listed}")
 end 'an owned binding is moved and rebound only through the setters that tell the move ledger'
 
 function compilerSourceRoot() returns FilePath
 	return try FilePath.from(CompilerSourceRoot) otherwise panic("owned-binding-move-state: the gate could not run - '{CompilerSourceRoot}' is not a spellable path")
 end 'compilerSourceRoot'
 
-function collectDirectWrites(dir FilePath, into StringArray)
+function collectDirectWrites(dir FilePath, into StringArray) returns FoundCount
 	let entries = listing(dir)
+	var symbolTables = 0 as FoundCount
 
 	for entry in entries 'eachEntry'
 		if entry.filename().startsWith(HiddenEntryPrefix) 'aBuildOutputDirectory'
@@ -34,12 +45,28 @@ function collectDirectWrites(dir FilePath, into StringArray)
 		end 'aBuildOutputDirectory'
 
 		if Directory.isDirectory(entry) 'aSubdirectory'
-			collectDirectWrites(entry, into: into)
+			symbolTables = symbolTables + collectDirectWrites(entry, into: into)
 		end 'aSubdirectory' else if entry.filename().endsWith(MaxonSourceSuffix) 'aSource'
 			collectDirectWritesIn(entry, into: into)
+
+			if isTheSymbolTable(entry) 'theSymbolTable'
+				collectUntoldMembershipWritesIn(entry, into: into)
+				symbolTables = symbolTables + 1
+			end 'theSymbolTable'
 		end 'aSource'
 	end 'eachEntry'
+
+	return symbolTables
 end 'collectDirectWrites'
+
+function isTheSymbolTable(source FilePath) returns bool
+	if source.filename() != ScopeSourceName 'anotherFile'
+		return false
+	end 'anotherFile'
+
+	let directory = try source.parent() otherwise return false
+	return directory.filename() == ScopeSourceDirectory
+end 'isTheSymbolTable'
 
 function collectDirectWritesIn(source FilePath, into StringArray)
 	let text = fileText(source)
@@ -58,3 +85,24 @@ function collectDirectWritesIn(source FilePath, into StringArray)
 		end 'aDirectWrite'
 	end 'eachLine'
 end 'collectDirectWritesIn'
+
+function collectUntoldMembershipWritesIn(source FilePath, into StringArray)
+	let text = fileText(source)
+	var number = 0 as LineNumber
+	var inADoor = false
+
+	for line in text.split(LineFeed) 'eachLine'
+		number = number + 1
+		let trimmed = line.trim()
+
+		if trimmed.startsWith(InstallDoor) or trimmed.startsWith(PopScopeDoor) 'entersADoor'
+			inADoor = true
+		end 'entersADoor' else if trimmed.startsWith(InstallDoorEnd) or trimmed.startsWith(PopScopeDoorEnd) 'leavesADoor'
+			inADoor = false
+		end 'leavesADoor'
+
+		if not inADoor and not trimmed.startsWith(LineComment) and (trimmed.contains(MembershipUpsert) or trimmed.contains(MembershipRemove)) 'anUntoldMembershipWrite'
+			into.push("{source.toString()}:{number}: {trimmed}")
+		end 'anUntoldMembershipWrite'
+	end 'eachLine'
+end 'collectUntoldMembershipWritesIn'

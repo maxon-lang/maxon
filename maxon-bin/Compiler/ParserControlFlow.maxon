@@ -40,7 +40,7 @@ extension Parser
 			elseEnd = try self.parseElseBranchBody(func, elseBlock: elseEnd, ifEnd: ifEnd)
 		end 'writtenBody'
 
-		self.bodyState.scope.popScope()
+		self.bodyState.scope.popScope(self.bodyState.moveLedger)
 		self.closeDebugScopesAbove(handlerDebugFloor, endsIn: elseEnd)
 		self.dropArmScopedOwned(ownedFloor, exitBlock: elseEnd, anchor: binder.anchor)
 
@@ -891,7 +891,15 @@ extension Parser
 		// entries below, which is what makes every question after this point an ARRAY's question.
 		let sourceClaim = self.openClaim(IterationSourceClaim)
 		self.statement.lastBareBindingImmutableName = EmptySourceText
-		var source = try self.parseClaimedValueExpression(func, rangeIsAValue: false)
+		let movedBeforeTheSource = self.bodyState.moveLedger.moveMark()
+		let sourceValueStart = self.openSubject()
+		var source = try self.parseClaimedValueExpression(func, rangeIsAValue: false) otherwise (err) 'refused'
+			self.closeSubject()
+			throw err
+		end 'refused'
+
+		self.closeSubject()
+		let parsedSource = source
 		let sourceIsRebindable = self.expressionImmutableBlame(self.tokenAt(sourceStart), valueStart: sourceStart).isEmpty()
 		let elementsAreWritable = sourceIsRebindable and self.sourceElementQualifier(source) == GenericArgQualifier.plain and self.sourceReceiverElementQualifier(source, sourceOpFloor: sourceOpFloor) == GenericArgQualifier.plain
 		try self.closeClaim(sourceClaim, keepsTheCoveredAwait: true)
@@ -1381,7 +1389,7 @@ extension Parser
 		let outerDrainingLabel = self.statement.drainingLabel
 
 		let heldByTheLend = self.pauseLentHolders(walkedSource) if drainsItsSource else PausedHolders.create()
-		let sourceRoots = self.subjectRootsIn(sourceStart, stop: src.sourceEnd) if drainsItsSource else SubjectRoots.create()
+		let sourceRoots = self.subjectRootsOf(parsedSource, floor: sourceValueStart, movedBefore: movedBeforeTheSource, carried: phiVars) if drainsItsSource else SubjectRoots.create()
 
 		if drainsItsSource 'readOnlyInTheBody'
 			self.pauseJoinedVariables(drainedValue, into: heldByTheLend)
@@ -1961,7 +1969,7 @@ extension Parser
 			self.setValueCapability(value, capability: ValueCapability.immutable)
 		end 'anImmutableSlot'
 
-		let loopBinding = try self.bodyState.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), kind: BindingKind.let, value: value, brandId: self.brandIdOf(value)) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
+		let loopBinding = try self.bodyState.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), kind: BindingKind.let, value: value, brandId: self.brandIdOf(value), ledger: self.bodyState.moveLedger) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
 		self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable, declToken: self.pos))
 		let elementsMayBeWritten = writable and storedKey == StoredKeyCursor.neither
 		loopBinding.elementWritable = elementsMayBeWritten
@@ -4548,7 +4556,9 @@ extension Parser
 
 		let errorUnion = self.errorUnionForScrutinee(scrutStart)
 		let isErrorUnionMatch = errorUnionIsSynthesized(errorUnion)
-		let parsedScrut = try self.parseExpression(func, block: block)
+		let movedBeforeTheSubject = self.bodyState.moveLedger.moveMark()
+		let subjectFloor = self.openSubject()
+		let parsedScrut = try self.parseMatchSubject(func, block: block)
 		let scrutEnd = self.pos
 
 		// Inside an open boxed arm `e` names that arm's retagged box, while the dispatch and the match
@@ -4745,7 +4755,7 @@ extension Parser
 		// `dead` block for an exhaustive enum (created after the loop). `planMissIsUnreachable` is set
 		// for the dead block only, and the three travel to the dispatch as one `DispatchMiss`.
 		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
-		let subjectRoots = self.subjectRootsIn(scrutStart, stop: scrutEnd)
+		let subjectRoots = self.subjectRootsOf(parsedScrut, floor: subjectFloor, movedBefore: movedBeforeTheSubject, carried: LoopPhiVarArray.create(0))
 		let lentRoots = self.lentArmRootsOf(scrut, subjectRoots: subjectRoots, isLentMatch: isLentMatch)
 		let lendsItsSubject = isLentMatch and not consumesTheSubject
 		let condRoots = subjectRoots.roots if lendsItsSubject and subjectRoots.throughCond else LentArmRoots.create()
@@ -5157,7 +5167,7 @@ extension Parser
 				self.bodyState.lentArms.popTo(lentArmFloor)
 
 				if opensArmScope 'closeArmScope'
-					self.bodyState.scope.popScope()
+					self.bodyState.scope.popScope(self.bodyState.moveLedger)
 					self.closeDebugScopesAbove(armDebugFloor, endsIn: armBody.exitBlock)
 				end 'closeArmScope'
 
@@ -5507,10 +5517,10 @@ extension Parser
 		var held = scrut
 
 		while true 'eachHolder'
-			let origin = try self.regionFactsForRead().fieldOrigins.get(held) otherwise break
-			roots.values.push(origin.holder)
+			let holder = try subjectRoots.holders.get(held) otherwise break
+			roots.values.push(holder)
 			roots.names.push(EmptySourceText)
-			held = origin.holder
+			held = holder
 		end 'eachHolder'
 
 		if subjectRoots.throughCond 'everyArmHoldsTheCondRoots'
@@ -5529,161 +5539,112 @@ extension Parser
 		return roots
 	end 'lentArmRootsOf'
 
-	function subjectRootsIn(start ElementIndex, stop ElementIndex) returns SubjectRoots
-		let found = SubjectRoots.create()
-		self.collectSubjectRoots(start, stop: stop, into: found)
+	function subjectRootsOf(value ValueId, floor ValueId, movedBefore ElementIndex, carried LoopPhiVarArray) returns SubjectRoots
+		let holders = PartHolderMap.create()
+		let walk = self.rootsOf(value, floor: floor, holders: HolderSink.into(holders))
+		let found = SubjectRoots.of(walk, holders: holders)
+		self.nameRoots(walk.leaves, movedBefore: movedBefore, carried: carried, into: found.roots)
 		return found
-	end 'subjectRootsIn'
+	end 'subjectRootsOf'
 
-	function collectSubjectRoots(start ElementIndex, stop ElementIndex, into SubjectRoots)
-		var first = start
-		var last = stop
+	function rootsOf(start ValueId, floor ValueId, holders HolderSink) returns SourceWalk
+		let walk = SourceWalk.create()
+		let spine = ValueIdArray.create(0)
+		let below = ValueIdArray.create(0)
+		let seen = ValueMarkSet.create()
+		let keepsValueTypes = self.valueIsAValueType(start)
+		pushUnseen(start, onto: spine, seen: seen)
 
-		while last > first + 1 and self.kindAt(first) == TokenKind.leftParen and self.parenGroups.closeOf(self.tokens, open: first) == last - 1 'eachEnclosingGroup'
-			first = first + 1
-			last = last - 1
-		end 'eachEnclosingGroup'
+		while true 'eachNode'
+			let onTheSpine = not spine.isEmpty()
+			var node = start
 
-		if first >= last 'nothingSpelled'
-			return
-		end 'nothingSpelled'
+			if onTheSpine 'aSpineNode'
+				node = try spine.pop() otherwise panic("rootsOf: spine.pop on a stack that is not empty")
+			end 'aSpineNode' else 'anInputNode'
+				node = try below.pop() otherwise break
+			end 'anInputNode'
 
-		if self.collectCondArmRoots(first, stop: last, into: into) 'aMergeOfArms'
-			return
-		end 'aMergeOfArms'
-
-		let opener = self.kindAt(first)
-		var baseEnd = first + 1
-
-		if opener == TokenKind.leftParen 'aGroupedBase'
-			baseEnd = self.parenGroups.closeOf(self.tokens, open: first) + 1
-		end 'aGroupedBase' else if opener != TokenKind.identifier 'noLocalBase'
-			return
-		end 'noLocalBase'
-
-		if not self.tokensSpellAFieldChain(baseEnd, stop: last) 'aCallOrAnOperator'
-			return
-		end 'aCallOrAnOperator'
-
-		if opener == TokenKind.leftParen 'theGroupHoldsTheRoots'
-			self.collectSubjectRoots(first + 1, stop: baseEnd - 1, into: into)
-			return
-		end 'theGroupHoldsTheRoots'
-
-		let name = self.tokenAt(first).value
-
-		if not self.bodyState.scope.contains(name) or self.bodyState.scope.isSelfField(name) or into.roots.names.contains(name) 'notAPlainLocal'
-			return
-		end 'notAPlainLocal'
-
-		into.roots.values.push(self.bodyState.scope.getInfo(name).boundValue)
-		into.roots.names.push(name)
-	end 'collectSubjectRoots'
-
-	function collectCondArmRoots(first ElementIndex, stop ElementIndex, into SubjectRoots) returns bool
-		if self.kindAt(first) == TokenKind.match 'aMatchMerge'
-			into.throughCond = true
-			self.collectMatchArmRoots(first, stop: stop, into: into)
-			return true
-		end 'aMatchMerge'
-
-		if self.kindAt(first) == TokenKind.try 'aTryMerge'
-			let otherwiseAt = try self.topLevelTokenIn(first + 1, stop: stop, kind: TokenKind.otherwise) otherwise return false
-			into.throughCond = true
-			self.collectSubjectRoots(first + 1, stop: otherwiseAt, into: into)
-			self.collectSubjectRoots(otherwiseAt + 1, stop: stop, into: into)
-			return true
-		end 'aTryMerge'
-
-		let ifAt = try self.topLevelTokenIn(first, stop: stop, kind: TokenKind.if) otherwise return false
-		let elseAt = try self.topLevelTokenIn(ifAt + 1, stop: stop, kind: TokenKind.else) otherwise return false
-		into.throughCond = true
-		self.collectSubjectRoots(first, stop: ifAt, into: into)
-		self.collectSubjectRoots(elseAt + 1, stop: stop, into: into)
-		return true
-	end 'collectCondArmRoots'
-
-	function topLevelTokenIn(start ElementIndex, stop ElementIndex, kind TokenKind) returns ElementIndex throws AbsentError
-		var index = start
-
-		while index < stop 'eachToken'
-			let at = self.kindAt(index)
-
-			if at == kind 'theToken'
-				return index
-			end 'theToken'
-
-			if tokenKindOpensAGroup(at) 'aGroup'
-				index = self.groupEndAfter(index, stop: stop)
+			if self.walkSkips(node, keepsValueTypes: keepsValueTypes) 'aCopyHoldsNothing'
 				continue
-			end 'aGroup'
+			end 'aCopyHoldsNothing'
 
-			index = index + 1
-		end 'eachToken'
+			if onTheSpine and node >= floor and self.bodyState.standings.isAMerge(node) 'aMergeOfArms'
+				walk.throughCond = true
+			end 'aMergeOfArms'
 
-		throw AbsentError.absent
-	end 'topLevelTokenIn'
+			var stepped = false
 
-	function groupEndAfter(open ElementIndex, stop ElementIndex) returns ElementIndex
-		if self.kindAt(open) == TokenKind.leftParen 'aParenGroup'
-			return self.parenGroups.closeOf(self.tokens, open: open) + 1
-		end 'aParenGroup'
+			if onTheSpine 'alongTheSpine'
+				stepped = self.pushSources(node, floor: floor, holders: holders, copiesOnto: spine, copiesSeen: seen, partsOnto: spine, partsSeen: seen, inputsOnto: below, inputsSeen: seen)
+			end 'alongTheSpine' else 'belowTheSpine'
+				stepped = self.pushSources(node, floor: floor, holders: holders, copiesOnto: below, copiesSeen: seen, partsOnto: below, partsSeen: seen, inputsOnto: below, inputsSeen: seen)
+			end 'belowTheSpine'
 
-		var depth = 0 as NestingDepth
-		var index = open
+			if not stepped 'aLeaf'
+				walk.leaves.push(node)
+			end 'aLeaf'
+		end 'eachNode'
 
-		while index < stop 'eachToken'
-			depth = groupNestingAfter(self.kindAt(index), nesting: depth)
-			index = index + 1
+		return walk
+	end 'rootsOf'
 
-			if depth == 0 'theGroupCloses'
-				return index
-			end 'theGroupCloses'
-		end 'eachToken'
+	function walkSkips(node ValueId, keepsValueTypes bool) returns bool
+		return not keepsValueTypes and self.valueIsAValueType(node)
+	end 'walkSkips'
 
-		panic("groupEndAfter: the group opened at {open} does not close before {stop}, and a parsed subject's groups close inside it")
-	end 'groupEndAfter'
+	function nameRoots(leaves ValueIdArray, movedBefore ElementIndex, carried LoopPhiVarArray, into LentArmRoots)
+		if leaves.isEmpty() 'noRoot'
+			return
+		end 'noRoot'
 
-	function collectMatchArmRoots(first ElementIndex, stop ElementIndex, into SubjectRoots)
-		var depth = 0 as BlockDepth
-		var nesting = 0 as NestingDepth
-		var armStart = first
-		var inArm = false
-		var index = first
+		let wanted = ValueMarkSet.create()
+		let asked = ValueIdArray.create(0)
 
-		while index < stop 'eachToken'
-			let kind = self.kindAt(index)
-			let atArmLevel = depth == 1 and nesting == 0
+		for leaf in leaves 'eachLeaf'
+			pushUnseen(leaf, onto: asked, seen: wanted)
+		end 'eachLeaf'
 
-			if inArm and atArmLevel and (kind == TokenKind.newline or self.closesBlockAt(index)) 'theArmEnds'
-				self.collectSubjectRoots(armStart, stop: index, into: into)
-				inArm = false
-			end 'theArmEnds'
+		for carry in carried 'eachCarriedBinding'
+			if wanted.contains(carry.entryValue) 'aRootCarriedIntoTheLoop'
+				pushUnseen(carry.phiId, onto: asked, seen: wanted)
+			end 'aRootCarriedIntoTheLoop'
+		end 'eachCarriedBinding'
 
-			if atArmLevel and kind == TokenKind.gives 'anArmGives'
-				inArm = true
-				armStart = index + 1
-			end 'anArmGives'
+		let slots = MoveSlotIndexColumn.create(0)
 
-			depth = self.blockDepthAfter(index, depth: depth)
-			nesting = groupNestingAfter(kind, nesting: nesting)
-			index = index + 1
-		end 'eachToken'
-	end 'collectMatchArmRoots'
+		for value in asked 'eachAskedValue'
+			slots.append(self.bodyState.moveLedger.liveNameSlotsOf(value))
+		end 'eachAskedValue'
 
-	function tokensSpellAFieldChain(start ElementIndex, stop ElementIndex) returns bool
-		var index = start
+		slots.sort()
+		let named = ValueMarkSet.create()
 
-		while index < stop 'eachHop'
-			if self.kindAt(index) != TokenKind.dot or index + 1 >= stop or not tokenCanBeAName(self.tokenAt(index + 1)) 'notAFieldHop'
-				return false
-			end 'notAFieldHop'
+		for slot in slots 'eachLiveName'
+			let binding = self.bodyState.moveLedger.nameAt(slot)
 
-			index = index + 2
-		end 'eachHop'
+			if self.bodyState.scope.isVisible(binding) 'aVisibleNameOfARoot'
+				into.values.push(binding.boundValue)
+				into.names.push(binding.name)
+				named.insert(binding.boundValue)
+			end 'aVisibleNameOfARoot'
+		end 'eachLiveName'
 
-		return true
-	end 'tokensSpellAFieldChain'
+		let firstMovedRoot = into.values.count()
+		let movedNamed = ValueMarkSet.create()
+
+		for binding in self.bodyState.moveLedger.movedSince(movedBefore) 'eachMovedBinding'
+			if binding.movedFrom and not binding.isSelfField and wanted.contains(binding.boundValue) and not named.contains(binding.boundValue) and self.bodyState.scope.isVisible(binding) 'movedIntoTheSubject'
+				if movedNamed.contains(binding.boundValue) and movedRootIsNamed(into, from: firstMovedRoot, value: binding.boundValue, name: binding.name) 'loggedTwice'
+					continue
+				end 'loggedTwice'
+
+				into.values.push(binding.boundValue)
+				into.names.push(binding.name)
+				movedNamed.insert(binding.boundValue)
+			end 'movedIntoTheSubject'
+		end 'eachMovedBinding'
+	end 'nameRoots'
 
 	function unionLendsHeldData(scrut ValueId, enumMatch DeclaredEnum) returns bool
 		if self.valueHoldsAUniqueRecord(scrut) 'aUniquePayload'
@@ -5715,75 +5676,205 @@ extension Parser
 		return floor
 	end 'pushRoots'
 
+	function openSubject() returns ValueId
+		self.bodyState.subjectDepth = self.bodyState.subjectDepth + 1
+		return self.valueFloor()
+	end 'openSubject'
+
+	function closeSubject()
+		self.bodyState.subjectDepth = self.bodyState.subjectDepth - 1
+	end 'closeSubject'
+
+	function parseMatchSubject(func IrFunction, block IrBlock) returns ValueId throws SourceParseError
+		let subject = try self.parseExpression(func, block: block) otherwise (err) 'refused'
+			self.closeSubject()
+			throw err
+		end 'refused'
+
+		self.closeSubject()
+		return subject
+	end 'parseMatchSubject'
+
 	function releaseMatchSubject(floor ElementIndex)
 		self.bodyState.matchHolds.popTo(floor)
-
-		if self.bodyState.heldResults.count() == 0 'noResultIsHeld'
-			return
-		end 'noResultIsHeld'
-
-		let released = ValueIdArray.create(0)
-
-		for (value, hold) in self.bodyState.heldResults 'eachHeldResult'
-			if hold >= floor 'heldByThisMatch'
-				released.push(value)
-			end 'heldByThisMatch'
-		end 'eachHeldResult'
-
-		for value in released 'eachReleased'
-			_ = self.bodyState.heldResults.remove(value)
-		end 'eachReleased'
+		self.bodyState.standings.release(floor)
 	end 'releaseMatchSubject'
 
-	function matchHoldIndexOf(value ValueId) returns ElementIndex throws AbsentError
-		let holds = self.bodyState.matchHolds
+	function valueFloor() returns ValueId
+		return self.bodyState.valueCapabilities.count() as ValueId
+	end 'valueFloor'
 
-		if holds.isEmpty() 'noMatchHoldsAnything'
-			throw AbsentError.absent
-		end 'noMatchHoldsAnything'
+	function statementStartHere() returns StatementStart
+		return StatementStart.at(self.pos, value: self.valueFloor())
+	end 'statementStartHere'
 
+	function currentStatementStart() returns StatementStart
+		return StatementStart.at(self.bodyState.statementStart, value: self.bodyState.statementValueStart)
+	end 'currentStatementStart'
+
+	function enterStatementStart(start StatementStart)
+		self.bodyState.statementStart = start.token
+		self.bodyState.statementValueStart = start.value
+	end 'enterStatementStart'
+
+	function rootHoldIndexOf(value ValueId) returns ElementIndex throws AbsentError
 		for variable in self.variablesOperandMayBe(value) 'eachVariable'
-			if let index = try holds.indexOfValue(variable) 'aHeldRoot'
+			if let index = try self.bodyState.matchHolds.indexOfValue(variable) 'aHeldRoot'
 				return index
 			end 'aHeldRoot'
 		end 'eachVariable'
 
 		throw AbsentError.absent
-	end 'matchHoldIndexOf'
+	end 'rootHoldIndexOf'
 
-	function heldResultIndexOf(value ValueId) returns ElementIndex throws AbsentError
-		return try self.bodyState.heldResults.get(value) otherwise throw AbsentError.absent
-	end 'heldResultIndexOf'
-
-	function heldIndexOf(value ValueId) returns ElementIndex throws AbsentError
-		if let index = try self.matchHoldIndexOf(value) 'aHeldRoot'
-			return index
-		end 'aHeldRoot'
-
-		return try self.heldResultIndexOf(value)
-	end 'heldIndexOf'
-
-	function valueIsHeldByAMatch(value ValueId) returns bool
+	function holdReadingOf(value ValueId, floor ValueId) returns HoldReading
 		if self.bodyState.matchHolds.isEmpty() 'noMatchHoldsAnything'
-			return false
+			return HoldReading.free
 		end 'noMatchHoldsAnything'
 
-		try self.heldIndexOf(value) otherwise return false
-		return true
+		let standings = self.bodyState.standings
+		let rootNodes = ValueIdArray.create(0)
+		let derivedNodes = ValueIdArray.create(0)
+		let seenRoots = ValueMarkSet.create()
+		let seenDerived = ValueMarkSet.create()
+		var derived = HoldMark.unheld
+		pushUnseen(value, onto: rootNodes, seen: seenRoots)
+
+		while true 'eachRootNode'
+			let node = try rootNodes.pop() otherwise break
+
+			if let index = try self.rootHoldIndexOf(node) 'aHeldRoot'
+				return HoldReading.root(index)
+			end 'aHeldRoot'
+
+			if self.walkSkips(node, keepsValueTypes: false) 'aCopyHoldsNothing'
+				continue
+			end 'aCopyHoldsNothing'
+
+			derived = outerHoldOf(derived, other: standings.holdOf(node))
+			_ = self.pushSources(node, floor: floor, holders: HolderSink.dropped, copiesOnto: rootNodes, copiesSeen: seenRoots, partsOnto: derivedNodes, partsSeen: seenDerived, inputsOnto: derivedNodes, inputsSeen: seenDerived)
+		end 'eachRootNode'
+
+		while true 'eachDerivedNode'
+			let node = try derivedNodes.pop() otherwise break
+
+			if self.walkSkips(node, keepsValueTypes: false) 'aCopyHoldsNothing'
+				continue
+			end 'aCopyHoldsNothing'
+
+			if let index = try self.rootHoldIndexOf(node) 'aHeldSource'
+				derived = outerHoldOf(derived, other: HoldMark.heldBy(index))
+			end 'aHeldSource'
+
+			derived = outerHoldOf(derived, other: standings.holdOf(node))
+			_ = self.pushSources(node, floor: floor, holders: HolderSink.dropped, copiesOnto: derivedNodes, copiesSeen: seenDerived, partsOnto: derivedNodes, partsSeen: seenDerived, inputsOnto: derivedNodes, inputsSeen: seenDerived)
+		end 'eachDerivedNode'
+
+		return match derived 'derived'
+			unheld gives HoldReading.free
+			heldBy(index) gives HoldReading.derived(index)
+		end 'derived'
+	end 'holdReadingOf'
+
+	function pushSources(node ValueId, floor ValueId, holders HolderSink, copiesOnto ValueIdArray, copiesSeen ValueMarkSet, partsOnto ValueIdArray, partsSeen ValueMarkSet, inputsOnto ValueIdArray, inputsSeen ValueMarkSet) returns bool
+		var reached = false
+
+		if let origin = try self.regionFactsForRead().fieldOrigins.get(node) 'aFieldRead'
+			noteHolderInto(holders, part: node, holder: origin.holder)
+
+			pushUnseen(origin.holder, onto: partsOnto, seen: partsSeen)
+			reached = true
+		end 'aFieldRead'
+
+		if node < floor 'mintedBeforeTheFloor'
+			self.pushRetainedFieldRead(node, onto: partsOnto, seen: partsSeen)
+			return false
+		end 'mintedBeforeTheFloor'
+
+		let standings = self.bodyState.standings
+		let row = standings.rowOf(node)
+
+		if let source = try copySourceOf(row.copiedFrom) 'aCopy'
+			pushUnseen(source, onto: copiesOnto, seen: copiesSeen)
+			reached = true
+		end 'aCopy'
+
+		let armsOfAMerge = standings.isAMerge(node)
+
+		for input in row.madeFrom 'eachInput'
+			if armsOfAMerge 'anArm'
+				pushUnseen(input, onto: partsOnto, seen: partsSeen)
+			end 'anArm' else 'anInput'
+				pushUnseen(input, onto: inputsOnto, seen: inputsSeen)
+			end 'anInput'
+
+			reached = true
+		end 'eachInput'
+
+		return reached
+	end 'pushSources'
+
+	function pushRetainedFieldRead(node ValueId, onto ValueIdArray, seen ValueMarkSet)
+		let source = try retainedFieldReadOf(self.bodyState.standings.rowOf(node).copiedFrom) otherwise return
+		pushUnseen(source, onto: onto, seen: seen)
+	end 'pushRetainedFieldRead'
+
+	function markHolderWithStoredHold(box ValueId, value ValueId)
+		let floor = self.bodyState.statementValueStart
+		let index = try holdIndexOf(self.holdReadingOf(value, floor: floor)) otherwise return
+
+		for root in self.rootsOf(box, floor: floor, holders: HolderSink.dropped).leaves 'eachRoot'
+			self.bodyState.standings.markHeld(root, index: index)
+		end 'eachRoot'
+	end 'markHolderWithStoredHold'
+
+	function takeHoldOf(value ValueId, inputs ValueIdArray)
+		for input in inputs 'eachInput'
+			self.takeHoldOfOne(value, input: input)
+		end 'eachInput'
+	end 'takeHoldOf'
+
+	function takeHoldOfOne(value ValueId, input ValueId)
+		if self.bodyState.matchHolds.isEmpty() 'noMatchHoldsAnything'
+			return
+		end 'noMatchHoldsAnything'
+
+		if let index = try holdIndexOf(self.holdReadingOf(input, floor: self.bodyState.statementValueStart)) 'aHeldInput'
+			self.bodyState.standings.markHeld(value, index: index)
+		end 'aHeldInput'
+	end 'takeHoldOfOne'
+
+	function standOnInputs(value ValueId, rowInputs ValueIdArray, holdInputs ValueIdArray)
+		if self.standingsAreRecorded() 'recorded'
+			self.bodyState.standings.recordInputs(value, inputs: rowInputs)
+		end 'recorded'
+
+		self.takeHoldOf(value, inputs: holdInputs)
+	end 'standOnInputs'
+
+	function standOnArms(phi ValueId, arms ValueIdArray)
+		if self.standingsAreRecorded() 'recorded'
+			if arms.count() > 1 'aMergeOfArms'
+				self.bodyState.standings.recordMerge(phi, arms: arms)
+			end 'aMergeOfArms' else 'oneArm'
+				self.bodyState.standings.recordInputs(phi, inputs: arms)
+			end 'oneArm'
+		end 'recorded'
+
+		self.takeHoldOf(phi, inputs: arms)
+	end 'standOnArms'
+
+	function valueIsHeldByAMatch(value ValueId) returns bool
+		return match self.holdReadingOf(value, floor: self.bodyState.statementValueStart) 'reading'
+			free gives false
+			root or
+			derived gives true
+		end 'reading'
 	end 'valueIsHeldByAMatch'
 
 	function takeStandingOfInputs(value ValueId, inputs ValueIdArray)
 		self.noteLatentBirth(value, inputs: inputs)
-
-		if self.bodyState.matchHolds.isEmpty() 'noMatchHoldsAnything'
-			return
-		end 'noMatchHoldsAnything'
-
-		for input in inputs 'eachInput'
-			let index = try self.heldIndexOf(input) otherwise continue
-			self.bodyState.heldResults.upsert(value, value: index)
-			return
-		end 'eachInput'
+		self.standOnInputs(value, rowInputs: inputs, holdInputs: inputs)
 	end 'takeStandingOfInputs'
 
 	function noteLatentBirth(value ValueId, inputs ValueIdArray)
@@ -8411,9 +8502,10 @@ extension Parser
 			// Whatever the payload's own mutability: a read-only scrutinee is read-only all the way down.
 			if self.valueMayNameARecord(loaded) or self.valueIsPromise(loaded) 'payloadOwnsARecord'
 				self.carryImageRecordMark(loaded, from: scrutBox, source: self.bodyState, path: ValueCarryPath.part)
+				self.carryFact(ValueFact.heldByAMatch, to: loaded, from: scrutBox, source: self.bodyState, path: ValueCarryPath.part)
 			end 'payloadOwnsARecord'
 
-			let bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), value: loaded, scrutBox: scrutBox) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
+			let bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), value: loaded, scrutBox: scrutBox, ledger: self.bodyState.moveLedger) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
 
 			if loneRegionPayload and regionPayload 'aPayloadNoOtherSlotNames'
 				self.registerFreshLocal(loaded, binding: bindingInfo)
@@ -9489,6 +9581,7 @@ extension Parser
 		// The merge of a binding's values wears the binding's own brand, which every rebind was checked against.
 		try self.bodyState.valueBrandIds.set(phiId, value: binding.brandId) otherwise panic("mintPhiForBinding: v{phiId} has no brand slot — mintPhi mints through mintValue, which seeds the column")
 		self.carryCapability(binding.boundValue, target: phiId)
+		self.takeHoldOfOne(phiId, input: binding.boundValue)
 
 		if self.capabilityOfValue(phiId) == ProvisionalForAUse and self.valueSettlesAfterParsing(binding.boundValue) 'startsAsAPendingResult'
 			self.addSettlingArms(phiId, incoming: binding.boundValue)
@@ -9603,6 +9696,7 @@ extension Parser
 	function joinEdgeInto(phi ValueId, incoming ValueId)
 		self.joinCapabilityInto(phi, incoming: incoming)
 		self.joinOwnershipInto(phi, incoming: incoming)
+		self.takeHoldOfOne(phi, input: incoming)
 	end 'joinEdgeInto'
 
 	function joinOwnershipInto(phi ValueId, incoming ValueId)
@@ -11057,3 +11151,15 @@ extension Parser
 		return shiftCountIsUnguarded(bounds.lo) and shiftCountIsUnguarded(bounds.hi)
 	end 'shiftCountIsProvenUnguarded'
 end 'Parser'
+
+function movedRootIsNamed(roots LentArmRoots, from ElementIndex, value ValueId, name immutable ByteArray) returns bool
+	for index in from upto roots.values.count() 'eachMovedRoot'
+		let sameValue = (try roots.values.get(index) otherwise panic("movedRootIsNamed: values.get OOB at {index} below its own count")) == value
+
+		if sameValue and (try roots.names.get(index) otherwise panic("movedRootIsNamed: names.get OOB at {index} — the columns are pushed together")).equals(name) 'theSameBinding'
+			return true
+		end 'theSameBinding'
+	end 'eachMovedRoot'
+
+	return false
+end 'movedRootIsNamed'

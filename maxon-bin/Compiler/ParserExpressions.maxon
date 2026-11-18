@@ -1361,10 +1361,12 @@ extension Parser
 
 		self.notePassedParamNeed(func, value: origin.holder, mutable: true, line: opTok.line)
 		self.emitIncref(old, range: SourceRange.ofToken(opTok))
+		self.takeHoldOfOne(old, input: origin.holder)
 		try self.emitFieldWrite(origin.holder, layout: self.layoutOfOrigin(origin), index: origin.field, value: replacement, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: opTok, range: SourceRange.ofToken(opTok))
 		self.trackOwnedTemp(old, exclusivity: OwnedHeapExclusivity.sole)
 		self.setValueCapability(old, capability: ValueCapability.isolated)
 		_ = self.regionFactsForWrite().fieldOrigins.remove(old)
+		self.shedSlotReadMarks(old)
 		return old
 	end 'parseSwap'
 
@@ -2482,12 +2484,10 @@ extension Parser
 			return
 		end 'aValue'
 
-		if valueIsMarked(self.bodyState.immutableSlotReads, value: result) 'readsAnImmutableSlot'
-			self.setValueCapability(result, capability: ValueCapability.immutable)
-			return
-		end 'readsAnImmutableSlot'
-
-		let declared = self.resultCapabilityDeclaredFor(callee)
+		let readsAnImmutableSlot = valueIsMarked(self.bodyState.immutableSlotReads, value: result)
+		let declared = ResultCapability.immutable if readsAnImmutableSlot else self.resultCapabilityDeclaredFor(callee)
+		let sources = args if readsAnImmutableSlot else self.argumentsThatCanReachTheResult(callee, args: args, argLabels: argLabels, receiver: receiver)
+		self.standCallResultOnItsInputs(result, declared: declared, inputs: sources)
 
 		if declared == ResultCapability.isolated 'anIsolatedResult'
 			self.setValueCapability(result, capability: ValueCapability.isolated)
@@ -2507,8 +2507,7 @@ extension Parser
 			return
 		end 'leavesTheOpenedRegion'
 
-		let sources = self.argumentsThatCanReachTheResult(callee, args: args, argLabels: argLabels, receiver: receiver)
-		self.takeStandingOfInputs(result, inputs: sources)
+		self.noteLatentBirth(result, inputs: sources)
 
 		if not returnsFresh 'mayHandBackAnArgument'
 			if self.carryPartReadThroughACall(result, sources: sources) 'aPartReadReachesTheResult'
@@ -2687,6 +2686,19 @@ extension Parser
 		end 'declared'
 	end 'noteResultCapabilityThrough'
 
+	function standCallResultOnItsInputs(result ValueId, declared ResultCapability, inputs ValueIdArray)
+		if self.valueIsAValueType(result) or self.tagOf(result) == ValueTypeTag.void 'takesNoHold'
+			return
+		end 'takesNoHold'
+
+		match declared 'declared'
+			isolated then self.standOnInputs(result, rowInputs: ValueIdArray.create(0), holdInputs: inputs)
+			immutable then return
+			mutable or
+			unmarked then self.standOnInputs(result, rowInputs: inputs, holdInputs: inputs)
+		end 'declared'
+	end 'standCallResultOnItsInputs'
+
 	function noteResultTakesItsCarriersCapability(result ValueId, carrier ValueId)
 		let given = self.effectiveCapabilityOf(carrier)
 
@@ -2755,6 +2767,17 @@ extension Parser
 			filled(value) then return try self.recordCapturedBy(value)
 		end 'slot'
 	end 'capturedRecordOf'
+
+	function capturedRecordsOf(captured CapturedValueArray) returns ValueIdArray
+		let records = ValueIdArray.create(0)
+
+		for slot in captured 'eachSlot'
+			let record = try self.capturedRecordOf(slot) otherwise continue
+			records.push(record)
+		end 'eachSlot'
+
+		return records
+	end 'capturedRecordsOf'
 
 	function recordCapturedBy(value ValueId) returns ValueId throws AbsentError
 		if self.valueIsAValueType(value) 'aCopy'
@@ -3108,7 +3131,7 @@ extension Parser
 
 		self.bodyState.heldAcquire = HeldAcquire.none
 		_ = try windows.pop() otherwise panic("parseAcquireBody: the window this statement pushed is gone from the stack it popped")
-		self.bodyState.scope.popScope()
+		self.bodyState.scope.popScope(self.bodyState.moveLedger)
 		self.bodyState.currentBlock = bodyEnd
 		return bodyEnd
 	end 'parseAcquireBody'
@@ -3130,7 +3153,7 @@ extension Parser
 		end 'aNamedPosition'
 
 		let handlerEnd = try self.parseBlockBody(func, block: self.bodyState.currentBlock, label: labelTok.value)
-		self.bodyState.scope.popScope()
+		self.bodyState.scope.popScope(self.bodyState.moveLedger)
 		return handlerEnd
 	end 'parseAcquireHandler'
 
@@ -9281,10 +9304,10 @@ extension Parser
 				continue
 			end 'aResultTheRecordKept'
 
-			let enclosingStart = self.bodyState.statementStart
-			self.bodyState.statementStart = store.statementStart
+			let enclosingStart = self.currentStatementStart()
+			self.enterStatementStart(store.statementStart)
 			self.notePassedParamNeed(func, value: store.value, mutable: true, line: store.line)
-			self.bodyState.statementStart = enclosingStart
+			self.enterStatementStart(enclosingStart)
 		end 'eachHeldStore'
 	end 'flushHeldStores'
 

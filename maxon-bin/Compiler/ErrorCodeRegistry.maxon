@@ -2330,7 +2330,9 @@ export enum ErrorCode
 	// One whose type holds a plain part is refused, naming the part: declare it `isolated`, pass a fresh value,
 	// or consume the value where it is. A call's result crosses only when the call's inputs are clean, so a
 	// call given an input that is not clean is refused at the crossing. The variable a `match` holds is not a
-	// clean input inside any of its arms, so a call that may hand it back is refused where its result crosses.
+	// clean input inside any of its arms, and the hold follows the value: a call or closure result it can
+	// reach, a value popped or swapped out of it, a copy, a merge that may be it, and a record it is stored
+	// into are held too, and each is refused where it crosses; hand it over before or after the `match`.
 	// Declare the local `as isolated T`, or pass a copy.
 	semanticIsolatedRecoverNeedsCleanInputs = "E3200"
 
@@ -2370,8 +2372,10 @@ export enum ErrorCode
 	// or consumed: only the region's contents are writable there, not the slot holding it. Inside a `match`
 	// or a `for` that lends from a variable, each variable the subject or source comes from cannot be
 	// reassigned, rebound by a tuple assignment or passed by reference. Those variables are found through a
-	// field path, a `cond`, a `match` expression and a `try … otherwise` value, at any depth, and the roots
-	// of a `cond` subject stay put in every arm, the arms that bind nothing included.
+	// field path, a `cond`, a `match` expression and a `try … otherwise` value, at any depth, and include the
+	// container of an element read and each argument of a call subject whose type is not a value type; the
+	// roots of a `cond` subject stay put in every arm, the arms that bind nothing included. A call result
+	// bound with `let` before the `match` leaves the call's arguments free.
 	// Write the contents, or leave the block or loop before replacing or moving the variable (`swap` takes a
 	// region out of a slot).
 	semanticOpenedSlotReassigned = "E3203"

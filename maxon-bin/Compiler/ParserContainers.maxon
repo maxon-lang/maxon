@@ -5082,6 +5082,7 @@ extension Parser
 				panic("emitContainerElementAccessor: '{String.from(callee)}' borrows an element in place but is not a `borrowedElementReadCallee`, so the hold resolver would not follow the chain of a hold taken on its result")
 			end 'aReadTheHoldResolverDoesNotKnow'
 
+			self.standOnInputs(result, rowInputs: argsOf(container), holdInputs: argsOf(container))
 			self.markElementRead(result)
 		end 'borrowsInPlace'
 
@@ -7280,6 +7281,7 @@ extension Parser
 	end 'storedFieldType'
 
 	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws SourceParseError
+		self.markHolderWithStoredHold(box, value: value)
 		let fieldType = self.storedFieldType(box, layout: layout, index: index)
 
 		// ⭐ **A BARE OPAQUE `T` FIELD REASSIGNMENT.** The field is typed opaque `T`
@@ -7451,7 +7453,7 @@ extension Parser
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldName = try layout.fieldNames.get(i) otherwise panic("declareSelfFieldAliases: fieldNames.get OOB at {i} for `type {String.from(layout.name)}`, which declares {layout.fieldCount()}")
 			let fieldType = try self.selfFieldTypes.get(i) otherwise panic("declareSelfFieldAliases: selfFieldTypes.get OOB at {i} for `type {String.from(layout.name)}` — `resolveSelfFieldTypes` resolves every one of its {layout.fieldCount()} fields")
-			self.bodyState.scope.declareSelfField(fieldName, varType: fieldType, fieldIndex: i)
+			self.bodyState.scope.declareSelfField(fieldName, varType: fieldType, fieldIndex: i, ledger: self.bodyState.moveLedger)
 		end 'eachField'
 	end 'declareSelfFieldAliases'
 
@@ -8404,14 +8406,17 @@ extension Parser
 	end 'requireCrossesWhole'
 
 	function requireNotHeldByAMatch(value ValueId, text String, into String, anchor Token) throws SourceParseError
-		if not self.valueIsHeldByAMatch(value) 'notHeld'
-			return
-		end 'notHeld'
-
-		let holds = self.bodyState.matchHolds
-		let index = try self.heldResultIndexOf(value) otherwise throw self.regionRefusal(ErrorCode.semanticUniqueValueRefused, message: "cannot hand '{text}' to {into}: {keptUniqueRefusalSentence(UniqueOrigin.lentByMatch, subject: text)}", line: anchor.line, column: anchor.column)
-		throw self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{text}' crosses to {into} only as the whole of its region, and it may still name '{String.from(holds.nameAt(index))}', which the `match` '{holds.subjectAt(index)}' holds across its arms; hand it over before or after the `match`", line: anchor.line, column: anchor.column)
+		match self.holdReadingOf(value, floor: self.bodyState.statementValueStart) 'reading'
+			free then return
+			root then throw self.regionRefusal(ErrorCode.semanticUniqueValueRefused, message: "cannot hand '{text}' to {into}: {keptUniqueRefusalSentence(UniqueOrigin.lentByMatch, subject: text)}", line: anchor.line, column: anchor.column)
+			derived(index) then throw self.heldResultRefusal(index, text: text, into: into, anchor: anchor)
+		end 'reading'
 	end 'requireNotHeldByAMatch'
+
+	function heldResultRefusal(index ElementIndex, text String, into String, anchor Token) returns SourceParseError
+		let holds = self.bodyState.matchHolds
+		return self.regionRefusal(ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: "'{text}' crosses to {into} only as the whole of its region, and it may still name '{displayParamName(holds.nameAt(index))}', which the `match` '{holds.subjectAt(index)}' holds across its arms; hand it over before or after the `match`", line: anchor.line, column: anchor.column)
+	end 'heldResultRefusal'
 
 	function notWholeRegionMessage(value ValueId, text String, door CrossingDoor) returns String
 		match self.signatures.valueRegionClosure(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames) 'closure'
@@ -8648,6 +8653,8 @@ extension Parser
 	end 'armIsAnUndecidedParameter'
 
 	function joinMergeCapability(phi ValueId, arms ValueIdArray, func IrFunction, anchor Token) throws SourceParseError
+		self.standOnArms(phi, arms: arms)
+
 		for arm in arms 'eachPartReadArm'
 			self.carryIsolatedPartRead(phi, arm: arm)
 		end 'eachPartReadArm'
@@ -9765,7 +9772,7 @@ extension Parser
 		let given = self.effectiveCapabilityOf(value)
 
 		if self.storeIsHeldByTheLiteral(func, slot: slot, value: value, given: given, holder: holder) 'aRecordUnderConstructionHoldsIt'
-			self.regionFactsForWrite().pendingHeld.push(HeldStore.create(value, line: line, place: place, valueStart: valueStart, statementStart: self.bodyState.statementStart))
+			self.regionFactsForWrite().pendingHeld.push(HeldStore.create(value, line: line, place: place, valueStart: valueStart, statementStart: self.currentStatementStart()))
 			return
 		end 'aRecordUnderConstructionHoldsIt'
 
@@ -9790,7 +9797,7 @@ extension Parser
 
 		if self.valueIsCarried(value) or self.storeHolderIsCarried(holder) 'aStoreTheLoopMayRejudge'
 			let table = self.regionFactsForWrite()
-			table.carriedStores.push(CarriedStore.create(holder, value: value, slot: slot, assumedValue: given, windows: table.windows.clone(), fieldName: place, valueStart: valueStart, valueEnd: self.pos, line: line, statementStart: self.bodyState.statementStart))
+			table.carriedStores.push(CarriedStore.create(holder, value: value, slot: slot, assumedValue: given, windows: table.windows.clone(), fieldName: place, valueStart: valueStart, valueEnd: self.pos, line: line, statementStart: self.currentStatementStart()))
 		end 'aStoreTheLoopMayRejudge'
 	end 'admitStore'
 
@@ -10050,10 +10057,10 @@ extension Parser
 			held(box, _, placeText, line, column) then try self.requireStoreHolderWritable(self.capabilityUnderWindows(store.windows, value: box), fieldName: store.fieldName, placeText: placeText, joinedAtALoop: true, line: line, column: column)
 		end 'holder'
 
-		let enclosingStart = self.bodyState.statementStart
-		self.bodyState.statementStart = store.statementStart
+		let enclosingStart = self.currentStatementStart()
+		self.enterStatementStart(store.statementStart)
 		let verdict = self.slotStoreVerdictGiven(self.bodyFunction(), value: store.value, given: given, slot: store.slot, line: store.line)
-		self.bodyState.statementStart = enclosingStart
+		self.enterStatementStart(enclosingStart)
 		try self.requireStoreVerdictFits(verdict, fieldName: store.fieldName, value: store.value, valueStart: store.valueStart, valueEnd: store.valueEnd, joinedAtALoop: true)
 	end 'settleCarriedStore'
 
@@ -10285,7 +10292,7 @@ extension Parser
 		try self.requireValueMayLeaveWindows(value, startIndex: retStart)
 
 		if declared == ResultCapability.unmarked and self.signatures.namesAServiceMessage(func.name) 'aReply'
-			try self.requireCrossesWhole(value, text: self.returnedExpressionText(retStart), door: CrossingDoor.reply, anchor: retTok)
+			try self.requireCrossesWhole(value, text: self.tokenTextFrom(retStart, endIndex: self.pos), door: CrossingDoor.reply, anchor: retTok)
 		end 'aReply'
 
 		if declared == ResultCapability.isolated 'declaredIsolated'

@@ -5745,10 +5745,20 @@ either side could write, because the two green threads may run at the same time 
   (`for x in items` or `for (it, x) in items.withIterator()`) is held by the loop until it ends, so a message
   or factory argument of it inside the loop is **E3200** as well; send it after the loop.
 - **A variable an enclosing `match` holds does not cross inside it, in any arm.** While a `match` lends its
-  subject, each variable the subject comes from is not a send argument, a `spawn` factory argument, a reply or an
-  argument at an `isolated` parameter, and a binding it is moved into inside the arm takes the hold with it until
-  the `match` ends (**E3214**). A call that may hand the variable back is **E3200** where its result crosses.
-  Send it before or after the `match`, or compute the route in the `match` and send after it.
+  subject, it holds each variable the subject comes from: the matched name, every record on a field path
+  (`self` in `match self.f`; after `let inner = a.b`, both `inner` and `a` in `match inner.u`), the container
+  of an element read (`a` in `match try a.get(0) otherwise …`) and each argument of a call subject whose type is
+  not a value type (`v` in `match next(v)`). A held variable is not a send argument, a `spawn` factory argument,
+  a reply or an argument at an `isolated` parameter, and a binding it is moved into inside the arm takes the
+  hold with it until the `match` ends (**E3214**). The hold follows the value: what the arms make from a held
+  variable is held as well, and at those positions it is **E3200**. That covers a call result a held argument
+  can reach, the result of a closure that captured one (called directly or through a function value), a value
+  `pop`ped or `swap`ped out of one, a copy, a merge that may be one, and a record a held value is stored into,
+  through a field alias made before the `match` as well (after `let box = crate.b`, storing `xs.pop()` in
+  `box.item` inside `match try xs.get(0) otherwise …` holds `box` and `crate`). A value of a value type is
+  free. Send it before or after the `match`, or compute the route in the `match` and send after it. A
+  field-path subject bound with `let` before the `match` holds the same records; a call result bound with `let`
+  first (`let r = next(v)`, then `match r`) holds `r` alone.
 - **A value crosses a thread only as the whole of its region.** The rule holds for a send argument, a `spawn`
   factory argument, a reply and the arguments a failed send hands back. The value is a fresh expression, a variable
   declared `isolated`, or an owned `unique` or linear value of a closed type: one whose closure holds no plain part
@@ -6924,11 +6934,13 @@ of an enclosing `modify` or of an acquired state is **E3197** (`cannot write 'n'
 while 'x1' is open`), and a call that needs that data writable is **E3207**. Data the arm creates, the payload
 through its binding and a variable that holds a number are writable. An arm that binds no `isolated` payload
 opens no window, even over a case that holds one: `have then o.n = 5` writes outer data, and an arm of
-`match h.u` that binds nothing writes `h`. In every arm that binds a payload, whatever the union holds, the
-variable the `match` reads stays put: reassigning it, rebinding it in a tuple assignment or passing it to a
-`mutable` parameter is **E3203**; its fields stay writable unless the arm binds a `unique` or `isolated`
-payload. A `match` whose subject is read through an `isolated` value that is
-not open (`match job.state`) still opens that value for the whole statement, every arm included. A union with
+`match h.u` that binds nothing writes `h`. In every arm that binds a payload, whatever the union holds, each
+variable the `match` reads stays put, the container of an element read (`xs` in `match try xs.get(i) otherwise
+…`) and an argument of a call subject whose type is not a value type (`v` in `match next(v)`) included:
+reassigning it, rebinding it in a tuple assignment or passing it to a `mutable` parameter is **E3203**; its
+fields stay writable unless the arm binds a `unique` or `isolated` payload. A call result bound with `let`
+before the `match` (`let r = next(v)`, then `match r`) leaves the call's arguments free. A `match` whose
+subject is read through an `isolated` value that is not open (`match job.state`) still opens that value for the whole statement, every arm included. A union with
 a linear payload is consumed by the `match`, so its arms own their payloads and open no window, a frozen union
 lends nothing, and a union held in an `isolated` local hands its payload out as a region of its own.
 `specs/regions-modify.md` pins the forms (`a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data`),
@@ -7026,8 +7038,9 @@ reads it is accepted; move or copy it before or after the `match`. The roots of 
 every arm, the arms that bind nothing included: reassigning one, rebinding it in a tuple assignment or passing it
 by reference is **E3203**, and when the union has a unique or `isolated` payload the roots are also read-only
 there (**E3197**). A variable the `match` holds is not a message or `spawn` factory argument, a reply or an
-argument at an `isolated` parameter inside any of its arms (**E3214**), and a call that may hand it back is
-**E3200** where its result crosses; send it before or after the `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
+argument at an `isolated` parameter inside any of its arms (**E3214**), and a value the arms make from it is
+held too and is **E3200** where it crosses ([What crosses a message](#services--spawn)); send it before or after
+the `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
 own a unique value there: one read from a field or an element, lent by a loop, a tuple or a `match`, or
 borrowed through a `mutable` parameter is **E3214**, and an owned one crosses only as the whole of its region
 ([What crosses a message](#services--spawn)).

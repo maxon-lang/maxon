@@ -6202,7 +6202,7 @@ error E3224: <fragment>:23:6: the field 's' holds a linear value, and a linear v
 ```
 
 <!-- test: model-hand-af-w12-linear-swap-out-store-back-other-region -->
-The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3214, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w12-linear-swap-out-store-back-other-region` of redteamAF.hand_af20, in capmodel `reggio/REPORTRTAF.txt`.
+The model (`core-m3w-fa25`) refuses it by `R-LIN-WHERE`; the compiler refuses it with E3199, E3224. The model reports the first rule that fails and the compiler every independent error, so the codes differ. Model program `w12-linear-swap-out-store-back-other-region` of redteamAF.hand_af20, in capmodel `reggio/REPORTRTAF.txt`.
 
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -6247,7 +6247,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3224: <fragment>:23:6: the field 's' holds a linear value, and a linear value lives only in locals, parameters and message arguments: a field would keep it past the code that must consume it
-error E3214: <fragment>:36:21: cannot bind '_' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
+error E3199: <fragment>:36:30: 'g' cannot be opened: the value that holds it is read-only while 'm1' is open
 ```
 
 <!-- test: model-hand-af-s4-binder-named-like-outer-before-window -->

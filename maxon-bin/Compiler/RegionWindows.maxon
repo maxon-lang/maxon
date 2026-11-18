@@ -67,14 +67,23 @@ union StoreHolder
 	held(box ValueId, assumed ValueCapability, placeText String, line LineNumber, column ColumnNumber)
 end 'StoreHolder'
 
+type StatementStart
+	let token as ElementIndex
+	let value as ValueId
+
+	static function at(token ElementIndex, value ValueId) returns StatementStart
+		return Self{token: token, value: value}
+	end 'at'
+end 'StatementStart'
+
 type HeldStore
 	let value as ValueId
 	let line as LineNumber
 	let place as String
 	let valueStart as ElementIndex
-	let statementStart as ElementIndex
+	let statementStart as StatementStart
 
-	static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex, statementStart ElementIndex) returns HeldStore
+	static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex, statementStart StatementStart) returns HeldStore
 		return Self{value: value, line: line, place: place, valueStart: valueStart, statementStart: statementStart}
 	end 'create'
 end 'HeldStore'
@@ -93,9 +102,9 @@ type CarriedStore
 	let valueStart as ElementIndex
 	let valueEnd as ElementIndex
 	let line as LineNumber
-	let statementStart as ElementIndex
+	let statementStart as StatementStart
 
-	static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber, statementStart ElementIndex) returns CarriedStore
+	static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber, statementStart StatementStart) returns CarriedStore
 		return Self{holder: holder, value: value, slot: slot, assumedValue: assumedValue, windows: windows, fieldName: fieldName, valueStart: valueStart, valueEnd: valueEnd, line: line, statementStart: statementStart}
 	end 'create'
 end 'CarriedStore'
@@ -627,7 +636,202 @@ type RootStack
 	end 'indexOfName'
 end 'RootStack'
 
-typealias HeldResultMap = Map with (ValueId, ElementIndex)
+union HoldMark
+	unheld
+	heldBy(index ElementIndex)
+end 'HoldMark'
+
+union CopiedFrom
+	minted
+	copyOf(source ValueId)
+	retainedFieldRead(source ValueId)
+end 'CopiedFrom'
+
+typealias PartHolderMap = Map with (ValueId, ValueId)
+
+union HolderSink
+	dropped
+	into(holders PartHolderMap)
+end 'HolderSink'
+
+function noteHolderInto(sink HolderSink, part ValueId, holder ValueId)
+	match sink 'sink'
+		dropped then return
+		into(holders) then holders.upsert(part, value: holder)
+	end 'sink'
+end 'noteHolderInto'
+
+union HoldReading
+	free
+	root(index ElementIndex)
+	derived(index ElementIndex)
+end 'HoldReading'
+
+function holdIndexOf(reading HoldReading) returns ElementIndex throws AbsentError
+	match reading 'reading'
+		free then throw AbsentError.absent
+		root(index) then return index
+		derived(index) then return index
+	end 'reading'
+end 'holdIndexOf'
+
+function copySourceOf(copiedFrom CopiedFrom) returns ValueId throws AbsentError
+	match copiedFrom 'copied'
+		minted then throw AbsentError.absent
+		copyOf(source) then return source
+		retainedFieldRead(source) then return source
+	end 'copied'
+end 'copySourceOf'
+
+function retainedFieldReadOf(copiedFrom CopiedFrom) returns ValueId throws AbsentError
+	match copiedFrom 'copied'
+		minted or
+		copyOf then throw AbsentError.absent
+		retainedFieldRead(source) then return source
+	end 'copied'
+end 'retainedFieldReadOf'
+
+function heldBelow(hold HoldMark, floor ElementIndex) returns bool
+	return match hold 'hold'
+		unheld gives false
+		heldBy(index) gives index < floor
+	end 'hold'
+end 'heldBelow'
+
+function holdIsAt(hold HoldMark, index ElementIndex) returns bool
+	return match hold 'hold'
+		unheld gives false
+		heldBy(held) gives held == index
+	end 'hold'
+end 'holdIsAt'
+
+function outerHoldOf(kept HoldMark, other HoldMark) returns HoldMark
+	return match other 'other'
+		unheld gives kept
+		heldBy(index) gives kept if heldBelow(kept, floor: index + 1) else other
+	end 'other'
+end 'outerHoldOf'
+
+function pushUnseen(value ValueId, onto ValueIdArray, seen ValueMarkSet)
+	if seen.contains(value) 'alreadySeen'
+		return
+	end 'alreadySeen'
+
+	seen.insert(value)
+	onto.push(value)
+end 'pushUnseen'
+
+type ValueStanding
+	let copiedFrom as CopiedFrom
+	let madeFrom as ValueIdArray
+	let hold as HoldMark
+
+	static function of(copiedFrom CopiedFrom, madeFrom ValueIdArray, hold HoldMark) returns ValueStanding
+		return Self{copiedFrom: copiedFrom, madeFrom: madeFrom, hold: hold}
+	end 'of'
+
+	static function create() returns ValueStanding
+		return Self.of(CopiedFrom.minted, madeFrom: ValueIdArray.create(0), hold: HoldMark.unheld)
+	end 'create'
+end 'ValueStanding'
+
+typealias ValueStandingMap = Map with (ValueId, ValueStanding)
+
+type ValueStandings
+	let rows as ValueStandingMap
+	let markedAt as ValueIdArrayColumn
+	let merges as ValueMarkSet
+
+	static function create() returns ValueStandings
+		return Self{rows: ValueStandingMap.create(), markedAt: ValueIdArrayColumn.create(0), merges: ValueMarkSet.create()}
+	end 'create'
+
+	function rowOf(value ValueId) returns ValueStanding
+		return try self.rows.get(value) otherwise ValueStanding.create()
+	end 'rowOf'
+
+	function holdOf(value ValueId) returns HoldMark
+		if let row = try self.rows.get(value) 'aRow'
+			return row.hold
+		end 'aRow'
+
+		return HoldMark.unheld
+	end 'holdOf'
+
+	function isHeld(value ValueId) returns bool
+		return match self.holdOf(value) 'hold'
+			unheld gives false
+			heldBy gives true
+		end 'hold'
+	end 'isHeld'
+
+	function takeHold(value ValueId, hold HoldMark)
+		match hold 'hold'
+			unheld then return
+			heldBy(index) then self.markHeld(value, index: index)
+		end 'hold'
+	end 'takeHold'
+
+	function recordCopy(to ValueId, copiedFrom CopiedFrom)
+		let row = self.rowOf(to)
+		self.rows.upsert(to, value: ValueStanding.of(copiedFrom, madeFrom: row.madeFrom, hold: row.hold))
+	end 'recordCopy'
+
+	function recordInputs(value ValueId, inputs ValueIdArray)
+		let row = self.rowOf(value)
+		let madeFrom = row.madeFrom.clone()
+
+		for input in inputs 'eachInput'
+			madeFrom.push(input)
+		end 'eachInput'
+
+		self.rows.upsert(value, value: ValueStanding.of(row.copiedFrom, madeFrom: madeFrom, hold: row.hold))
+	end 'recordInputs'
+
+	function recordMerge(value ValueId, arms ValueIdArray)
+		self.recordInputs(value, inputs: arms)
+		self.merges.insert(value)
+	end 'recordMerge'
+
+	function isAMerge(value ValueId) returns bool
+		return self.merges.contains(value)
+	end 'isAMerge'
+
+	function bucketAt(index ElementIndex) returns ValueIdArray
+		while self.markedAt.count() <= index 'growToTheIndex'
+			self.markedAt.push(ValueIdArray.create(0))
+		end 'growToTheIndex'
+
+		return try self.markedAt.get(index) otherwise panic("bucketAt: markedAt.get OOB at {index} after growing to it")
+	end 'bucketAt'
+
+	function markHeld(value ValueId, index ElementIndex)
+		let row = self.rowOf(value)
+
+		if heldBelow(row.hold, floor: index + 1) 'alreadyHeldLonger'
+			return
+		end 'alreadyHeldLonger'
+
+		self.rows.upsert(value, value: ValueStanding.of(row.copiedFrom, madeFrom: row.madeFrom, hold: HoldMark.heldBy(index)))
+		self.bucketAt(index).push(value)
+	end 'markHeld'
+
+	function release(floor ElementIndex)
+		for position in floor upto self.markedAt.count() 'eachBucket'
+			let bucket = try self.markedAt.get(position) otherwise panic("release: markedAt.get OOB at {position} below its own count")
+
+			for value in bucket 'eachMarked'
+				let row = self.rowOf(value)
+
+				if holdIsAt(row.hold, index: position) 'stillHeldHere'
+					self.rows.upsert(value, value: ValueStanding.of(row.copiedFrom, madeFrom: row.madeFrom, hold: HoldMark.unheld))
+				end 'stillHeldHere'
+			end 'eachMarked'
+
+			bucket.clear()
+		end 'eachBucket'
+	end 'release'
+end 'ValueStandings'
 
 typealias FieldPath = Array with FieldIndex
 
@@ -670,12 +874,26 @@ end 'fieldPathLeads'
 
 type SubjectRoots
 	let roots as LentArmRoots
-	var throughCond as bool
+	let throughCond as bool
+	let holders as PartHolderMap
 
 	static function create() returns SubjectRoots
-		return Self{roots: LentArmRoots.create(), throughCond: false}
+		return Self{roots: LentArmRoots.create(), throughCond: false, holders: PartHolderMap.create()}
 	end 'create'
+
+	static function of(walk SourceWalk, holders PartHolderMap) returns SubjectRoots
+		return Self{roots: LentArmRoots.create(), throughCond: walk.throughCond, holders: holders}
+	end 'of'
 end 'SubjectRoots'
+
+type SourceWalk
+	let leaves as ValueIdArray
+	var throughCond as bool
+
+	static function create() returns SourceWalk
+		return Self{leaves: ValueIdArray.create(0), throughCond: false}
+	end 'create'
+end 'SourceWalk'
 
 export enum DroppedOwnedKind
 	promise

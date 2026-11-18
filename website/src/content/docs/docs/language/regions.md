@@ -401,11 +401,13 @@ of an enclosing `modify` or of an acquired state is **E3197** (`cannot write 'n'
 while 'x1' is open`), and a call that needs that data writable is **E3207**. Data the arm creates, the payload
 through its binding and a variable that holds a number are writable. An arm that binds no `isolated` payload
 opens no window, even over a case that holds one: `have then o.n = 5` writes outer data, and an arm of
-`match h.u` that binds nothing writes `h`. In every arm that binds a payload, whatever the union holds, the
-variable the `match` reads stays put: reassigning it, rebinding it in a tuple assignment or passing it to a
-`mutable` parameter is **E3203**; its fields stay writable unless the arm binds a `unique` or `isolated`
-payload. A `match` whose subject is read through an `isolated` value that is
-not open (`match job.state`) still opens that value for the whole statement, every arm included. A union with
+`match h.u` that binds nothing writes `h`. In every arm that binds a payload, whatever the union holds, each
+variable the `match` reads stays put, the container of an element read (`xs` in `match try xs.get(i) otherwise
+…`) and an argument of a call subject whose type is not a value type (`v` in `match next(v)`) included:
+reassigning it, rebinding it in a tuple assignment or passing it to a `mutable` parameter is **E3203**; its
+fields stay writable unless the arm binds a `unique` or `isolated` payload. A call result bound with `let`
+before the `match` (`let r = next(v)`, then `match r`) leaves the call's arguments free. A `match` whose
+subject is read through an `isolated` value that is not open (`match job.state`) still opens that value for the whole statement, every arm included. A union with
 a linear payload is consumed by the `match`, so its arms own their payloads and open no window, a frozen union
 lends nothing, and a union held in an `isolated` local hands its payload out as a region of its own.
 `specs/regions-modify.md` pins the forms (`a-match-arm-lending-an-isolated-payload-refuses-a-write-to-outer-data`),
@@ -503,8 +505,9 @@ reads it is accepted; move or copy it before or after the `match`. The roots of 
 every arm, the arms that bind nothing included: reassigning one, rebinding it in a tuple assignment or passing it
 by reference is **E3203**, and when the union has a unique or `isolated` payload the roots are also read-only
 there (**E3197**). A variable the `match` holds is not a message or `spawn` factory argument, a reply or an
-argument at an `isolated` parameter inside any of its arms (**E3214**), and a call that may hand it back is
-**E3200** where its result crosses; send it before or after the `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
+argument at an `isolated` parameter inside any of its arms (**E3214**), and a value the arms make from it is
+held too and is **E3200** where it crosses ([What crosses a message](/docs/language/async/#services--spawn)); send it before or after
+the `match`. A message argument or `spawn` factory argument is handed to another green thread, so the sender must
 own a unique value there: one read from a field or an element, lent by a loop, a tuple or a `match`, or
 borrowed through a `mutable` parameter is **E3214**, and an owned one crosses only as the whole of its region
 ([What crosses a message](/docs/language/async/#services--spawn)).

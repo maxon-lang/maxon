@@ -3657,3 +3657,149 @@ end 'main'
 ```maxoncstderr
 error E3199: <fragment>:19:10: 'p' cannot be opened: the value that holds it is read-only while 'w' is open
 ```
+
+<!-- test: a-swap-out-of-an-isolated-field-binds-with-let -->
+A `swap` out of an `isolated` field whose union holds a unique payload binds with `let`, and the swapped-out value is used.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+function weigh(x Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(t) gives t.n
+	end 'c'
+end 'weigh'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(4)))
+	let x = swap h.u with Slot.empty
+	print("{weigh(x)} {weigh(h.u)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 0
+```
+
+<!-- test: a-swap-out-of-an-isolated-field-is-assigned -->
+A `swap` out of an `isolated` field whose union holds a unique payload is assigned to a `var`, and the swapped-out value is used.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+function weigh(x Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(t) gives t.n
+	end 'c'
+end 'weigh'
+
+function main() returns ExitCode
+	let h = Holder.create(Slot.held(Token.create(5)))
+	var x = Slot.empty as isolated Slot
+	x = swap h.u with Slot.empty
+	print("{weigh(x)} {weigh(h.u)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 0
+```
+
+<!-- test: a-swap-out-of-an-isolated-field-is-returned -->
+A `swap` out of an `isolated` field whose union holds a unique payload is returned from a function, and the caller uses it.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Token is unique
+	var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+union Slot
+	empty
+	held(t Token)
+end 'Slot'
+
+type Holder
+	var u as isolated Slot
+
+	static function create(u isolated Slot) returns Self
+		return Self{u: u}
+	end 'create'
+end 'Holder'
+
+function weigh(x Slot) returns Count
+	return match x 'c'
+		empty gives 0
+		held(t) gives t.n
+	end 'c'
+end 'weigh'
+
+function drain(h mutable Holder) returns isolated Slot
+	return swap h.u with Slot.empty
+end 'drain'
+
+function main() returns ExitCode
+	var h = Holder.create(Slot.held(Token.create(6)))
+	let x = drain(h)
+	print("{weigh(x)} {weigh(h.u)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 0
+```
