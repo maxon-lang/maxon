@@ -21,6 +21,23 @@ is never pushed: a pushed branch starts the landing workflow.
 **The procedure spends as little as a correct plan allows.** The plan is the survey and the design: no
 step here re-derives it, and none asks the user what the plan already answers.
 
+**The plan is worked unattended: no step waits on the user.** Never call `AskUserQuestion`, and never end
+a turn on a question. Whatever the plan does not answer — a question with no recommendation, code that
+contradicts the design, a finding that widens a stage — goes to a `planner` agent, which rules as the
+user would:
+
+- Brief it with the stage's section, the design points at issue, what the code shows, the options and
+  your recommendation. Ask for one ruling and its reason, nothing wider.
+- Record the ruling under the plan's "Rulings", marked `unreviewed`, with the question in one line and
+  the option it rejected, in the stage's commit. Then carry on.
+- Batch the questions a stage raises into one dispatch where they are known together.
+- `/land`'s and `/plan-and-land`'s halts "to the user" for a design ruling or an approval are this
+  dispatch too.
+
+What still stops the session is what no ruling can supply: a permission the harness denies, a credential,
+or an action a rule reserves for the user by name (re-pinning the seed). Park that stage and every stage
+that waits on it, say why in the plan file, and carry on with the stages that do not.
+
 | § | Step | Who |
 |---|---|---|
 | 1 | Make each stage: one local commit | you coordinate; implementers write |
@@ -35,13 +52,14 @@ Take the first stage whose "Done" cell is empty and whose "Waits on" is satisfie
 in this plan is ticked, every stage of another plan has landed on `main` with that plan, every issue is
 closed. A stage marked `deferred` is skipped. A stage marked "in progress under #n" is being made
 outside the plan: tick it once that commit is on `main`, whether or not #n has closed, and start no stage
-that waits on it before then. If no stage can start and some remain, tell the user what they wait on.
+that waits on it before then. If no stage can start and some remain, write what they wait on beside the
+plan's row in `plans/README.md`, work the queue's next plan, and come back when the wait is over.
 
 For each stage, in order:
 
 1. **An open question takes the plan's recommendation**, including one that breaks code the latest
    release compiles; the stage then owes its `## Unreleased` entry. Record the choice under the plan's
-   "Rulings". Ask the user only where the plan gives no recommendation.
+   "Rulings". Where the plan gives no recommendation, a `planner` rules.
 2. **Fetch `main`.** If it moved, rebase the plan's commits onto its tip; a conflict is resolved by hand,
    never worked around. Re-run only the cases of a stage whose files the rebase touched.
 3. **Watch the stage's spec set red.** The plan's "Shown by" line is its floor. There is no scout: the
@@ -50,8 +68,7 @@ For each stage, in order:
    stage does: the plan left that stage's approach open. Brief it with the stage's section, the design
    points it cites and the files it names, and ask for the approach and the pieces, nothing wider. Write
    its answer into the stage's section, in this stage's commit, and brief the implementers from that.
-   A planner also runs when an implementer reports that the code contradicts the plan's design, before
-   the user is asked: its reading is what the question carries.
+   A planner also rules when an implementer reports that the code contradicts the plan's design.
 4. **Write the code through implementer agents.** A brief carries the stage's own section of the plan
    and the design points it cites, never the whole plan file.
    **Every piece gets a fresh agent.** Split the stage into pieces before dispatching, and never continue
@@ -81,7 +98,8 @@ For each stage, in order:
    stage wrote or re-pinned and the cases of a spec file it edited: never a whole spec file's suite for
    safety, a corpus, `ir-specs` unfiltered, a second target, or a lane. What a stage breaks elsewhere is
    §2's gates' to find, over the whole plan, once. Where the code contradicts the plan, the implementer's finding amends the
-   stage in the plan file, in this commit. A contradiction with the plan's design stops and asks the user.
+   stage in the plan file, in this commit. A contradiction with the plan's design is a `planner`'s to rule
+   on, and its ruling amends the design in the plan file.
 6. **`code-review` per stage only in `ownership` and `generics`**, where a slip is a soundness hole: one
    round, by an agent that did not write the code, blockers only. Every other plan is reviewed in §2.
 7. **Write no comments and no documentation.** Both are written once, in §2, on the plan's final shape.
@@ -89,8 +107,8 @@ For each stage, in order:
    ticks the stage's box. Its message carries what §2's message will need: the mechanism, the cases red
    to green, the figures measured, and any `RELEASE_NOTES.md` entry the stage owes, written out.
 
-Carry on from stage to stage without checking in. Stop only for a contradiction with the plan's design,
-a question the plan does not answer, or a red on `main` that is yours.
+Carry on from stage to stage, and from a landed plan to the queue's next one, without checking in. A red
+on `main` that is yours is fixed first, then the plan resumes.
 
 **The plan file is the state.** A session whose context has grown heavy ends after a stage commit; a
 fresh one resumes from the ticks.
@@ -118,7 +136,8 @@ When every stage is ticked or `deferred`:
    touched code generation. A red here is fixed in the squashed tree and the gate re-taken.
 8. **`/land` §9:** one commit whose message carries each stage's paragraph in order, landed through the
    door. It ends `Fixes #<class issue>` when no stage is `deferred`; with one deferred it names the
-   issue without a closing word, and the issue stays open for those stages.
+   issue without a closing word, and the issue stays open for those stages. Unreviewed rulings do not
+   hold the landing: the message lists each one under "Unreviewed rulings", for the user to read after.
 
 A bounce at the door is `/land` §9's bounce: rebase by hand, re-take the gates whose inputs changed,
 submit again.

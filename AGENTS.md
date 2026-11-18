@@ -25,7 +25,7 @@ through `SendMessage`. Your fleet id is your session's name (`claude -n <id>`); 
 checkout.
 
 - **A class plan under `plans/` is not fleet work.** A session the user hands one follows the `work-plan`
-  skill: no `REQUEST`, no `fleet.mjs`, and its rulings come from the user.
+  skill: no `REQUEST`, no `fleet.mjs`, and it runs unattended, its rulings made by a `planner` agent.
 - **Before any work, tell it.** A task the user gave you directly is a `REQUEST`; with no task, send
   `READY`. Start only on its `ASSIGN`. A `STOP` means another session owns the problem: tell the user.
 - **At every step boundary, run `fleet.mjs step --as <id> --model <model id> --state working --task <n>`**,
