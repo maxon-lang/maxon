@@ -19,6 +19,20 @@ is never pushed: a pushed branch starts the landing workflow.
 **A plan is the maintainer's, not the fleet's.** Send no `REQUEST` and run no `fleet.mjs` for it, whatever
 `maxon.fleetRepo` says.
 
+**A plan uses GitHub for the landing and nothing else.** The plan file replaces the issues and the
+Roadmap for the life of the plan, whatever `AGENTS.md`, `/land` or `/plan-and-land` say:
+
+- **Change nothing on GitHub:** no `status.mjs`, no `file.mjs`, no issue comment, edit, claim or close, no
+  project or milestone. The landing commit's `Fixes #<n>` closes the class issue by itself.
+- **Read no issue and no board.** A member issue is the plan's "Members" line; a ruling is the plan's
+  "Design" and "Rulings". A ruling the plan cites only by number is read from the wiki's design page
+  (its git clone), and if it is not there, with one `gh issue view`, once for the plan.
+- **An issue a stage waits on is closed when its fixing commit is on `main`:**
+  `git log origin/main --grep "#<n>"`, not an API call.
+- **A defect nothing in `plans/` owns** is a line under the plan file's "Found, not this plan's": what it
+  is, the program that shows it, where it was met. It is not filed and no duplicate is searched for.
+- What stays: `scripts/land.sh` and the run it watches, and reading a red CI job that is yours.
+
 **The procedure spends as little as a correct plan allows.** The plan is the survey and the design: no
 step here re-derives it, and none asks the user what the plan already answers.
 
@@ -100,7 +114,7 @@ For each stage, in order:
      its own commit on `main`, pushed at once, changing nothing but that plan file;
    - **the stage's own cases cannot go green without it:** fix the least that makes them green, and say
      so in the commit message;
-   - **nothing in `plans/` owns it:** record it as `/land` §10 says, and fix it after the plan lands.
+   - **nothing in `plans/` owns it:** a line under the plan file's "Found, not this plan's".
 
    **A session adds no stage that waits on another plan.** Such a stage holds this plan's landing behind
    the other queue. What another plan's stage will fix is that stage's to prove, by the line above, and
@@ -125,7 +139,7 @@ on `main` that is yours is fixed first, then the plan resumes.
 
 **The plan file is the state.** A session whose context has grown heavy ends after a stage commit; a
 fresh one resumes from the ticks.
-**A defect that is not this plan's** is recorded as `/land` §10 says, and fixed after the plan lands.
+**A defect that is not this plan's** is a line under "Found, not this plan's", for the maintainer to file.
 **Giving the plan up:** tell the user which stages are committed and where.
 
 ## 2. Land the plan once
