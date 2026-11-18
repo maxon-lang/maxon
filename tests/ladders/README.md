@@ -458,6 +458,10 @@ the two plane arms, and this argument, are unchanged).
 awk -F'\t' '$1=="regalloc" && $2=="splitting"' m.txt      # nanos, allocs, frees, bytes
 ```
 
+Pin `MAXON_HASH_SEED` and `MAXON_HASH_TIER` on every compile, as `scale-test` does
+(`MAXON_HASH_SEED=<16 hex digits> MAXON_HASH_TIER=<aes|software> <compiler> build …`): the compiler's own
+hash tables lay out by the seed, so unpinned readings of one program can allocate differently.
+
 Compare a **base** binary against **head** at equal-length checkout paths — path length is a real
 constant in the byte column (two runs of identical content once differed by exactly 546 bytes
 because one worktree path was 14 characters longer).

@@ -661,10 +661,15 @@ export type FileProvenance
 	export let isRuntimeSource as bool
 	export let isScriptlibSource as bool
 	export let identity as FilePath
+	let orderKey as SourceOrderKey
 
-	export static function create(isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, identity FilePath) returns FileProvenance
-		return Self{isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, identity: identity}
+	static function create(isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, identity FilePath, orderKey SourceOrderKey) returns FileProvenance
+		return Self{isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, identity: identity, orderKey: orderKey}
 	end 'create'
+
+	function tier() returns SourceTier
+		return sourceTierOfFlags(self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource)
+	end 'tier'
 
 	export function isLibrary() returns bool
 		return self.isStdlibSource or self.isRuntimeSource or self.isScriptlibSource
@@ -830,6 +835,8 @@ export type QueryDatabase
 	// working directory and tests containment, which allocates a String per path component; it is asked
 	// two to three times per file per compile, so the memo is what keeps that off the per-file path.
 	export var fileProvenance as FileProvenanceMemo
+	var walkedSources as WalkedSourceMap
+	var walkRootRelatives as WalkRootRelativeMap
 
 	// The byte-contents `StdlibLoader` marked worth sharing across `Project`s (see `HashDigestSet`).
 	// Per-`Project` because the answer is "did THIS compile load the file from `stdlib/`"; the store
@@ -933,6 +940,8 @@ export type QueryDatabase
 			sourceStamps: SourceFileStampMap.create(),
 			compositeHash: 0, compositeHashValid: false,
 			fileProvenance: FileProvenanceMemo.create(),
+			walkedSources: WalkedSourceMap.create(),
+			walkRootRelatives: WalkRootRelativeMap.create(),
 			shareableTokenHashes: HashDigestSet.create(),
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),

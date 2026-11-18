@@ -662,7 +662,7 @@ function projectRootModuleDirectoryOf(project Project) returns String
 		root = try root.parent() otherwise panic("projectRootModuleDirectoryOf: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, its identity")
 	end 'aSingleFileBuild'
 
-	return moduleDirectoryOfRootPath(root, anchor: libraryConeAnchor(project.stdlibDir, cwd: Directory.currentPath()))
+	return moduleDirectoryOfRootPath(root, anchor: libraryConeAnchor(project.stdlibDir))
 end 'projectRootModuleDirectoryOf'
 
 function newProgramSignatures(project Project) returns ProgramSignatures
@@ -1237,7 +1237,7 @@ function producerMaskFor(project Project, signatures ProgramSignatures, path Fil
 	return mask
 end 'producerMaskFor'
 
-// A file's module-directory anchor is one of five, derived rather than threaded in by a caller:
+// A file's module-directory anchor is derived rather than threaded in by a caller:
 //
 //   • a `stdlib/` file is anchored at `stdlib/`'s PARENT, so `stdlib/String.maxon` is `stdlib` and
 //     `stdlib/helpers/url/urlHelpers.maxon` is `stdlib/helpers/url` — rendered
@@ -1251,9 +1251,8 @@ end 'producerMaskFor'
 //   • a SINGLE-FILE build is anchored at the file's own directory: the one file compiled is at the
 //     root of its own program, so it is in the root module.
 //
-// ⚠ File and anchor must be the same kind of path, because `relativeTo` compares SPELLINGS: an
-// author's file and anchor are both resolved against the cwd (`rootPath` is the raw CLI spelling),
-// a library file is its physical `FileProvenance.identity` against an anchor of the physical
+// ⚠ A library file and its anchor must be the same kind of path, because `relativeTo` compares
+// SPELLINGS: the file is its physical `FileProvenance.identity` and the anchor is the physical
 // library root. Mixing the two would be worse than either — every file would miss its own root and
 // fall to `deriveModuleDirectory`'s parent-name arm, which produces a plausible directory and the
 // wrong one.
@@ -1271,19 +1270,15 @@ end 'producerMaskFor'
 // unexported `String` methods, arriving at a second door — asked rather than re-spelled, so
 // the two doors cannot drift apart on it.
 function moduleDirectoryForFile(project Project, path FilePath, tier SourceTier) returns String
-	let cwd = Directory.currentPath()
+	let provenance = fileProvenanceOf(project, path: path)
 
-	return deriveModuleDirectory(namespaceLocationOf(project, path: path, tier: tier, cwd: cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, tier: tier))
-end 'moduleDirectoryForFile'
-
-function namespaceLocationOf(project Project, path FilePath, tier SourceTier, cwd FilePath) returns FilePath
 	return match tier 'tier'
-		author gives path.resolve(cwd)
+		author gives provenance.orderKey.moduleDirectory()
 		stdlib or
 		runtime or
-		scriptlib gives fileProvenanceOf(project, path: path).identity
+		scriptlib gives deriveModuleDirectory(provenance.identity, rootPath: libraryConeAnchorFor(project, tier: tier))
 	end 'tier'
-end 'namespaceLocationOf'
+end 'moduleDirectoryForFile'
 
 function namespaceConeOf(project Project, path FilePath, livesUnderStdlibDirectory bool) returns SourceTier
 	if livesUnderStdlibDirectory 'thestdlibsOwnCone'
@@ -1293,31 +1288,20 @@ function namespaceConeOf(project Project, path FilePath, livesUnderStdlibDirecto
 	return sourceTierOf(project, path: path)
 end 'namespaceConeOf'
 
-function namespaceAnchorFor(project Project, cwd FilePath, tier SourceTier) returns FilePath
+function libraryConeAnchorFor(project Project, tier SourceTier) returns FilePath
 	return match tier 'tier'
-		stdlib gives libraryConeAnchor(project.stdlibDir, cwd: cwd)
-		runtime gives libraryConeAnchor(project.runtimeDir, cwd: cwd)
-		scriptlib gives libraryConeAnchor(try project.scriptlib.packagesRoot() otherwise panic("namespaceAnchorFor: a scriptlib-tier file in a compile that holds no scriptlib — the tier is derived from the directory this project carries"), cwd: cwd)
-		author gives authorsAnchorFor(project, cwd: cwd)
+		stdlib gives libraryConeAnchor(project.stdlibDir)
+		runtime gives libraryConeAnchor(project.runtimeDir)
+		scriptlib gives libraryConeAnchor(try project.scriptlib.packagesRoot() otherwise panic("libraryConeAnchorFor: a scriptlib-tier file in a compile that holds no scriptlib — the tier is derived from the directory this project carries"))
+		author panic("libraryConeAnchorFor: an author file is anchored at the program root, which its source order key is relative to")
 	end 'tier'
-end 'namespaceAnchorFor'
-
-function authorsAnchorFor(project Project, cwd FilePath) returns FilePath
-	let root = project.rootPath.resolve(cwd)
-
-	if Directory.isDirectory(root) 'projectBuild'
-		return root
-	end 'projectBuild'
-
-	return try root.parent() otherwise panic("authorsAnchorFor: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
-end 'authorsAnchorFor'
+end 'libraryConeAnchorFor'
 
 // A library root's cone is anchored at that root's PARENT, so `stdlib/String.maxon` is `stdlib` and
 // `runtime/Word.maxon` is `runtime`. One body for every library root, because the rule is the root's
 // shape and not which root it is.
-function libraryConeAnchor(libraryDir FilePath, cwd FilePath) returns FilePath
-	let resolved = libraryDir.resolve(cwd)
-	return try resolved.parent() otherwise panic("libraryConeAnchor: '{resolved.toString()}' has no parent — it is an absolute directory path, resolved against the cwd on the line above")
+function libraryConeAnchor(libraryDir FilePath) returns FilePath
+	return try libraryDir.parent() otherwise panic("libraryConeAnchor: '{libraryDir.toString()}' has no parent — a library root is the absolute physical directory `createProject` identified")
 end 'libraryConeAnchor'
 
 // Two whole-program facts the fold must already know, read off the tokens before the first file is
@@ -1477,13 +1461,14 @@ end 'FileHandOffs'
 
 type FileTokenFacts
 	let moduleDirectory as String
+	let orderKey as SourceOrderKey
 	let declarations as FileDeclarationHeaders
 	let events as TokenFactEventArray
 	let isScriptlibSource as bool
 	let handOffs as FileHandOffs
 
-	static function create(moduleDirectory String, declarations FileDeclarationHeaders, events TokenFactEventArray, isScriptlibSource bool, handOffs FileHandOffs) returns FileTokenFacts
-		return Self{moduleDirectory: moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource, handOffs: handOffs}
+	static function create(moduleDirectory String, orderKey SourceOrderKey, declarations FileDeclarationHeaders, events TokenFactEventArray, isScriptlibSource bool, handOffs FileHandOffs) returns FileTokenFacts
+		return Self{moduleDirectory: moduleDirectory, orderKey: orderKey, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource, handOffs: handOffs}
 	end 'create'
 
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath)
@@ -1494,7 +1479,7 @@ type FileTokenFacts
 
 		let isRuntimeSource = self.declarations.isRuntimeTier()
 		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
-		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource, isRuntime: isRuntimeSource, isScriptlib: self.isScriptlibSource)
+		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, orderKey: self.orderKey, isLibrary: isStdlibSource or isRuntimeSource, isRuntime: isRuntimeSource, isScriptlib: self.isScriptlibSource)
 		self.declarations.noteInto(signatures, path: path, moduleDirectory: self.moduleDirectory, isStdlibSource: isStdlibSource, extents: extents)
 
 		for event in self.events 'eachEvent'
@@ -1576,7 +1561,7 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 		handOffs = FileHandOffs.held(reader.corpusHandOffs())
 	end 'aSharedCorpusFile'
 
-	return FileTokenFacts.create(moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource, handOffs: handOffs)
+	return FileTokenFacts.create(moduleDirectory, orderKey: fileProvenanceOf(project, path: path).orderKey, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource, handOffs: handOffs)
 end 'discoveredTokenFactsOf'
 
 // Matches the already-matched `spawn` keyword at `index`, its optional `(capacity: …)` group
@@ -2725,7 +2710,7 @@ type FrontEndRun
 
 	function verdictEndStage() returns FrontEndStep throws CompileError
 		let round = self.rounds.held()
-		let verdict = try foldVerdictFinish(self.project, pool: self.pool, signatures: round.signatures, into: self.merged.held(), ledger: self.ledger.held(), moved: round.moved, pathOrder: round.pathOrder, emissionOrder: round.emissionOrder)
+		let verdict = try foldVerdictFinish(self.project, pool: self.pool, signatures: round.signatures, into: self.merged.held(), ledger: self.ledger.held(), moved: round.moved, emissionOrder: round.emissionOrder)
 		self.ledger.held().settle(verdict, since: round.checkpoint, project: self.project)
 
 		match verdict 'verdict'
@@ -2801,12 +2786,11 @@ end 'FrontEndRun'
 // something the whole program disagrees with is filed the whole program's answer and the round is folded again,
 // its parse now keyed on that answer (`ProgramSignatures.rowSetAnswersThatMoved`).
 //
-// `merge` is probed around `mergeArtifact`, the replay, the path order and the type-name commit
+// `merge` is probed around `mergeArtifact`, the replay, the source order and the type-name commit
 // ALONE: the parses run before them, so the fold's cost never absorbs the parse's.
 type FoldRound
 	let moved as InstantiatedTypeNameSet
-	let pathOrder as SourceFileInPathOrderArray
-	let emissionOrder as EmissionSlotArray
+	let emissionOrder as SourceOrderSlotArray
 	var signatures as ProgramSignatures
 	var folds as FoldCount
 	var checkpoint as FoldCheckpoint
@@ -2820,14 +2804,14 @@ type FoldRound
 
 		let signatures = try queryProgramSignatures(project)
 		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
+		requireEverySourceFiledItsOrderKey(project, signatures: signatures)
 
-		let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
-		let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
-		let emissionOrder = sourceFilesInEmissionOrder(project)
+		let sourceOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+		let emissionOrder = sourceFilesInSourceOrder(project)
 		project.emissionRanks = emissionRanksFrom(project, emissionOrder: emissionOrder)
-		recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
+		recordPhase(project, phase: CompilePhase.merge, probe: sourceOrderProbe)
 
-		return Self{moved: InstantiatedTypeNameSet.create(), pathOrder: pathOrder, emissionOrder: emissionOrder, signatures: signatures, folds: 1, checkpoint: FoldCheckpoint.of(project)}
+		return Self{moved: InstantiatedTypeNameSet.create(), emissionOrder: emissionOrder, signatures: signatures, folds: 1, checkpoint: FoldCheckpoint.of(project)}
 	end 'begin'
 end 'FoldRound'
 
@@ -2944,104 +2928,111 @@ enum SourceTier
 	scriptlib
 end 'SourceTier'
 
-type EmissionSlot
-	let tier as SourceTier
-	let components as NameRoster
-	export let position as ElementIndex
+// @generated library-cache begin
+let CacheCasesSourceTier = [SourceTier.author, SourceTier.stdlib, SourceTier.runtime, SourceTier.scriptlib]
 
-	static function create(tier SourceTier, components NameRoster, position ElementIndex) returns EmissionSlot
-		return Self{tier: tier, components: components, position: position}
+function cacheReadSourceTier(reader LibraryCacheReader) returns SourceTier throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesSourceTier.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadSourceTier'
+
+function cacheTableAgreesSourceTier() returns bool
+	let declared = SourceTier.allCases
+
+	if CacheCasesSourceTier.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesSourceTier.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesSourceTier'
+
+function cacheEnumTablesAgreeInCompilerQueries() returns bool
+	if not cacheTableAgreesSourceTier() 'disagreesCacheTableAgreesSourceTier'
+		return false
+	end 'disagreesCacheTableAgreesSourceTier'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerQueries'
+
+// @generated library-cache end
+
+type SourceOrderSlot
+	let key as SourceOrderKey
+	let position as ElementIndex
+
+	static function create(key SourceOrderKey, position ElementIndex) returns SourceOrderSlot
+		return Self{key: key, position: position}
 	end 'create'
+end 'SourceOrderSlot'
 
-	function compare(other EmissionSlot) returns Ordering
-		let byTier = self.tier.ordinal.compare(other.tier.ordinal)
-
-		if byTier != Ordering.equalTo 'tiersDiffer'
-			return byTier
-		end 'tiersDiffer'
-
-		let shared = self.components.count() if self.components.count() < other.components.count() else other.components.count()
-
-		for i in 0 upto shared 'eachComponent'
-			let mine = try self.components.get(i) otherwise panic("EmissionSlot.compare: components.get OOB at {i} below the shared count {shared}")
-			let theirs = try other.components.get(i) otherwise panic("EmissionSlot.compare: components.get OOB at {i} below the shared count {shared}")
-			let byComponent = compareBytesOrdinally(mine, right: theirs)
-
-			if byComponent != Ordering.equalTo 'componentsDiffer'
-				return byComponent
-			end 'componentsDiffer'
-		end 'eachComponent'
-
-		return self.components.count().compare(other.components.count())
-	end 'compare'
-end 'EmissionSlot'
-
-typealias EmissionSlotArray = Array with EmissionSlot
+typealias SourceOrderSlotArray = Array with SourceOrderSlot
 
 function sourceTierOf(project Project, path FilePath) returns SourceTier
-	let provenance = fileProvenanceOf(project, path: path)
+	return fileProvenanceOf(project, path: path).tier()
+end 'sourceTierOf'
 
-	if provenance.isStdlibSource 'theStdlib'
+function sourceTierOfFlags(isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool) returns SourceTier
+	if isStdlibSource 'theStdlib'
 		return SourceTier.stdlib
 	end 'theStdlib'
 
-	if provenance.isRuntimeSource 'theRuntime'
+	if isRuntimeSource 'theRuntime'
 		return SourceTier.runtime
 	end 'theRuntime'
 
-	if provenance.isScriptlibSource 'theScriptlib'
+	if isScriptlibSource 'theScriptlib'
 		return SourceTier.scriptlib
 	end 'theScriptlib'
 
 	return SourceTier.author
-end 'sourceTierOf'
+end 'sourceTierOfFlags'
 
-function emissionComponentsOf(project Project, path FilePath, tier SourceTier, cwd FilePath) returns NameRoster
-	let located = namespaceLocationOf(project, path: path, tier: tier, cwd: cwd)
-	let anchor = namespaceAnchorFor(project, cwd: cwd, tier: tier)
-	let relative = try located.relativeTo(anchor) otherwise located
-	let pieces = relative.toString().replace(FilePath.separator(), with: PortablePathSeparator).split(PortablePathSeparator)
-	let components = NameRoster.create(pieces.count(), zeroed: false)
-
-	for component in pieces 'eachComponent'
-		components.push(freeze component.toByteArray())
-	end 'eachComponent'
-
-	return components
-end 'emissionComponentsOf'
+function requireEverySourceFiledItsOrderKey(project Project, signatures ProgramSignatures)
+	for path in project.db.sourcePaths 'eachSourcePath'
+		if signatures.sourceOrderKeyOf(path).compare(fileProvenanceOf(project, path: path).orderKey) != Ordering.equalTo 'filedAnotherKey'
+			panic("requireEverySourceFiledItsOrderKey: the signature index files '{path.toString()}' under a source order key its provenance does not mint")
+		end 'filedAnotherKey'
+	end 'eachSourcePath'
+end 'requireEverySourceFiledItsOrderKey'
 
 // The order the merge folds artifacts in, which numbers blobs and everything emitted after them. It
 // is a key and not `sourcePaths`' order, which is the host's directory listing and would compile
 // one program to different bytes on different hosts; the walks stay unsorted and the order is fixed
-// here, where it is decided. An author file outside the root keys by its resolved path, so its
-// place depends on where the checkout lives. A tie panics, because it would fall back to listing
-// order.
-function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
-	let cwd = Directory.currentPath()
-	let slots = EmissionSlotArray.create(project.db.sourcePaths.count(), zeroed: false)
+// here, where it is decided. A tie panics, because it would fall back to listing order.
+function sourceFilesInSourceOrder(project Project) returns SourceOrderSlotArray
+	let slots = SourceOrderSlotArray.create(project.db.sourcePaths.count(), zeroed: false)
 
 	for (iter, path) in project.db.sourcePaths.withIterator() 'eachSourcePath'
-		let tier = sourceTierOf(project, path: path)
-		slots.push(EmissionSlot.create(tier, components: emissionComponentsOf(project, path: path, tier: tier, cwd: cwd), position: iter.index()))
+		slots.push(SourceOrderSlot.create(fileProvenanceOf(project, path: path).orderKey, position: iter.index()))
 	end 'eachSourcePath'
 
-	slots.sortBy(function(left EmissionSlot, right EmissionSlot) gives left.compare(right))
+	slots.sortBy(function(left SourceOrderSlot, right SourceOrderSlot) gives left.key.compare(right.key))
 
 	for i in 1 upto slots.count() 'eachAdjacentPair'
-		let earlier = try slots.get(i - 1) otherwise panic("sourceFilesInEmissionOrder: slots.get OOB at {i - 1}")
-		let later = try slots.get(i) otherwise panic("sourceFilesInEmissionOrder: slots.get OOB at {i}")
+		let earlier = try slots.get(i - 1) otherwise panic("sourceFilesInSourceOrder: slots.get OOB at {i - 1}")
+		let later = try slots.get(i) otherwise panic("sourceFilesInSourceOrder: slots.get OOB at {i}")
 
-		if earlier.compare(later) == Ordering.equalTo 'aTie'
-			panic("sourceFilesInEmissionOrder: source files {earlier.position} and {later.position} have one emission key — the merge order would fall back to the order the directory walk found them in")
+		if earlier.key.compare(later.key) == Ordering.equalTo 'aTie'
+			panic("sourceFilesInSourceOrder: source files {earlier.position} and {later.position} have one source order key — the merge order would fall back to the order the directory walk found them in")
 		end 'aTie'
 	end 'eachAdjacentPair'
 
 	return slots
-end 'sourceFilesInEmissionOrder'
+end 'sourceFilesInSourceOrder'
 
 export typealias FileEmissionRankMap = Map with (String, ElementIndex)
 
-function emissionRanksFrom(project Project, emissionOrder EmissionSlotArray) returns FileEmissionRankMap
+function emissionRanksFrom(project Project, emissionOrder SourceOrderSlotArray) returns FileEmissionRankMap
 	let ranks = FileEmissionRankMap.create()
 
 	for (iter, slot) in emissionOrder.withIterator() 'eachFileInEmissionOrder'
@@ -3157,7 +3148,7 @@ union FoldedIndex
 	end 'isThe'
 end 'FoldedIndex'
 
-function artifactInEmissionOrder(artifacts FileParseArtifactArray, emissionOrder EmissionSlotArray, position ElementIndex) returns FileParseArtifact
+function artifactInEmissionOrder(artifacts FileParseArtifactArray, emissionOrder SourceOrderSlotArray, position ElementIndex) returns FileParseArtifact
 	let slot = try emissionOrder.get(position) otherwise panic("artifactInEmissionOrder: emissionOrder.get OOB at {position} below count {emissionOrder.count()}")
 	return try artifacts.get(slot.position) otherwise panic("artifactInEmissionOrder: artifacts.get OOB at {slot.position} below count {artifacts.count()}")
 end 'artifactInEmissionOrder'
@@ -3220,7 +3211,7 @@ type FoldLedger
 	// Sound only against the index the kept files were merged under: a memo hit hands back the same
 	// artifact object, already renumbered into that index's instance ids, and the module holds the ops
 	// that merge copied out of it.
-	function keptPrefix(signatures ProgramSignatures, parsed FileParseArtifactArray, emissionOrder EmissionSlotArray) returns ElementIndex
+	function keptPrefix(signatures ProgramSignatures, parsed FileParseArtifactArray, emissionOrder SourceOrderSlotArray) returns ElementIndex
 		if not self.foldedAgainst.isThe(signatures) 'anotherIndex'
 			return 0
 		end 'anotherIndex'
@@ -3323,7 +3314,7 @@ function foldVerdictBegin(project Project, pool FrontEndPool, signatures Program
 	return try pool.beginParse(project, signatures: signatures, receiver: receiver)
 end 'foldVerdictBegin'
 
-function foldVerdictFinish(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
+function foldVerdictFinish(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, emissionOrder SourceOrderSlotArray) returns FoldVerdict throws CompileError
 	let artifacts = pool.finishParse(project)
 
 	let kept = ledger.keptPrefix(signatures, parsed: artifacts, emissionOrder: emissionOrder)
@@ -3349,7 +3340,7 @@ function foldVerdictFinish(project Project, pool FrontEndPool, signatures Progra
 	end 'eachArtifactInEmissionOrder'
 
 	let typeNameProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
-	commitTypeNameDeclsInPathOrder(project, artifacts: artifacts, pathOrder: pathOrder, signatures: signatures)
+	commitTypeNameDeclsInSourceOrder(project, artifacts: artifacts, sourceOrder: emissionOrder, signatures: signatures)
 	recordPhase(project, phase: CompilePhase.merge, probe: typeNameProbe)
 
 	let newlyInstantiated = signatures.typesNewlyInstantiatedByAParse()
@@ -3717,7 +3708,7 @@ function requireFileProvenanceOf(project Project, path FilePath) returns FilePro
 		return memoized
 	end 'alreadyDerived'
 
-	let identity = try identityOfPath(path)
+	let identity = try identityOfSource(project, path: path)
 	let isStdlibSource = isStdlibRootFile(project, identity: identity)
 
 	// Containment alone, whatever the project root: every rule the runtime bit gates (the `__`
@@ -3725,12 +3716,21 @@ function requireFileProvenanceOf(project Project, path FilePath) returns FilePro
 	// about the file.
 	let isRuntimeSource = identity.isInside(project.runtimeDir)
 	let isScriptlibSource = not isStdlibSource and not isRuntimeSource and isScriptlibRootFile(project, identity: identity)
-	let derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, identity: identity)
+	let orderKey = try sourceOrderKeyOf(project, path: path, identity: identity, tier: sourceTierOfFlags(isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource))
+	let derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, identity: identity, orderKey: orderKey)
 
 	project.db.fileProvenance.upsert(path, value: derived)
 
 	return derived
 end 'requireFileProvenanceOf'
+
+function identityOfSource(project Project, path FilePath) returns FilePath throws CompileError
+	if let walked = try project.db.walkedSources.get(path) 'identifiedByTheWalk'
+		return walked.identity
+	end 'identifiedByTheWalk'
+
+	return try identityOfPath(path)
+end 'identityOfSource'
 
 function isScriptlibSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isScriptlibSource

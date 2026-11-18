@@ -34,6 +34,7 @@ reading. Cite them as references, never as decisions already made.
 | Generics | Go | per-instantiation bodies (#106); `Map` measured against Go (#82) | #106; #82 |
 | Inlining budget | Go's inline cost model | studied for #114; the depth cap was kept, and one cost budget is on the Backlog (#120) | #114; #120 |
 | Build tooling | Go | `--define` as `-ldflags -X`; `lint` apart from `build`, as `go vet` from `go build` | `docs/RELEASING.md`; `docs/optimization-log.md` |
+| Deterministic output, the environment gate | Go `reproduciblebuilds_test`, `reflectdata`, `-trimpath` | fixed inputs compiled under varied environments and compared byte for byte, with more axes than Go has; lists sorted by name before they are written; a file identified by its path inside its tier, not its disk path | `plans/determinism.md`; `tests/cli/EnvironmentGateHarness.maxon` |
 | Profiler | Go | per-thread `SIGPROF` CPU periods | `Profile/ProfileSampler.maxon` |
 | Context parameters (proposed) | Dagger | compile-time wiring as the comparison point | wiki `Design-context-parameters`; #33 |
 

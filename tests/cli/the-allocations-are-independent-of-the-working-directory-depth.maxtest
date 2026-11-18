@@ -1,0 +1,42 @@
+let TheAllocationsAreIndependentOfTheWorkingDirectoryDepthCaseDirName = "allocations-independent-of-working-directory-depth"
+let ScaleLadderCorpusDirName = "ladder"
+let ScaleLadderRungCount = 3
+let ScaleLadderRungsFlag = "--rungs={ScaleLadderRungCount}"
+let ScaleLadderEmitFlagPrefix = "--emit-corpus="
+let ScaleLadderRungDirPrefix = "rung"
+
+test 'builds of every rung of the scale ladder started by one absolute path from two working directories three components apart write the same executable and debug sidecar and make the same allocations'
+	requireHeldOutsideCheckout(TheAllocationsAreIndependentOfTheWorkingDirectoryDepthCaseDirName, check: AllocationsAreIndependentOfTheWorkingDirectoryDepth.create())
+end 'builds of every rung of the scale ladder started by one absolute path from two working directories three components apart write the same executable and debug sidecar and make the same allocations'
+
+type AllocationsAreIndependentOfTheWorkingDirectoryDepth implements OutsideCheckoutCase, EnvironmentCellCheck
+	static function create() returns AllocationsAreIndependentOfTheWorkingDirectoryDepth
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeScaleLog(dir, log: scaleLogDocument(ScaleRowFixtureMintedAt, corpus: ScaleRowUnrecorded, tree: ScaleRowUnrecorded))
+
+		let corpus = dir.join(ScaleLadderCorpusDirName)
+		let emitted = spawnCompiler([ScaleTestCommandWord, ScaleLadderRungsFlag, "{ScaleLadderEmitFlagPrefix}{corpus.toString()}"], staged: dir, what: "`{ScaleTestCommandWord} {ScaleLadderEmitFlagPrefix}` of {ScaleLadderRungCount} rungs")
+		try Expect.equal(emitted.exitCode(), expected: 0, message: "the gate could not run - `{ScaleTestCommandWord} {ScaleLadderRungsFlag} {ScaleLadderEmitFlagPrefix}{corpus.toString()}` exited {emitted.exitCode()}. It wrote to stderr: {emitted.stderr}")
+
+		let programs = GateProgramArray.create(0)
+
+		for rung in 0 upto ScaleLadderRungCount 'eachRung'
+			let label = "{ScaleLadderRungDirPrefix}{rung}"
+
+			programs.push(GateProgram.built(label, program: "{ScaleLadderCorpusDirName}{PortablePathSeparator}{label}", options: StringArray.create(0)))
+		end 'eachRung'
+
+		try requireIndependentOfTheEnvironment(try workingDirectoryDepthAxis(dir), programs: programs, staged: dir, check: self)
+	end 'requireHeldIn'
+
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+		try Expect.isTrue(outcome.allocations() > 0, message: "the gate could not run - {outcome.which} reported no allocations, so there is no total to compare.")
+	end 'requireAfterRun'
+
+	function requireAfterEnvironment(_ EnvironmentRun) throws TestFailure
+		return
+	end 'requireAfterEnvironment'
+end 'AllocationsAreIndependentOfTheWorkingDirectoryDepth'

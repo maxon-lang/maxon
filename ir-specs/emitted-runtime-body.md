@@ -1180,7 +1180,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#110:
-    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_184]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1192,7 +1192,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#112:
-    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1204,7 +1204,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#114:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1216,7 +1216,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#116:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1228,7 +1228,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#118:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1240,7 +1240,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#120:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1252,7 +1252,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#122:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1264,7 +1264,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#124:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1276,7 +1276,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#126:
-    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1288,7 +1288,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#128:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -1300,7 +1300,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#130:
-    x64.leaRegRdata rcx, [rip + __str_blob_191]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2200,7 +2200,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#88:
-    x64.leaRegRdata rcx, [rip + __str_blob_184]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_183]  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2212,7 +2212,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#90:
-    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_184]  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2224,7 +2224,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#92:
-    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2236,7 +2236,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#94:
-    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_185]  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2248,7 +2248,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#96:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2260,7 +2260,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#98:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2272,7 +2272,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#100:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2284,7 +2284,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#102:
-    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_186]  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2296,7 +2296,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#104:
-    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_187]  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2308,7 +2308,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#106:
-    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_188]  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -2320,7 +2320,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#108:
-    x64.leaRegRdata rcx, [rip + __str_blob_190]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_189]  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -5009,7 +5009,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont#163
   __rc_panic#306:
-    arm64.leaRdata x0, __str_blob_195  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_194  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5025,7 +5025,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#315:
-    arm64.leaRdata x0, __str_blob_196  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_195  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5057,7 +5057,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#276:
-    arm64.leaRdata x0, __str_blob_261  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_260  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5137,7 +5137,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#290:
-    arm64.leaRdata x0, __str_blob_260  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_259  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5185,7 +5185,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#339:
-    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_181  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5217,7 +5217,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#258:
-    arm64.leaRdata x0, __str_blob_202  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_201  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5249,7 +5249,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#260:
-    arm64.leaRdata x0, __str_blob_203  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_202  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5281,7 +5281,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#262:
-    arm64.leaRdata x0, __str_blob_204  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_203  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5361,7 +5361,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#628:
-    arm64.leaRdata x0, __str_blob_197  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_196  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5393,7 +5393,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#630:
-    arm64.leaRdata x0, __str_blob_198  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5425,7 +5425,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#780:
-    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5473,7 +5473,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#459:
-    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_205  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5505,7 +5505,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#461:
-    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5521,7 +5521,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#463:
-    arm64.leaRdata x0, __str_blob_208  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5569,7 +5569,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#768:
-    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5601,7 +5601,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#503:
-    arm64.leaRdata x0, __str_blob_227  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_226  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5633,7 +5633,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#423:
-    arm64.leaRdata x0, __str_blob_214  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_213  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5649,7 +5649,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#760:
-    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5681,7 +5681,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#380:
-    arm64.leaRdata x0, __str_blob_213  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.leaRdata x0, __str_blob_212  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5889,7 +5889,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#88:
-    arm64.leaRdata x0, __str_blob_184  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5905,7 +5905,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#90:
-    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_184  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5921,7 +5921,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#92:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5937,7 +5937,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#94:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5953,7 +5953,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#96:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5969,7 +5969,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#98:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -5985,7 +5985,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#100:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6001,7 +6001,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#102:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6017,7 +6017,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#104:
-    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6033,7 +6033,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#106:
-    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -6049,7 +6049,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#108:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8755,7 +8755,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont#163
   __rc_panic#306:
-    arm64.leaRdata x0, __str_blob_195  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_194  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8771,7 +8771,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#315:
-    arm64.leaRdata x0, __str_blob_196  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_195  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8803,7 +8803,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#276:
-    arm64.leaRdata x0, __str_blob_261  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_260  ; "panic at urlHelpers.maxon:128: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8883,7 +8883,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#290:
-    arm64.leaRdata x0, __str_blob_260  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_259  ; "panic at urlHelpers.maxon:101: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8931,7 +8931,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#339:
-    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_181  ; "panic at String.maxon:330: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8963,7 +8963,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#258:
-    arm64.leaRdata x0, __str_blob_202  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_201  ; "panic at URL.maxon:157: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -8995,7 +8995,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#260:
-    arm64.leaRdata x0, __str_blob_203  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_202  ; "panic at URL.maxon:159: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9027,7 +9027,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#262:
-    arm64.leaRdata x0, __str_blob_204  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_203  ; "panic at URL.maxon:160: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9107,7 +9107,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#628:
-    arm64.leaRdata x0, __str_blob_197  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_196  ; "panic at String.maxon:997: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9139,7 +9139,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#630:
-    arm64.leaRdata x0, __str_blob_198  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at String.maxon:998: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9171,7 +9171,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#780:
-    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9219,7 +9219,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#459:
-    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_205  ; "panic at URL.maxon:638: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9251,7 +9251,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#461:
-    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_206  ; "panic at URL.maxon:648: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9267,7 +9267,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#463:
-    arm64.leaRdata x0, __str_blob_208  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_207  ; "panic at URL.maxon:649: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9315,7 +9315,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#768:
-    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9347,7 +9347,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#503:
-    arm64.leaRdata x0, __str_blob_227  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_226  ; "panic at grapheme.maxon:399: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9379,7 +9379,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#423:
-    arm64.leaRdata x0, __str_blob_214  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_213  ; "panic at URL.maxon:779: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9395,7 +9395,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#760:
-    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_182  ; "panic at String.maxon:408: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9427,7 +9427,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#380:
-    arm64.leaRdata x0, __str_blob_213  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.leaRdata x0, __str_blob_212  ; "panic at URL.maxon:740: Range check failed: value outside typealias 'NetworkPort'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9635,7 +9635,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#88:
-    arm64.leaRdata x0, __str_blob_184  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_183  ; "panic at String.maxon:537: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9651,7 +9651,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#90:
-    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_184  ; "panic at String.maxon:538: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9667,7 +9667,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#92:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9683,7 +9683,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#94:
-    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_185  ; "panic at String.maxon:539: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9699,7 +9699,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#96:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9715,7 +9715,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#98:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9731,7 +9731,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#100:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9747,7 +9747,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#102:
-    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_186  ; "panic at String.maxon:557: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9763,7 +9763,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#104:
-    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_187  ; "panic at String.maxon:572: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9779,7 +9779,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#106:
-    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_188  ; "panic at String.maxon:573: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -9795,7 +9795,7 @@ func @main {
     arm64.epilogue 368
     arm64.ret
   __rc_panic#108:
-    arm64.leaRdata x0, __str_blob_190  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_189  ; "panic at String.maxon:584: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot34
@@ -23746,7 +23746,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#61:
-    x64.leaRegRdata rcx, [rip + __str_blob_114]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_113]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23758,7 +23758,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#63:
-    x64.leaRegRdata rcx, [rip + __str_blob_115]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_114]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23770,7 +23770,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#131:
-    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_120]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23782,7 +23782,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#134:
-    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_120]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23794,7 +23794,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#137:
-    x64.leaRegRdata rcx, [rip + __str_blob_122]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23806,7 +23806,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#65:
-    x64.leaRegRdata rcx, [rip + __str_blob_116]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_115]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23818,7 +23818,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_103]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -23830,7 +23830,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_105]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24453,7 +24453,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#61:
-    x64.leaRegRdata rcx, [rip + __str_blob_114]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_113]  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24465,7 +24465,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#63:
-    x64.leaRegRdata rcx, [rip + __str_blob_115]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_114]  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24477,7 +24477,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#131:
-    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_120]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24489,7 +24489,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#134:
-    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_120]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24501,7 +24501,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#137:
-    x64.leaRegRdata rcx, [rip + __str_blob_122]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_121]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24513,7 +24513,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#65:
-    x64.leaRegRdata rcx, [rip + __str_blob_116]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_115]  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24525,7 +24525,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_103]  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -24537,7 +24537,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_105]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -25139,7 +25139,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#61:
-    arm64.leaRdata x0, __str_blob_114  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_113  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25155,7 +25155,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#63:
-    arm64.leaRdata x0, __str_blob_115  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_114  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25171,7 +25171,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#131:
-    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.leaRdata x0, __str_blob_120  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25187,7 +25187,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#134:
-    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.leaRdata x0, __str_blob_120  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25203,7 +25203,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#137:
-    arm64.leaRdata x0, __str_blob_122  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25219,7 +25219,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#65:
-    arm64.leaRdata x0, __str_blob_116  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_115  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25235,7 +25235,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_104  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_103  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25251,7 +25251,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#15:
-    arm64.leaRdata x0, __str_blob_105  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_104  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25861,7 +25861,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#61:
-    arm64.leaRdata x0, __str_blob_114  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_113  ; "panic at grapheme.maxon:67: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25877,7 +25877,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#63:
-    arm64.leaRdata x0, __str_blob_115  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_114  ; "panic at grapheme.maxon:99: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25893,7 +25893,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#131:
-    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.leaRdata x0, __str_blob_120  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25909,7 +25909,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#134:
-    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.leaRdata x0, __str_blob_120  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25925,7 +25925,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#137:
-    arm64.leaRdata x0, __str_blob_122  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_121  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25941,7 +25941,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#65:
-    arm64.leaRdata x0, __str_blob_116  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_115  ; "panic at grapheme.maxon:121: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25957,7 +25957,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_104  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_103  ; "panic at String.maxon:735: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -25973,7 +25973,7 @@ func @String.trim {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#15:
-    arm64.leaRdata x0, __str_blob_105  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.leaRdata x0, __str_blob_104  ; "panic at String.maxon:755: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1

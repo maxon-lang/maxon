@@ -1,0 +1,26 @@
+let LintOutputWritesNothingForAFindingCaseDirName = "lint-output-writes-nothing-for-a-finding"
+let LintOutputWritesNothingForAFindingFixture = "lint-discarded-pure-result"
+let LintOutputWritesNothingForAFindingStem = "linted"
+let LintOutputWritesNothingForAFindingCleanExit = 0
+
+test 'lint with --output= reports a finding and writes no executable'
+	requireHeldOutsideCheckout(LintOutputWritesNothingForAFindingCaseDirName, check: LintOutputWritesNothingForAFinding.create())
+end 'lint with --output= reports a finding and writes no executable'
+
+type LintOutputWritesNothingForAFinding implements OutsideCheckoutCase
+	static function create() returns LintOutputWritesNothingForAFinding
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOutputWritesNothingForAFindingFixture)
+		let output = executableIn(dir, stem: LintOutputWritesNothingForAFindingStem)
+		let linted = lintedIn(dir, app: app, options: ["{OutputOptionPrefix}{output.toString()}"])
+		let typed = linted.typed
+		let said = linted.said()
+
+		try Expect.notEqual(linted.output.exitCode(), expected: LintOutputWritesNothingForAFindingCleanExit, message: "{typed} succeeded on a program with a finding. {said}")
+		try Expect.contains(linted.output.stderr, needle: DiscardedPureResultCode, message: "{typed} did not report the program's {DiscardedPureResultCode}. {said}")
+		try Expect.isFalse(File.exists(output), message: "{typed} wrote {output.toString()} for a program lint refuses. {said}")
+	end 'requireHeldIn'
+end 'LintOutputWritesNothingForAFinding'

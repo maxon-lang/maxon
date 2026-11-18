@@ -41,8 +41,10 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		_ = project.debugSpanTable.fileId(point.filePath)
 	end 'eachCoveragePointsFile'
 
+	let sourceRoot = project.programAnchor.resolved()
+
 	for fileId in MxdbgFirstSourceFileId upto project.debugSpanTable.fileCount() 'eachFile'
-		writer.addFile(authoredSourcePath(project, compiled: project.debugSpanTable.filePath(fileId as DebugFileId)))
+		writer.addFile(recordedSourcePath(project, root: sourceRoot, compiled: project.debugSpanTable.filePath(fileId as DebugFileId)))
 	end 'eachFile'
 
 	// The type table is closed before any record points into it: a local names its type by id, so
@@ -96,7 +98,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	// The sidecar's build-id, and the `.mxcov`'s: one fold, so a driver joining the two cannot be handed
 	// two numbers for one build.
-	let image = writer.build(codeBuildId(codeResult.code), targetTriple: targetToString(project.target), sourceRoot: Directory.currentPath().toString())
+	let image = writer.build(codeBuildId(codeResult.code), targetTriple: targetToString(project.target), sourceRoot: sourceRoot.toString(), compilerVersion: compilerBuildStamp())
 
 	let sidecarPath = sidecarPathOf(outputPath)
 
@@ -241,10 +243,34 @@ function lineRowFlags(counted FixedBoolArray, at ElementIndex, entersTheLine boo
 	return MxdbgLineFlagStatement or coverage or lineEntry
 end 'lineRowFlags'
 
-function authoredSourcePath(project Project, compiled String) returns String
+function recordedSourcePath(project Project, root FilePath, compiled String) returns String
 	let read = try FilePath.from(compiled) otherwise panic("debug info: the span table holds the file '{compiled}', which is not a spellable path — every entry is a path the loader read")
+	let provenance = fileProvenanceOf(project, path: read)
 
-	return project.stagedSourceOrigins.authoredPathOf(read).toString()
+	return match provenance.tier() 'tier'
+		author gives authoredSourcePath(project, root: root, read: read)
+		stdlib gives libraryFileNameOf(provenance, tier: MxdbgLibraryTier.stdlib)
+		runtime gives libraryFileNameOf(provenance, tier: MxdbgLibraryTier.runtime)
+		scriptlib gives libraryFileNameOf(provenance, tier: MxdbgLibraryTier.scriptlib)
+	end 'tier'
+end 'recordedSourcePath'
+
+function libraryFileNameOf(provenance FileProvenance, tier MxdbgLibraryTier) returns String
+	return mxdbgLibraryFileName(tier, below: String.from(provenance.orderKey.relative))
+end 'libraryFileNameOf'
+
+function authoredSourcePath(project Project, root FilePath, read FilePath) returns String
+	let authored = project.stagedSourceOrigins.authoredPathOf(read).resolve(Directory.currentPath())
+
+	if let belowTheRoot = try authored.relativeTo(root) 'underTheRoot'
+		let spelled = belowTheRoot.toString()
+
+		if not mxdbgOpensWithATierDirectory(spelled, separator: FilePath.separator()) 'cannotBeTakenForALibraryFile'
+			return spelled
+		end 'cannotBeTakenForALibraryFile'
+	end 'underTheRoot'
+
+	return authored.toString()
 end 'authoredSourcePath'
 
 // ⭐⭐ **ONE RECORD PER MINTED POINT, IN COUNTER ORDER, WHETHER OR NOT ITS CODE SURVIVED.** The record's

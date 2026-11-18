@@ -340,8 +340,8 @@ it to the new holder.
 ## The build lock
 
 Two builds of one output would overwrite each other's executable and [build record](/docs/cli/#up-to-date), so
-every `maxon build` — `--output=` builds included — locks its **output** before it decides whether the
-output is up to date, and holds the lock until the build record is written. The lock is
+every `maxon build` — `--output=` builds included — and every `maxon lint --output=` locks its **output**
+before it decides whether the output is up to date, and holds the lock until the build record is written. The lock is
 `<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's physical path the build record is named by,
 with its claim file `<key>.lock.claim` beside it, so a build takes it only where a cache root is usable.
 

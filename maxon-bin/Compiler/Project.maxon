@@ -416,12 +416,12 @@ let NamespaceSeparator = "."
 // It is the string every `Visibility.unexported` question is decided on.
 //
 // The `notUnderRoot` fallback: a file outside its declared anchor falls back to its immediate
-// parent's NAME, so a misconfigured anchor can never produce a `..` segment. `namespaceAnchorFor`
-// gives stdlib its own anchor, so the arm covers only a genuinely misconfigured caller.
+// parent's NAME, so a misconfigured anchor can never produce a `..` segment. `libraryConeAnchorFor`
+// gives each library tier its own anchor, so the arm covers only a genuinely misconfigured caller.
 //
 // ⚠ **THE ANCHOR IS THE ARGUMENT, AND GETTING IT WRONG IS SILENT** — every file would get a plausible
-// module directory and the wrong one. `Queries.namespaceAnchorFor` is its single producer, and states the
-// three anchors it derives.
+// module directory and the wrong one. `Queries.libraryConeAnchorFor` is its single producer, and
+// `Queries.moduleDirectoryForFile` states the anchors it derives.
 //
 // `FilePath` normalizes to the PLATFORM separator on construction, so a Windows host hands back
 // `feature\sub` where a POSIX host hands back `feature/sub`, and a spec fixture's
@@ -657,7 +657,7 @@ function insertCandidateName(candidates StringArray, candidate String)
 	candidates.insert(at, value: candidate)
 end 'insertCandidateName'
 
-// ⭐ **BYTE-WISE `<` OVER TWO STRINGS — the compiler's ONE lexicographic order.** `String` declares no
+// ⭐ **BYTE-WISE `<` OVER TWO STRINGS, in `compareBytesOrdinally`'s order.** `String` declares no
 // `Comparable` conformance and the byte door that would avoid these two conversions (`String.byteAt`) is
 // unexported inside `stdlib/`, so the comparison is made on the byte arrays.
 //
@@ -13545,6 +13545,7 @@ export type Project
 	// reads this: `isInside` compares spellings, so `rootPath` as typed would answer by how it was
 	// named.
 	export let rootIdentity as FilePath
+	let programAnchor as ProgramAnchor
 
 	// Target CPU/OS this build emits for.
 	//
@@ -13607,7 +13608,7 @@ export type Project
 	// folds and the initializer parses. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
-	export static function create(db QueryDatabase, rootPath FilePath, rootIdentity FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, stdlibBodies LibraryBodies, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray, openPhaseSpans TraceNameArray) returns Project
+	static function create(db QueryDatabase, rootPath FilePath, rootIdentity FilePath, programAnchor ProgramAnchor, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, stdlibBodies LibraryBodies, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray, openPhaseSpans TraceNameArray) returns Project
 		let interfaces = IrInterfaceMap.create()
 
 		return Self{
@@ -13705,6 +13706,7 @@ export type Project
 			deferredChains: DeferredChainTable.create(),
 			rootPath: rootPath,
 			rootIdentity: rootIdentity,
+			programAnchor: programAnchor,
 			target: target,
 			diagnostics: DiagnosticArray.create(0),
 			poison: DeclarationPoison.create(),
@@ -13737,7 +13739,7 @@ function createProject(rootPath FilePath, target Target, stdlibDir FilePath, run
 	let physicalRuntimeDir = try identityOfPath(runtimeDir)
 	let physicalScriptlib = try scriptlib.physical()
 
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, rootIdentity: rootIdentity, target: target, stdlibDir: physicalStdlibDir, runtimeDir: physicalRuntimeDir, scriptlib: physicalScriptlib, stdlibBodies: stdlibBodies, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, rootIdentity: rootIdentity, programAnchor: ProgramAnchor.of(rootPath, rootIdentity: rootIdentity), target: target, stdlibDir: physicalStdlibDir, runtimeDir: physicalRuntimeDir, scriptlib: physicalScriptlib, stdlibBodies: stdlibBodies, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
 end 'createProject'
 
 export union CompileInterest

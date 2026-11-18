@@ -1,16 +1,14 @@
 let TheOutputIsIndependentOfTheHashSeedCaseDirName = "output-independent-of-hash-seed"
 let TheOutputIsIndependentOfTheHashSeedFixtureDirName = "tests/cli/fixtures/hash-seed-independent-output"
-let FirstHashSeed = "0123456789abcdef"
-let SecondHashSeed = "fedcba9876543210"
 let PlainBuildLabel = "plain"
 let DebugStreamBuildLabel = "debugstream"
 let EnumLookupHelpers = ["__enum_from_raw_Colour", "__enum_from_raw_Weekday", "__enum_from_name_Planet", "__enum_from_name_Suit", "__enum_from_name_Mineral", "__enum_from_name_Instrument", "__enum_from_name_Reading", "__enum_from_name_Reading#celsius"]
 
-test 'two builds of one program under two hash seeds write the same bytes'
+test 'builds of one program under three hash seeds write the same bytes'
 	requireHeldOutsideCheckout(TheOutputIsIndependentOfTheHashSeedCaseDirName, check: OutputIsIndependentOfTheHashSeed.create())
-end 'two builds of one program under two hash seeds write the same bytes'
+end 'builds of one program under three hash seeds write the same bytes'
 
-type OutputIsIndependentOfTheHashSeed implements OutsideCheckoutCase
+type OutputIsIndependentOfTheHashSeed implements OutsideCheckoutCase, EnvironmentCellCheck
 	static function create() returns OutputIsIndependentOfTheHashSeed
 		return Self{}
 	end 'create'
@@ -19,52 +17,21 @@ type OutputIsIndependentOfTheHashSeed implements OutsideCheckoutCase
 		let app = stagingDir(dir.join(AppDirName).toString())
 		stageStoredTree(fixtureDir(TheOutputIsIndependentOfTheHashSeedFixtureDirName), into: app)
 
-		let plainAgreed = try seedIndependentBuilds(dir, label: PlainBuildLabel, options: StringArray.create(0))
-		let debugStreamAgreed = try seedIndependentBuilds(dir, label: DebugStreamBuildLabel, options: [DebugStreamFlag])
+		let programs = GateProgramArray.create(0)
+		programs.push(GateProgram.built(PlainBuildLabel, program: AppDirName, options: StringArray.create(0)))
+		programs.push(GateProgram.built(DebugStreamBuildLabel, program: AppDirName, options: [DebugStreamFlag]))
 
-		if not (plainAgreed and debugStreamAgreed) 'differed'
-			throw TestFailure.assertion
-		end 'differed'
+		try requireIndependentOfTheEnvironment(try processHashSeedAxis(dir), programs: programs, staged: dir, check: self)
 	end 'requireHeldIn'
+
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+		requireEveryLookupHelperIn(outcome.sidecar)
+	end 'requireAfterRun'
+
+	function requireAfterEnvironment(_ EnvironmentRun) throws TestFailure
+		return
+	end 'requireAfterEnvironment'
 end 'OutputIsIndependentOfTheHashSeed'
-
-function seedIndependentBuilds(dir FilePath, label String, options StringArray) returns bool throws TestFailure
-	let image = dir.join("{OutputName}{executableSuffix()}")
-	let sidecar = dir.join("{OutputName}{executableSuffix()}{SidecarSuffix}")
-
-	try requireCompiled(buildUnderSeed(dir, seed: FirstHashSeed, cacheDirName: "cache-{label}-first-seed", options: options), reason: FirstBuildReason, which: "the {label} build under {HashSeedVariable}={FirstHashSeed}")
-	requireEveryLookupHelperIn(sidecar)
-
-	let firstImage = retainedAside(image, aside: dir.join("{label}-first-seed-image"))
-	let firstSidecar = retainedAside(sidecar, aside: dir.join("{label}-first-seed-sidecar"))
-
-	try requireCompiled(buildUnderSeed(dir, seed: SecondHashSeed, cacheDirName: "cache-{label}-second-seed", options: options), reason: FirstBuildReason, which: "the {label} build under {HashSeedVariable}={SecondHashSeed}")
-
-	let imageAgreed = sameBytesReported(firstImage, second: image, why: "the {label} executable built under {HashSeedVariable}={SecondHashSeed} is not the one built under {FirstHashSeed}, so the compiler's own hash order reached the program.")
-	let sidecarAgreed = sameBytesReported(firstSidecar, second: sidecar, why: "the {label} debug sidecar built under {HashSeedVariable}={SecondHashSeed} is not the one built under {FirstHashSeed}, so the compiler's own hash order reached what the debugger is told.")
-
-	return imageAgreed and sidecarAgreed
-end 'seedIndependentBuilds'
-
-function sameBytesReported(first FilePath, second FilePath, why String) returns bool
-	try requireSameBytes(first, second: second, why: why) otherwise return false
-
-	return true
-end 'sameBytesReported'
-
-function buildUnderSeed(dir FilePath, seed String, cacheDirName String, options StringArray) returns CollectedOutput
-	let naming = EnvMap.create()
-	naming.upsert(CacheRootVariable, value: stagingDir(dir.join(cacheDirName).toString()).toString())
-	naming.upsert(HashSeedVariable, value: seed)
-
-	let arguments = [BuildCommandWord, AppDirName, "{OutputOptionPrefix}{dir.join(OutputName).toString()}"].clone()
-
-	for option in options 'eachOption'
-		arguments.push(option)
-	end 'eachOption'
-
-	return runWithCacheRoots(arguments, naming: naming, workingDirectory: dir)
-end 'buildUnderSeed'
 
 function requireEveryLookupHelperIn(sidecar FilePath)
 	let bytes = fileBytes(sidecar)

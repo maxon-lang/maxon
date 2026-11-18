@@ -20,7 +20,37 @@ export enum LintRules
 			skipped gives PassKindArray.create(0)
 		end 'rules'
 	end 'auditPasses'
+
+	function audit(audit LintAudit, project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
+		match self 'rules'
+			enforced then break
+			skipped then return
+		end 'rules'
+
+		let band = signatures.openScratchBand()
+
+		try runLintAudit(audit, project: project, module: module, signatures: signatures, funcNames: funcNames) otherwise (failure) 'refused'
+			signatures.closeScratchBand(band)
+			throw failure
+		end 'refused'
+
+		signatures.closeScratchBand(band)
+	end 'audit'
 end 'LintRules'
+
+enum LintAudit
+	discardedResults
+	unusedExports
+	unusedUnexported
+end 'LintAudit'
+
+function runLintAudit(audit LintAudit, project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
+	match audit 'audit'
+		discardedResults then checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
+		unusedExports then try checkUnusedExports(project, module: module, signatures: signatures)
+		unusedUnexported then try checkUnusedUnexported(project, module: module, signatures: signatures)
+	end 'audit'
+end 'runLintAudit'
 
 export enum LintReading
 	asPrinted

@@ -1719,6 +1719,17 @@ function resetForLowering(project Project)
 	project.debugSpanTable = DebugSpanTable.create()
 end 'resetForLowering'
 
+let IndexAfterTheFrontEndLogPrefix = "the whole-program index after the front end: "
+let ScratchBandRewindLogPrefix = "a scratch band rewound "
+
+function reportIndexAfterTheFrontEnd(signatures ProgramSignatures)
+	let log = compilerLogger(CompilerLogGroup.compiler)
+
+	if log.enabled(LogLevel.debug) 'reported'
+		log.debug("{IndexAfterTheFrontEndLogPrefix}{signatures.fingerprint(FingerprintDetail.withLabels).rendered()}")
+	end 'reported'
+end 'reportIndexAfterTheFrontEnd'
+
 function prepareLowering(project Project, module MaxonModule) returns LoweredProgram throws CompileError
 	// ⭐⭐ **AND BECAUSE THIS COMPILE IS ABOUT TO MUTATE THAT MODULE, THE MEMO MAY NOT SERVE IT AGAIN.**
 	// The bytes have not moved, so the content hash still matches and the memo would answer VALID with a
@@ -1975,6 +1986,8 @@ function prepareLowering(project Project, module MaxonModule) returns LoweredPro
 	try pipeline.runFrontEnd(buildMaxonTierPasses(project.lintRules), gate: maxonTierGateFor(project)) otherwise (failure) 'maxonTierFailed'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'maxonTierFailed'
+
+	reportIndexAfterTheFrontEnd(signatures)
 
 	requireNoUnresolvedTagsSurvivedTheMaxonTier(module)
 
@@ -2976,7 +2989,7 @@ end 'reportSecondaryFindingsBeforeBackend'
 // rather than surface it (see `StdlibLoader`'s header); where an order matters it is canonicalized
 // at the point of emission.
 function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
-	for path in inSourceOrder(try namedSourceFiles(paths, selection: selection), order: project.session.sourceOrder) 'eachSource'
+	for path in inSourceOrder(try namedSourceFiles(paths, selection: selection, recording: WalkRecording.into(project.db.walkedSources)), order: project.session.sourceOrder) 'eachSource'
 		try loadOneSourceFile(project, path: path)
 	end 'eachSource'
 
@@ -3004,13 +3017,15 @@ end 'inSourceOrder'
 // lets `build a.maxon b.maxon <theirDirectory>` mean "these two first, then whatever else is under
 // there", the form the spec runner uses to state a case's file order while rooting the project at
 // the case's own directory.
-export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns MaxonSourcePathArray throws CompileError
+export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused, recording WalkRecording = WalkRecording.none) returns MaxonSourcePathArray throws CompileError
 	let files = MaxonSourcePathArray.create(0)
 	let ledger = PhysicalEntryLedger.create()
 
 	for path in paths 'eachNamed'
+		let first = files.count()
+
 		if File.exists(path) 'isFile'
-			let namedFirst = try ledger.claimsFirst(path)
+			let namedFirst = try ledger.claimsFirstSource(path)
 
 			if namedFirst 'unseen'
 				files.push(path)
@@ -3020,6 +3035,8 @@ export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSel
 		end 'isDir' else 'notFound'
 			throw CompileError.fileNotFound(path.path)
 		end 'notFound'
+
+		recording.note(files, firstWalked: first, walkRoot: path, ledger: ledger)
 	end 'eachNamed'
 
 	return files
@@ -3030,15 +3047,15 @@ function unidentifiablePathFailure(cause RunCacheError) returns CompileError
 end 'unidentifiablePathFailure'
 
 // ⭐⭐ **THE PROJECT ROOT OF A BUILD THAT NAMED SEVERAL PATHS — the ONE directory every one of them
-// lies under.** It is what `Project.rootPath` becomes, and through it what
-// `Queries.namespaceAnchorFor` measures every file's MODULE DIRECTORY from, so getting it wrong
+// lies under.** It is what `Project.rootPath` becomes, and through it what `ProgramAnchor`
+// measures every file's source order key and MODULE DIRECTORY from, so getting it wrong
 // re-anchors namespaces silently rather than failing.
 //
 // ⚠ **ONE PATH IS ITS OWN ANCESTOR, and that identity is what leaves a single-path build's root
 // untouched.** The narrowing loop's first comparison is `first` against itself, which `isInside`
 // answers true for, so a lone `build <file>` or `build <directory>` keeps the spelling the caller
 // TYPED, unresolved. Every downstream reader resolves it against the cwd for itself
-// (`namespaceAnchorFor`) or takes its physical identity (`createProject`'s `rootIdentity`), and
+// (`ProgramAnchor.resolved`) or takes its physical identity (`createProject`'s `rootIdentity`), and
 // `resolveOutputPath` derives a default output name from it, so resolving it here would silently
 // rewrite that name for every single-file build in the tree.
 //
@@ -3050,7 +3067,7 @@ end 'unidentifiablePathFailure'
 // the root itself for a path directly under one and throws for a root, so the narrowing walk runs
 // out at the top and reports `noCommonRoot` there. Every `resolvedRoot` it publishes is therefore
 // an absolute directory — which is what the downstream `.resolve(cwd)` reader
-// (`namespaceAnchorFor`) needs, since a relative one would be joined onto the working directory.
+// (`ProgramAnchor.resolved`) needs, since a relative one would be joined onto the working directory.
 //
 // ⚠ **THE RESIDUAL IS THAT A ROOT-ROOTED BUILD IS REFUSED RATHER THAN ROOTED, and it is REFUSED
 // rather than left wrong on purpose.** `C:\` really is the common directory of `C:\a\x` and `C:\b\y`,
@@ -3134,10 +3151,13 @@ end 'commonAncestorOf'
 // that a gitignored directory — invisible to git, visible here — is attributed in the trend log
 // (see `printLibraryWalkCensus`). The count comes from the recursion rather than a second
 // traversal, which would be free to disagree the moment this one grows an exclusion.
-export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns DirectoryWalkCount throws CompileError
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused, recording WalkRecording = WalkRecording.none) returns DirectoryWalkCount throws CompileError
 	let ledger = PhysicalEntryLedger.create()
+	let first = into.count()
+	let walked = try collectIfFirst(dir, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
+	recording.note(into, firstWalked: first, walkRoot: dir, ledger: ledger)
 
-	return try collectIfFirst(dir, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
+	return walked
 end 'collectMaxonSources'
 
 function collectIfFirst(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
@@ -3187,7 +3207,7 @@ function collectListedSources(entries FilePathArray, into MaxonSourcePathArray, 
 				continue
 			end 'notASource'
 
-			let sourceFirst = try ledger.claimsFirst(entry)
+			let sourceFirst = try ledger.claimsFirstSource(entry)
 
 			if sourceFirst 'unseen'
 				into.push(entry)

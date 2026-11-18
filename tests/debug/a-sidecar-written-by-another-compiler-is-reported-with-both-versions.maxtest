@@ -1,0 +1,72 @@
+let OtherCompilerCaseLabel = "a-sidecar-written-by-another-compiler-is-reported-with-both-versions"
+let CompilerKey = "compiler:"
+let CompilerNamePrefix = "maxon "
+let SidecarSuffix = ".mxdbg"
+let DifferenceNoteKey = "note:"
+let UnresolvedTiersText = "stdlib/, runtime/ and scriptlib/"
+let ChangedFirstByte = 120
+
+test 'a sidecar written by another compiler is refused by a session and reported with both versions by the dump'
+	let staged = builtFixture(OtherCompilerCaseLabel, fixture: WalksFixtureName)
+	let executable = builtExecutable(staged)
+	let whole = StringArray.create(0)
+
+	let before = withoutCarriageReturns(spawnDumpInfo(executable, staged: staged, sections: whole).stdout)
+	let written = keyedValueOf(before, key: CompilerKey).replace(CompilerNamePrefix, with: "")
+	try Expect.isFalse(before.contains(DifferenceNoteKey), message: "a sidecar written by this very compiler is reported as differing. The dump was: {before}")
+
+	let changed = written.toByteArray()
+	try changed.set(0, value: ChangedFirstByte) otherwise panic("the gate could not run — the compiler version '{written}' is empty")
+	let other = String.from(changed)
+
+	let sidecar = try FilePath.from("{executable.toString()}{SidecarSuffix}") otherwise panic("the gate could not run — the sidecar path of {executable.toString()} is not spellable")
+	let image = fileBytes(sidecar)
+	let at = positionOfBytes(image, needle: written.toByteArray())
+
+	for (iter, byte) in changed.withIterator() 'eachChangedByte'
+		try image.set(at + iter.index(), value: byte) otherwise panic("the gate could not run — the version text found at {at} runs past the sidecar's end")
+	end 'eachChangedByte'
+
+	try File.writeBinary(sidecar, content: image) otherwise panic("the gate could not run — could not write {sidecar.toString()}")
+
+	let dump = withoutCarriageReturns(spawnDumpInfo(executable, staged: staged, sections: whole).stdout)
+	try Expect.isTrue(dump.contains("{CompilerNamePrefix}{other}"), message: "the dump does not name the version the sidecar records, {other}. The dump was: {dump}")
+	try Expect.isTrue(dump.contains(DifferenceNoteKey) and dump.contains(written) and dump.contains(UnresolvedTiersText), message: "the dump does not report the sidecar's version as differing from this compiler's, {written}, and name the sources it leaves unresolved. The dump was: {dump}")
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine([RunCommand]), extraOptions: StringArray.create(0))
+	try Expect.isFalse(session.exitCode() == 0, message: "a session over a sidecar another compiler wrote started. {renderedEvents(session.stdout, stderr: session.stderr)}")
+	try Expect.isTrue(session.stderr.contains(other) and session.stderr.contains(written), message: "the refusal does not name both versions, {other} and {written}. It said: {session.stderr}")
+
+	discardStagedDir(staged)
+end 'a sidecar written by another compiler is refused by a session and reported with both versions by the dump'
+
+function keyedValueOf(dump String, key String) returns String
+	for rawLine in dump.split(LineFeed) 'eachLine'
+		let line = rawLine.trim()
+
+		if line.startsWith(key) 'theKey'
+			return line.replace(key, with: "").trim()
+		end 'theKey'
+	end 'eachLine'
+
+	panic("the dump has no '{key}' line. It was: {dump}")
+end 'keyedValueOf'
+
+function positionOfBytes(haystack ByteArray, needle ByteArray) returns ElementIndex
+	for start in 0 upto haystack.count() - needle.count() + 1 'eachStart'
+		var matches = true
+
+		for (iter, byte) in needle.withIterator() 'eachByte'
+			if (try haystack.get(start + iter.index()) otherwise 0) != byte 'differs'
+				matches = false
+				break
+			end 'differs'
+		end 'eachByte'
+
+		if matches 'found'
+			return start
+		end 'found'
+	end 'eachStart'
+
+	panic("the sidecar holds no run of the {needle.count()} bytes of the compiler version it records")
+end 'positionOfBytes'

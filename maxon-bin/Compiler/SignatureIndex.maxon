@@ -578,6 +578,7 @@ enum SignatureDiscriminator
 	declShapeExtensionHeldArgument = 165
 	declShapeLinearType = 166
 	declShapeLibraryBindingMint = 167
+	declShapeFileOrderKey = 168
 end 'SignatureDiscriminator'
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
@@ -757,16 +758,16 @@ let FileScopedKeySeparator = "|"
 export typealias TopLevelDeclIndexArray = Array with ElementIndex
 
 type SourceSite
-	let filePath as FilePath
+	let orderKey as SourceOrderKey
 	let line as LineNumber
 	let column as ColumnNumber
 
-	static function of(filePath FilePath, line LineNumber, column ColumnNumber) returns SourceSite
-		return Self{filePath: filePath, line: line, column: column}
+	static function of(orderKey SourceOrderKey, line LineNumber, column ColumnNumber) returns SourceSite
+		return Self{orderKey: orderKey, line: line, column: column}
 	end 'of'
 
 	function compare(other SourceSite) returns Ordering
-		let byFile = comparePathIdentity(self.filePath, other: other.filePath)
+		let byFile = self.orderKey.compare(other.orderKey)
 
 		if byFile != Ordering.equalTo 'filesDiffer'
 			return byFile
@@ -791,8 +792,8 @@ type DeclarationSite
 	export let name as immutable ByteArray
 	export let site as SourceSite
 
-	static function of(decl TopLevelDecl, index ElementIndex) returns DeclarationSite
-		return Self{index: index, name: decl.name, site: SourceSite.of(decl.declFilePath, line: decl.nameLine, column: decl.nameColumn)}
+	static function of(decl TopLevelDecl, index ElementIndex, site SourceSite) returns DeclarationSite
+		return Self{index: index, name: decl.name, site: site}
 	end 'of'
 
 	function compare(other DeclarationSite) returns Ordering
@@ -1386,13 +1387,16 @@ function pushImageBoxNode(nodes ImmortalBoxNodeArray, node ImmortalBoxNode) retu
 	return id
 end 'pushImageBoxNode'
 
-// The contested names, in table order — a `match` arm may not open a `for`, so the walk is its own function.
+// The contested names, in byte order so no reader follows the process hash seed — a `match` arm may not
+// open a `for`, so the walk is its own function.
 function keysOfCrossKindContests(byName CrossKindContestMap) returns NameRoster
 	let names = NameRoster.create(byName.count(), zeroed: false)
 
 	for (name, _) in byName 'eachContestedName'
 		names.push(name)
 	end 'eachContestedName'
+
+	sortNamesInByteOrder(names)
 
 	return names
 end 'keysOfCrossKindContests'
@@ -2993,12 +2997,17 @@ end 'DeclaredTypeName'
 // a `String` or a `Character`; `anything` says an opaque slot — a type parameter, an existential, a
 // function value's environment, a compiler-owned aggregate — may hold any record.
 export type HeldRecordKinds
-	export var kinds as HeldRecordKindSet
+	let kinds as HeldRecordKindSet
+	let writableKinds as HeldRecordKindSet
 	export var anything as bool
 
 	static function create() returns HeldRecordKinds
-		return Self{kinds: HeldRecordKindSet.create(), anything: false}
+		return Self{kinds: HeldRecordKindSet.create(), writableKinds: HeldRecordKindSet.create(), anything: false}
 	end 'create'
+
+	function holds(kind ByteArray) returns bool
+		return self.kinds.contains(kind)
+	end 'holds'
 
 	function mayHold(kind ByteArray) returns bool
 		return self.anything or self.kinds.contains(kind)
@@ -3008,44 +3017,24 @@ export type HeldRecordKinds
 		return not self.anything and self.kinds.count() == 0
 	end 'holdsNothing'
 
-	function mayHoldWritableRecord(kind ByteArray, writability RecordKindWritability) returns bool
-		return self.mayHold(kind) and writability.isWritableState(kind)
-	end 'mayHoldWritableRecord'
+	function register(kind immutable ByteArray, writable bool)
+		if self.kinds.contains(kind) 'alreadyDecided'
+			panic("HeldRecordKinds.register: `{String.from(kind)}` is registered twice, and its writability is decided once, when it is first registered")
+		end 'alreadyDecided'
 
-	function holdsNoWritableRecord(writability RecordKindWritability) returns bool
-		if self.anything 'anOpaqueSlot'
-			return false
-		end 'anOpaqueSlot'
+		self.kinds.insert(kind)
 
-		for kind in self.kinds 'eachKind'
-			if writability.isWritableState(kind) 'aWritableKind'
-				return false
-			end 'aWritableKind'
-		end 'eachKind'
+		if writable 'aWritableKind'
+			self.writableKinds.insert(kind)
+		end 'aWritableKind'
+	end 'register'
 
-		return true
+	function holdsNoWritableRecord() returns bool
+		return not self.anything and self.writableKinds.count() == 0
 	end 'holdsNoWritableRecord'
-
-	function overlaps(other HeldRecordKinds, writability RecordKindWritability) returns bool
-		if self.holdsNoWritableRecord(writability) or other.holdsNoWritableRecord(writability) 'oneHoldsNothingWritable'
-			return false
-		end 'oneHoldsNothingWritable'
-
-		if self.anything or other.anything 'anOpaqueSlot'
-			return true
-		end 'anOpaqueSlot'
-
-		for kind in self.kinds 'eachKind'
-			if other.mayHoldWritableRecord(kind, writability: writability) 'sharedWritableKind'
-				return true
-			end 'sharedWritableKind'
-		end 'eachKind'
-
-		return false
-	end 'overlaps'
 end 'HeldRecordKinds'
 
-export typealias HeldRecordKindSet = Set with ByteArray
+typealias HeldRecordKindSet = Set with ByteArray
 
 typealias RecordKindVerdicts = Map with (ByteArray, bool)
 
@@ -9852,11 +9841,24 @@ type InstanceBandMark
 	let rows as GenericInstanceId
 	let named as ElementIndex
 	let copyDemanded as ElementIndex
+	let mergeNamed as ElementIndex
+	let mergeCopyDemanded as ElementIndex
 
-	static function create(rows GenericInstanceId, named ElementIndex, copyDemanded ElementIndex) returns InstanceBandMark
-		return Self{rows: rows, named: named, copyDemanded: copyDemanded}
+	static function create(rows GenericInstanceId, named ElementIndex, copyDemanded ElementIndex, mergeNamed ElementIndex, mergeCopyDemanded ElementIndex) returns InstanceBandMark
+		return Self{rows: rows, named: named, copyDemanded: copyDemanded, mergeNamed: mergeNamed, mergeCopyDemanded: mergeCopyDemanded}
 	end 'create'
 end 'InstanceBandMark'
+
+type ScratchBandMark
+	let band as ParseBandMark
+	let mergeMintedSpeculative as BoolArray
+	let descriptorReads as DescriptorReads
+	let fingerprint as IndexFingerprint
+
+	static function create(band ParseBandMark, mergeMintedSpeculative BoolArray, descriptorReads DescriptorReads, fingerprint IndexFingerprint) returns ScratchBandMark
+		return Self{band: band, mergeMintedSpeculative: mergeMintedSpeculative, descriptorReads: descriptorReads, fingerprint: fingerprint}
+	end 'create'
+end 'ScratchBandMark'
 
 type ParseBandMark
 	let instances as InstanceBandMark
@@ -10287,7 +10289,23 @@ export type IndexFingerprint
 	function digestLabel(position ElementIndex) returns String
 		return try self.digestLabels.get(position) otherwise panic("IndexFingerprint.digestLabel: no label at {position} — only a fingerprint taken `withLabels` names its fields")
 	end 'digestLabel'
+
+	function rendered() returns String
+		let fields = StringArray.create(self.values.count() + self.digests.count(), zeroed: false)
+
+		for (position, value) in self.values.withIterator() 'eachValue'
+			fields.push("{self.valueLabel(position.index())}={value}")
+		end 'eachValue'
+
+		for (position, digest) in self.digests.withIterator() 'eachDigest'
+			fields.push("{self.digestLabel(position.index())}={digest}")
+		end 'eachDigest'
+
+		return joinedWith(fields, separator: FingerprintFieldSeparator)
+	end 'rendered'
 end 'IndexFingerprint'
+
+let FingerprintFieldSeparator = " "
 
 function typeNameClaimIndexCount(index TypeNameClaimIndex) returns EntryCount
 	return match index 'index'

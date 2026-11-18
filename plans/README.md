@@ -29,7 +29,7 @@ plan). In short:
 | [ownership](ownership.md): Every fact about a value rides one record: written where the value is minted, merged or carried round a loop, and read by every ownership and region rule | #309 | P0 | 12 | A | 1 |  |
 | [declaration-identity](declaration-identity.md): Every declaration has one resolved identity (origin, layer, owner, kind): no lookup, key or message rebuilds it from a spelling | #18 | P1 | 9 | A | 2 |  |
 | [kept-answers](kept-answers.md): The compiler answers every by-name, by-type and per-compile question from one kept, keyed answer, and a ladder per program dimension shows it | #308 | P1 | 11 | A | 3 |  |
-| [determinism](determinism.md): Compiler output, caches, allocation counts and reports are a function of the program: one environment gate, one source order key, and a table walk that names its order | #311 | P1 | 7 | A | 4 |  |
+| [determinism](determinism.md): Compiler output, caches, allocation counts and reports are a function of the program: one environment gate, one source order key, and a table walk that names its order | #311 | P1 | 7 | A | 4 | landed, 1c deferred |
 | [constants](constants.md): A constant is declared once; a copy across a boundary no name crosses is sealed, read or pinned, and a gate refuses any other | #53 | P2 | 3 | A | 5 | deferred |
 | [unused-methods](unused-methods.md): maxon lint reports a method nothing uses, and its spelling census counts only what can name a declaration | #69 | P2 | 3 | A | 6 | deferred |
 | [generics](generics.md): A generic body is judged once, from its bounds alone, and every instance the program writes or infers is judged once at one door | #310 | P0 | 8 | B | 1 |  |
@@ -50,6 +50,7 @@ Queues A and B run side by side, one session each; a queue takes its plans in tu
 - [map-string-cost](map-string-cost.md) 8 waits on [structural-equality](structural-equality.md) 5.
 - [structural-equality](structural-equality.md) 2 waits on [map-string-cost](map-string-cost.md) 2.
 - [kept-answers](kept-answers.md) 7 waits on [generics](generics.md) 7.
+- [determinism](determinism.md) 1c (deferred) waits on [map-string-cost](map-string-cost.md) 1 and 6.
 - #37 waits on [declaration-identity](declaration-identity.md) 1 and 5.
 - [ownership](ownership.md) E1 and [generics](generics.md) 3 both change `finishValueTry`: whichever lands second builds on the first.
 - [declaration-identity](declaration-identity.md) 1 changes the signature index widely: no other front-end stage runs beside it.

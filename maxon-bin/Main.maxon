@@ -571,7 +571,7 @@ function buildDescribed(described DescribedBuild, args MaxonArgs, voice Manifest
 end 'buildDescribed'
 
 function builtWithSettings(described DescribedBuild, settings DescribedSettings, target Target, outputOverride StatedText, args MaxonArgs) returns ExitCode
-	let outcome = buildAndReport(described.sources, target: target, args: args, outputOverride: outputOverride, debugInfo: settings.debugInfo and args.debugInfo, productVersion: settings.productVersion, defines: settings.defines)
+	let outcome = buildAndReport(BuildJob.described(described.sources, settings: settings, target: target, args: args, outputOverride: outputOverride, lintRules: LintRules.skipped))
 
 	match outcome 'outcome'
 		built then recordCompilerRelease(settings.projectDir)
@@ -708,10 +708,9 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 	let inputPaths = try sourcePathsNamedBy(args) otherwise return OwnFailureExit
 	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
-	let outputOverride = args.outputOverride
-	let defines = args.defines
+	let job = BuildJob.ofPaths(inputPaths, target: target, args: args, outputOverride: args.outputOverride, lintRules: LintRules.skipped)
 
-	return match buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(0), defines: defines) 'outcome'
+	return match buildAndReport(job) 'outcome'
 		built gives SucceededExit
 		failed(code) gives code
 	end 'outcome'
@@ -738,19 +737,18 @@ end 'sourcePathsNamedBy'
 
 // The lock is asked of the command line's `--output=`: `outputOverride` may be a manifest's own
 // `output`, which says nothing about who else writes the tree.
-function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildOutcome
-	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
+function buildAndReport(job BuildJob) returns BuildOutcome
+	if refusedBuildOptions(job.args, target: job.target, debugInfo: job.debugInfo) 'refusedOptions'
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'refusedOptions'
 
 	let session = DriverSession.printing()
-	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride, into: session.treeLock)
+	let lockExit = acquireBuildTreeLock(job.inputPaths, outputOverride: job.args.outputOverride, into: session.treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
 		return BuildOutcome.failed(lockExit)
 	end 'busyTree'
 
-	let job = BuildJob.create(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
 	let outcome = buildUnlessUpToDate(job, session: session)
 	session.treeLock.release()
 	return outcome
@@ -764,10 +762,23 @@ type BuildJob
 	export let debugInfo as bool
 	export var productVersion as VersionComponentArray
 	export var defines as DefineArray
+	export let lintRules as LintRules
 
-	static function create(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildJob
-		return Self{inputPaths: inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines}
+	static function create(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray, lintRules LintRules) returns BuildJob
+		return Self{inputPaths: inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines, lintRules: lintRules}
 	end 'create'
+
+	static function described(inputPaths MaxonSourcePathArray, settings DescribedSettings, target Target, args MaxonArgs, outputOverride StatedText, lintRules LintRules) returns BuildJob
+		return Self.create(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: settings.debugInfo and args.debugInfo, productVersion: settings.productVersion, defines: settings.defines, lintRules: lintRules)
+	end 'described'
+
+	static function ofPaths(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, lintRules LintRules) returns BuildJob
+		return Self.create(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(0), defines: args.defines, lintRules: lintRules)
+	end 'ofPaths'
+
+	function compileRequest(session DriverSession) returns immutable CompileRequest
+		return freeze CompileRequest.create(DriverWork.build(self.lintRules), origin: ProjectOrigin.sources, target: self.target, session: session, inputPaths: self.inputPaths, outputOverride: self.outputOverride, emitIr: self.args.emitIr, metrics: self.args.metrics, requiredFunctionNames: self.args.requiredFunctionNames, asyncTrace: self.args.asyncTrace, debugStream: self.args.debugStream, poisonFreed: self.args.poisonFreed, debugInfo: self.debugInfo, coverage: self.args.coverage, censusByTag: self.args.censusByTag, censusPhase: self.args.censusPhase, allocationsByTag: self.args.allocationsByTag, allocationsPhase: self.args.allocationsPhase, productVersion: self.productVersion, defines: self.defines).clone()
+	end 'compileRequest'
 
 	function recordRequestFor(output FilePath, sourceOrder SourceOrder) returns BuildRecordRequest
 		return BuildRecordRequest.create(output, target: self.target, inputPaths: self.inputPaths, debugInfo: self.debugInfo, coverage: self.args.coverage, debugStream: self.args.debugStream, asyncTrace: self.args.asyncTrace, poisonFreed: self.args.poisonFreed, sourceOrder: sourceOrder, productVersion: self.productVersion, defines: self.defines)
@@ -804,6 +815,10 @@ function buildUnlessUpToDate(job BuildJob, session DriverSession) returns BuildO
 	if let flag = try job.args.observedCompileFlag().text() 'observed'
 		return compileWithoutRecord(job, output: output, identity: identity, reason: "{flag} observes the compile", session: session)
 	end 'observed'
+
+	if job.lintRules == LintRules.enforced 'lintChecks'
+		return compileWithoutRecord(job, output: output, identity: identity, reason: "{LintCommandName} runs its checks over the program", session: session)
+	end 'lintChecks'
 
 	let rebuildsTheCompiler = try outputIsRunningImage(identity) otherwise (e) 'unidentifiableImage'
 		return unidentifiableOutcome(e)
@@ -924,8 +939,7 @@ end 'acquireBuildTreeLock'
 function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session DriverSession) returns BuildOutcome
 	compilerLogger(CompilerLogGroup.compiler).info("compiling {subject}: {reason}")
 
-	let request = freeze CompileRequest.create(DriverWork.build(LintRules.skipped), origin: ProjectOrigin.sources, target: job.target, session: session, inputPaths: job.inputPaths, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, requiredFunctionNames: job.args.requiredFunctionNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines).clone()
-	let product = try compile(freshCompileDriver(), request: request, session: session) otherwise (e) 'compileErr'
+	let product = try compile(freshCompileDriver(), request: job.compileRequest(session), session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
@@ -1084,13 +1098,21 @@ export union LintStart
 end 'LintStart'
 
 export union LintProgram
-	sources(inputPaths MaxonSourcePathArray, defines DefineArray, target Target)
+	sources(inputPaths MaxonSourcePathArray, defines DefineArray, target Target, debugInfo bool, productVersion VersionComponentArray)
 	runner(manifest FilePath, entry String)
 	tests(staging TestsLintStaging)
 
+	function imageJob(args MaxonArgs) returns BuildJob
+		return match self 'program'
+			sources(inputPaths, defines, target, debugInfo, productVersion) gives BuildJob.create(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines, lintRules: LintRules.enforced)
+			runner or
+			tests panic("LintProgram.imageJob: `lintNamedBy` refuses {OutputFlagPrefix} beside a manifest and beside {LintTestsFlag}, so only a program's sources are linted into an image")
+		end 'program'
+	end 'imageJob'
+
 	function request(reading LintReading, metrics StatedText, session DriverSession) returns LintRequest
 		return match self 'program'
-			sources(inputPaths, defines, target) gives LintRequest.ready(sourcesLintRequest(reading, inputPaths: inputPaths, defines: defines, target: target, metrics: metrics, session: session))
+			sources(inputPaths, defines, target, _, _) gives LintRequest.ready(sourcesLintRequest(reading, inputPaths: inputPaths, defines: defines, target: target, metrics: metrics, session: session))
 			runner(manifest, entry) gives LintRequest.ready(runnerCompileRequest(DriverWork.lint(reading), program: manifest, target: detectHostTarget(), entryFunction: freeze entry.toByteArray(), session: session, outputOverride: StatedText.unstated, metrics: metrics))
 			tests(staging) gives staging.request(reading, metrics: metrics, session: session)
 		end 'program'
@@ -1120,6 +1142,10 @@ function lintedProgramOf(program LintProgram, subjects String, args MaxonArgs) r
 		return fixedLint(program, subjects: subjects)
 	end 'rewritingTheSources'
 
+	if args.outputOverride.isStated() 'writingAnImage'
+		return lintedImage(program.imageJob(args), subjects: subjects)
+	end 'writingAnImage'
+
 	let session = DriverSession.printing()
 
 	match program.request(LintReading.asPrinted, metrics: args.metrics, session: session) 'requested'
@@ -1141,6 +1167,14 @@ function lintNamedBy(args MaxonArgs, voice ManifestVoice) returns LintNaming
 	if args.fixesLint and args.metrics.isStated() 'fixesWithMetrics'
 		return LintNaming.refused(refusedLint("{LintFixFlag} lints the program again after each rewrite of its sources, so {MetricsFlagPrefix} has no one compile to measure beside it"))
 	end 'fixesWithMetrics'
+
+	if args.fixesLint and args.outputOverride.isStated() 'fixesWithAnImage'
+		return LintNaming.refused(refusedLint("{LintFixFlag} rewrites the program's sources and lints them again, so {OutputFlagPrefix} has no one program to write the image of"))
+	end 'fixesWithAnImage'
+
+	if args.lintsTests and args.outputOverride.isStated() 'testsWithAnImage'
+		return LintNaming.refused(refusedLint("{LintTestsFlag} lints what `{TestCommandName}` compiles, and `{TestCommandName}` writes its executable where it runs it, so {OutputFlagPrefix} does not apply"))
+	end 'testsWithAnImage'
 
 	if args.lintsTests and not args.defines.isEmpty() 'testsWithADefine'
 		return LintNaming.refused(refusedLint("{LintTestsFlag} lints what `{TestCommandName}` compiles, and `{TestCommandName}` takes no {DefineFlagPrefix}"))
@@ -1167,6 +1201,10 @@ function lintNamedBy(args MaxonArgs, voice ManifestVoice) returns LintNaming
 	if args.targetSpec.isStated() 'manifestForATarget'
 		return LintNaming.refused(refusedLint("{reportPathDisplay(manifest)} is a manifest, whose program is compiled for the host that runs it, so {TargetFlagPrefix} does not apply"))
 	end 'manifestForATarget'
+
+	if args.outputOverride.isStated() 'manifestWithAnImage'
+		return LintNaming.refused(refusedLint("{reportPathDisplay(manifest)} is a manifest, whose runner is compiled and run in place, so {OutputFlagPrefix} does not apply"))
+	end 'manifestWithAnImage'
 
 	if not args.defines.isEmpty() 'manifestWithADefine'
 		return LintNaming.refused(refusedLint("{reportPathDisplay(manifest)} is a manifest, whose runner is compiled with no define, so {DefineFlagPrefix} does not apply"))
@@ -1225,12 +1263,12 @@ function lintUsageLine() returns String
 end 'lintUsageLine'
 
 function lintArguments() returns String
-	return "[{LintTestsFlag}] [{LintFixFlag}] [<file|directory|target>...] [{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>]... [{MetricsFlagPrefix}<path>] [{TargetFlagPrefix}<cpu>-<os>]"
+	return "[{LintTestsFlag}] [{LintFixFlag}] [<file|directory|target>...] [{OutputFlagPrefix}<path>] [{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>]... [{MetricsFlagPrefix}<path>] [{TargetFlagPrefix}<cpu>-<os>]"
 end 'lintArguments'
 
 function lintOfProject(args MaxonArgs, target Target, voice ManifestVoice) returns LintStart
 	match soleTargetReadingOf(voice) 'reading'
-		noProjectFile then return lintedProgram(MaxonSourcePathArray from [Directory.currentPath()], target: target, defines: args.defines)
+		noProjectFile then return lintedProgram(BuildJob.ofPaths(MaxonSourcePathArray from [Directory.currentPath()], target: target, args: args, outputOverride: args.outputOverride, lintRules: LintRules.enforced))
 		read(resolution) then return lintResolved(resolution, args: args, target: target, voice: voice)
 	end 'reading'
 end 'lintOfProject'
@@ -1238,7 +1276,7 @@ end 'lintOfProject'
 function lintOfPaths(args MaxonArgs, target Target) returns LintStart
 	let inputPaths = try sourcePathsNamedBy(args) otherwise return LintStart.ended(OwnFailureExit)
 
-	return lintedProgram(inputPaths, target: target, defines: args.defines)
+	return lintedProgram(BuildJob.ofPaths(inputPaths, target: target, args: args, outputOverride: args.outputOverride, lintRules: LintRules.enforced))
 end 'lintOfPaths'
 
 function lintResolved(resolution DescriptionResolution, args MaxonArgs, target Target, voice ManifestVoice) returns LintStart
@@ -1250,15 +1288,15 @@ end 'lintResolved'
 
 function lintDescribed(described DescribedBuild, args MaxonArgs, target Target, voice ManifestVoice) returns LintStart
 	match acceptedSettings(described, args: args, target: target, voice: voice, notices: ReportStream.standardError) 'settings'
-		accepted(settings) then return lintedProgram(described.sources, target: target, defines: settings.defines)
+		accepted(settings) then return lintedProgram(BuildJob.described(described.sources, settings: settings, target: target, args: args, outputOverride: args.outputOverride, lintRules: LintRules.enforced))
 		refused(code) then return LintStart.ended(code)
 	end 'settings'
 end 'lintDescribed'
 
-function lintedProgram(inputPaths MaxonSourcePathArray, target Target, defines DefineArray) returns LintStart
-	let subjects = lintedSubjects(inputPaths)
+function lintedProgram(job BuildJob) returns LintStart
+	let subjects = lintedSubjects(job.inputPaths)
 
-	return LintStart.program(LintProgram.sources(inputPaths, defines: defines, target: target), subjects: subjects)
+	return LintStart.program(LintProgram.sources(job.inputPaths, defines: job.defines, target: job.target, debugInfo: job.debugInfo, productVersion: job.productVersion), subjects: subjects)
 end 'lintedProgram'
 
 function lintedRequest(request immutable CompileRequest, session DriverSession, subjects String) returns ExitCode
@@ -1268,6 +1306,13 @@ function lintedRequest(request immutable CompileRequest, session DriverSession, 
 
 	return lintedClean(subjects)
 end 'lintedRequest'
+
+function lintedImage(job BuildJob, subjects String) returns ExitCode
+	match buildAndReport(job) 'outcome'
+		built then return lintedClean(subjects)
+		failed(code) then return code
+	end 'outcome'
+end 'lintedImage'
 
 function reportedFailure(error CompileError) returns ExitCode
 	reportCompileError(error)
@@ -2013,7 +2058,8 @@ function reportCompileError(e CompileError, sink DiagnosticSink = DiagnosticSink
 		sourceNotReorderable or
 		runtimeTierIsNotAProgram or
 		requiredFunctionAbsent or
-		unidentifiablePath then sink.emit("error: {driverErrorSentence(e)}")
+		unidentifiablePath or
+		sourceOutsideItsRoot then sink.emit("error: {driverErrorSentence(e)}")
 	end 'report'
 end 'reportCompileError'
 
@@ -2038,6 +2084,7 @@ function driverErrorSentence(e CompileError) returns String
 		runtimeTierIsNotAProgram(r) gives "{r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it"
 		requiredFunctionAbsent(name) gives "this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredFunctions block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrFunctionFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, an unreached stdlib body is eliminated, and so is a function of the program that nothing calls — call it, or drop the name"
 		unidentifiablePath(reason) gives reason
+		sourceOutsideItsRoot(path, root) gives "{path} is not inside {root}, the directory its files are ordered from. Name it under that directory, or build it separately"
 		compileError or
 		abandoned panic("driverErrorSentence: a compile that raised {e.name} has no sentence of its own: its diagnostics were already emitted")
 	end 'sentence'
@@ -2298,7 +2345,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `{MaxonSourceExtension}`, `{TestSourceExtension}`, `{ProjectFileExtension}` and `{TaskFileExtension}` files, skipping anything under a `.maxonignore`, and any subdirectory that is its own checkout. A file whose layout it cannot tell (one that does not lex, a keyword where a name must stand, blocks that do not close) is refused, left as it is, and the run exits 1. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
 		init gives CommandReference.create(InitCommandName, arguments: "[<directory>]", summary: "Scaffold a new project: `<directory>{ProjectFileExtension}` and `{MainSourceFileName}`.", detail: "With no directory it initializes the working directory, and with one it creates that directory. The project is named after the directory: its `{ProjectFileExtension}` file takes that name, and its one target builds `{ProjectProductsDirName}/<name>`.{ParagraphSeparator}It never overwrites: if the directory already holds a `{ProjectFileExtension}` file or a `{MainSourceFileName}`, NOTHING is written and the existing path is named.", audience: CommandAudience.usingTheCompiler)
-		lint gives CommandReference.create(LintCommandName, arguments: lintArguments(), summary: "Run the front end and the checks on a program, the lint rules included, and stop before code generation.", detail: "The lint rules are the checks `{BuildSubcommandName}`, `{ExecuteCommandName}`, `{RunCommandName}` and `{TestCommandName}` leave out, as does the compile of a project's build runner: a pure function's result that is discarded, an impure function's result that is dropped, an `export` that no file outside its declaring directory subtree uses, and an unmarked top-level declaration that nothing live in its directory subtree names. `{LintCommandName}` runs them with every check before code generation, so a refusal of the backend, register pressure among them, is `{BuildSubcommandName}`'s.{ParagraphSeparator}The program is named as `{BuildSubcommandName}` names one: several paths are ONE program, in the order given, a lone word naming a target of the `{ProjectFileExtension}` file in the working directory is that target, a `{ProjectFileExtension}` or `{TaskFileExtension}` file named alone is a manifest, and every other word is a path. `{DefineFlagPrefix}` replaces a top-level `String` constant's written-out default and `{TargetFlagPrefix}` lints the program as that target, as `{BuildSubcommandName}` does for the program it builds.{ParagraphSeparator}A manifest is linted as its runner compiles it: the first target or task it declares is the entry, and every exported target or task counts as used. A file that declares something but no target or task is refused, and a file holding nothing but comments and blank lines is clean. That program is compiled for the host that runs it with no define, so `{TargetFlagPrefix}` and `{DefineFlagPrefix}` are refused beside it, and so is any other path.{ParagraphSeparator}`{LintTestsFlag}` lints what `{TestCommandName}` compiles: the project's sources and its `{TestSourceExtension}` files, chosen as `{TestCommandName}` chooses them and staged in a directory of its own under the `{ProjectProductsDirName}` directory of the project, or of the directory holding the one `{TestSourceExtension}` file, beside the one `{TestCommandName}` compiles from, with the entry `{TestCommandName}` generates. The program's own `main` counts as used. Diagnostics name the files you wrote, a project that declares no `test` is refused, and `{DefineFlagPrefix}` is refused beside it, as `{TestCommandName}` takes none.{ParagraphSeparator}With no path it lints the `{ProjectFileExtension}` file's only target, and with several targets it lists them and lints none; with no `{ProjectFileExtension}` file it lints the working directory. A target is linted over the sources and defines its description states, after the description is validated as `{BuildSubcommandName}` validates it. The notes on breaking changes since a project's last build, which a target and `{LintTestsFlag}` of a project report, go to stderr rather than stdout, and the project's build record is only read. Diagnostics are printed as `{BuildSubcommandName}` prints them, and the audits run only once nothing else stands. It stops before code generation. `{MetricsFlagPrefix}` writes the rows of the compile's total, of every phase, of the register allocator's sub-phases, of what no phase claimed and of the lock-record upkeep, and the rows of the phases code generation owns read zero.{ParagraphSeparator}`{LintFixFlag}` lints the program, rewrites its own source files with the repair of every finding that has exactly one mechanical repair, and lints again until no finding it reports has one; several rounds are normal, because the audits run only once nothing else stands and a repair can expose a finding. It takes the arguments `{LintCommandName}` takes, apart from `{MetricsFlagPrefix}`, which it refuses. Stdout names each file it rewrote, `Fixed <n> finding(s) in <path>`, in path order, and then says what `{LintCommandName}` says of the program as it now stands: the findings with no repair on stderr and exit 1, or `{LintedReportPrefix}<subjects>` and exit 0. A second run changes nothing.{ParagraphSeparator}Exit 0 the program is clean, and stdout says `{LintedReportPrefix}<subjects>`, where `<subjects>` is, for a program, each path typed, else each source the target lists, else the working directory, and for `{LintTestsFlag}`, the directory or file typed, else the target typed alone, else the working directory; several subjects are separated by `{LintedSubjectSeparator}`; 1 a diagnostic stands, the command line is refused or the program could not be read; a build runner that fails ends the command with its own exit code, whether the lint is of a target or of `{LintTestsFlag}`.", audience: CommandAudience.usingTheCompiler)
+		lint gives CommandReference.create(LintCommandName, arguments: lintArguments(), summary: "Run the front end and the checks on a program, the lint rules included, and stop before code generation.", detail: "The lint rules are the checks `{BuildSubcommandName}`, `{ExecuteCommandName}`, `{RunCommandName}` and `{TestCommandName}` leave out, as does the compile of a project's build runner: a pure function's result that is discarded, an impure function's result that is dropped, an `export` that no file outside its declaring directory subtree uses, and an unmarked top-level declaration that nothing live in its directory subtree names. `{LintCommandName}` runs them with every check before code generation, so a refusal of the backend, register pressure among them, is `{BuildSubcommandName}`'s.{ParagraphSeparator}The program is named as `{BuildSubcommandName}` names one: several paths are ONE program, in the order given, a lone word naming a target of the `{ProjectFileExtension}` file in the working directory is that target, a `{ProjectFileExtension}` or `{TaskFileExtension}` file named alone is a manifest, and every other word is a path. `{DefineFlagPrefix}` replaces a top-level `String` constant's written-out default and `{TargetFlagPrefix}` lints the program as that target, as `{BuildSubcommandName}` does for the program it builds.{ParagraphSeparator}A manifest is linted as its runner compiles it: the first target or task it declares is the entry, and every exported target or task counts as used. A file that declares something but no target or task is refused, and a file holding nothing but comments and blank lines is clean. That program is compiled for the host that runs it with no define, so `{TargetFlagPrefix}` and `{DefineFlagPrefix}` are refused beside it, and so is any other path.{ParagraphSeparator}`{LintTestsFlag}` lints what `{TestCommandName}` compiles: the project's sources and its `{TestSourceExtension}` files, chosen as `{TestCommandName}` chooses them and staged in a directory of its own under the `{ProjectProductsDirName}` directory of the project, or of the directory holding the one `{TestSourceExtension}` file, beside the one `{TestCommandName}` compiles from, with the entry `{TestCommandName}` generates. The program's own `main` counts as used. Diagnostics name the files you wrote, a project that declares no `test` is refused, and `{DefineFlagPrefix}` is refused beside it, as `{TestCommandName}` takes none.{ParagraphSeparator}With no path it lints the `{ProjectFileExtension}` file's only target, and with several targets it lists them and lints none; with no `{ProjectFileExtension}` file it lints the working directory. A target is linted over the sources and defines its description states, after the description is validated as `{BuildSubcommandName}` validates it. The notes on breaking changes since a project's last build, which a target and `{LintTestsFlag}` of a project report, go to stderr rather than stdout, and the project's build record is only read. Diagnostics are printed as `{BuildSubcommandName}` prints them, and the audits run only once nothing else stands. It stops before code generation. `{MetricsFlagPrefix}` writes the rows of the compile's total, of every phase, of the register allocator's sub-phases, of what no phase claimed and of the lock-record upkeep, and the rows of the phases code generation owns read zero.{ParagraphSeparator}`{OutputFlagPrefix}<path>` also writes the program's executable there, compiled with the lint rules enforced, when the lint finds nothing, under the output lock `{BuildSubcommandName}` takes; a program with a finding writes none. It is refused beside `{LintFixFlag}`, `{LintTestsFlag}` and a manifest.{ParagraphSeparator}`{LintFixFlag}` lints the program, rewrites its own source files with the repair of every finding that has exactly one mechanical repair, and lints again until no finding it reports has one; several rounds are normal, because the audits run only once nothing else stands and a repair can expose a finding. It takes the arguments `{LintCommandName}` takes, apart from `{MetricsFlagPrefix}`, which it refuses. Stdout names each file it rewrote, `Fixed <n> finding(s) in <path>`, in path order, and then says what `{LintCommandName}` says of the program as it now stands: the findings with no repair on stderr and exit 1, or `{LintedReportPrefix}<subjects>` and exit 0. A second run changes nothing.{ParagraphSeparator}Exit 0 the program is clean, and stdout says `{LintedReportPrefix}<subjects>`, where `<subjects>` is, for a program, each path typed, else each source the target lists, else the working directory, and for `{LintTestsFlag}`, the directory or file typed, else the target typed alone, else the working directory; several subjects are separated by `{LintedSubjectSeparator}`; 1 a diagnostic stands, the command line is refused or the program could not be read; a build runner that fails ends the command with its own exit code, whether the lint is of a target or of `{LintTestsFlag}`.", audience: CommandAudience.usingTheCompiler)
 		dapServer gives CommandReference.create(DapServerCommandName, arguments: "", summary: "Speak the Debug Adapter Protocol over stdio.", detail: "Content-Length framed DAP messages, so an editor such as VS Code can debug a Maxon program: `launch` names a built executable, a `.maxon` file or a project directory, and a source is built with debug info first. Breakpoints, stepping, pause, threads, stacks, variables and evaluation are the interactive debugger's, and the program's own output arrives as `output` events. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
 		mcpServer gives CommandReference.create(McpServerCommandName, arguments: mcpServerArguments(), summary: "Speak the Model Context Protocol, over stdio or loopback HTTP.", detail: "JSON-RPC bodies over newline-delimited stdio by default, providing MCP tools for compiling, testing, inspecting, formatting and DEBUGGING Maxon code. With {DevFlag}, also exposes compiler development tools.{ParagraphSeparator}With {McpHttpFlag} it serves the SAME tool roster over HTTP on 127.0.0.1 instead, at the one route `/mcp`, and prints the endpoint it chose as one JSON line on stdout before falling silent. There is no host option: the transport binds loopback only, refuses a request whose `Origin` or `Host` is not loopback, and holds one session per `Mcp-Session-Id`, which `initialize` mints and `DELETE /mcp` ends.", audience: CommandAudience.usingTheCompiler)
@@ -2423,7 +2470,7 @@ end 'OptionReference'
 // edit.
 function optionReference(option HelpOption) returns OptionReference
 	return match option 'whichOption'
-		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
+		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input); `lint` writes it only for a program with no finding.", commands: [MaxonCommand.build, MaxonCommand.lint, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
 		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(EmitIrFlag)])
 		emitIrFunction gives OptionReference.create("{EmitIrFunctionFlagPrefix}<a>,<b>", description: "Render these functions in that IR too: compiler-emitted ones, standard-library ones, or the program's own, which is then kept out of line. A name the program does not render is refused. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrFunctionFlagPrefix)])
 		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {targetRoster(supportedTargets())} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it where this host has a runner: wasm32-wasi under the vendored wasmtime, a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine {OrbMachineName} (natively for the Mac's own CPU, x64-linux under Rosetta on Apple silicon); a target this host cannot execute, x64-windows off Windows included, is compiled and reported as not run. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run. For {CheckStdlibCommandName} it checks that one target instead of every one. For {LintCommandName} it lints the program as that target, and a manifest, which is compiled for the host that runs it, refuses it.", commands: [MaxonCommand.build, MaxonCommand.checkStdlib, MaxonCommand.lint, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])

@@ -426,6 +426,11 @@ function vouchedDebugImage(reader MxdbgReader, code ByteArray, spelled String) r
 		return DebugImageCheck.refused("{spelled} was built for {built}, and this debugger runs on {host}, so it can launch only a program built for {host}")
 	end 'anotherHostsImage'
 
+	match compilerAgreementOf(reader) 'compiler'
+		agrees then break
+		differs(builtBy, running) then return DebugImageCheck.refused("{spelled}: {compilerDifferenceText(builtBy, running: running)}")
+	end 'compiler'
+
 	return DebugImageCheck.usable(code, reader: reader)
 end 'vouchedDebugImage'
 
@@ -623,7 +628,13 @@ function dumpSidecar(reader MxdbgReader, framePointer String, path String, secti
 		print("Debug info: {path}\n")
 		print("  target:   {targetToString(reader.target)}\n")
 		print("  build-id: 0x{reader.buildId:016x}\n")
+		print("  compiler: maxon {reader.compilerVersion}\n")
 		print("  root:     {reader.sourceRoot}\n")
+
+		match compilerAgreementOf(reader) 'compiler'
+			agrees then break
+			differs(built, running) then print("  note:     {compilerDifferenceText(built, running: running)}\n")
+		end 'compiler'
 	end 'theHead'
 
 	if sectionIsPrinted(sections, section: FilesSection) 'theFiles'

@@ -321,12 +321,13 @@ export type MxdbgWriter
 		self.inlineRanges.push(MxdbgInlineRangeRecord.create(codeStart, codeEnd: codeEnd, site: site))
 	end 'addInlineRange'
 
-	export function build(buildId HashDigest, targetTriple String, sourceRoot String) returns ByteArray
+	export function build(buildId HashDigest, targetTriple String, sourceRoot String, compilerVersion String) returns ByteArray
 		self.requireAscendingTables()
 		let windows = self.lineWindows()
 		self.requireEveryRowInAWindow(windows)
 		let triple = self.intern(targetTriple)
 		let root = self.intern(sourceRoot)
+		let compiler = self.intern(compilerVersion)
 
 		// Each offset is the previous section's plus its stride times its count, so this chain must list
 		// the sections in the order the loops below append them — not the header slot order (see
@@ -355,6 +356,8 @@ export type MxdbgWriter
 		patchDword(buf, offset: MxdbgOffTripleLen, value: triple.length as MachineWord)
 		patchDword(buf, offset: MxdbgOffSourceRootOff, value: root.offset as MachineWord)
 		patchDword(buf, offset: MxdbgOffSourceRootLen, value: root.length as MachineWord)
+		patchDword(buf, offset: MxdbgOffCompilerOff, value: compiler.offset as MachineWord)
+		patchDword(buf, offset: MxdbgOffCompilerLen, value: compiler.length as MachineWord)
 		patchDword(buf, offset: MxdbgOffStringPoolOff, value: stringPoolOff as MachineWord)
 		patchDword(buf, offset: MxdbgOffStringPoolSize, value: self.stringPool.count() as MachineWord)
 		patchDword(buf, offset: MxdbgOffFileTableOff, value: fileTableOff as MachineWord)

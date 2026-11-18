@@ -1,0 +1,42 @@
+let TheOutputIsIndependentOfWhereTheStdlibSitsCaseDirName = "output-independent-of-stdlib-location"
+let TheOutputIsIndependentOfWhereTheStdlibSitsFixtureDirName = "tests/cli/fixtures/service-interface-handles"
+let ServiceInterfaceHandlesBuildLabel = "service-interface-handles"
+let ServiceInterfaceHandleSymbols = ["__cown_iface_from.Echo.Pinger", "__cown_iface_stub.Echo.Pinger.", "__cown_iface_from.TextLogHandler.LogHandler", "__cown_iface_stub.TextLogHandler.LogHandler."]
+
+test 'builds of a program with service interface handles, one of them on a stdlib type, by one compiler staged in two directories on either side of the program, write the same bytes'
+	requireHeldOutsideCheckout(TheOutputIsIndependentOfWhereTheStdlibSitsCaseDirName, check: OutputIsIndependentOfWhereTheStdlibSits.create())
+end 'builds of a program with service interface handles, one of them on a stdlib type, by one compiler staged in two directories on either side of the program, write the same bytes'
+
+type OutputIsIndependentOfWhereTheStdlibSits implements OutsideCheckoutCase, EnvironmentCellCheck
+	static function create() returns OutputIsIndependentOfWhereTheStdlibSits
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+		stageStoredTree(fixtureDir(TheOutputIsIndependentOfWhereTheStdlibSitsFixtureDirName), into: app)
+
+		let programs = GateProgramArray.create(0)
+		programs.push(GateProgram.built(ServiceInterfaceHandlesBuildLabel, program: AppDirName, options: StringArray.create(0)))
+
+		try requireIndependentOfTheEnvironment(try stdlibLocationAxis(dir), programs: programs, staged: dir, check: self)
+	end 'requireHeldIn'
+
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+		requireEveryServiceInterfaceHandleIn(outcome.sidecar)
+	end 'requireAfterRun'
+
+	function requireAfterEnvironment(_ EnvironmentRun) throws TestFailure
+		return
+	end 'requireAfterEnvironment'
+end 'OutputIsIndependentOfWhereTheStdlibSits'
+
+function requireEveryServiceInterfaceHandleIn(sidecar FilePath)
+	let bytes = fileBytes(sidecar)
+
+	for symbol in ServiceInterfaceHandleSymbols 'eachSymbol'
+		if not bytes.containsSequence(bytesOfText(symbol)) 'notEmitted'
+			panic("the-output-is-independent-of-where-the-stdlib-sits: the gate could not run - {sidecar.toString()} names no '{symbol}', so the fixture no longer reaches the interface handle conversions whose emission order this case exists to hold.")
+		end 'notEmitted'
+	end 'eachSymbol'
+end 'requireEveryServiceInterfaceHandleIn'

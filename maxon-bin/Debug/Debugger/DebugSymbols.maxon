@@ -249,9 +249,7 @@ type DebugSourceFile
 	export let path as FilePath
 	export let components as StringArray
 
-	static function of(fileId MxdbgIndex, recorded String, named FilePath, root FilePath) returns DebugSourceFile
-		let path = named.resolve(root).normalize()
-
+	static function of(fileId MxdbgIndex, recorded String, path FilePath) returns DebugSourceFile
 		return Self{fileId: fileId, recorded: recorded, path: path, components: pathComponentsOf(path.toString())}
 	end 'of'
 
@@ -335,7 +333,7 @@ export type DebugSymbols
 	let code as ByteArray
 	let programFiles as StringArray
 	let sourceFiles as DebugSourceFileArray
-	let sourceRoot as FilePath
+	let sourceNames as SidecarSources
 	let executableDir as FilePath
 	let siteEntries as DebugSiteEntryMap
 	var spliceExits as DebugSpliceExitMap
@@ -346,6 +344,7 @@ export type DebugSymbols
 		let sources = DebugSourceFileArray.create(reader.fileCount(), zeroed: false)
 		let executableDir = try executable.parent() otherwise executable
 		let root = try FilePath.from(reader.sourceRoot) otherwise executableDir
+		let names = SidecarSources.of(root)
 		let authored = authoredFilesOf(reader)
 
 		for i in 0 upto reader.fileCount() 'eachFile'
@@ -355,12 +354,12 @@ export type DebugSymbols
 				own.push(spelled)
 			end 'theProgramsOwn'
 
-			if let named = try FilePath.from(spelled) 'spellable'
-				sources.push(DebugSourceFile.of(i as MxdbgIndex, recorded: spelled, named: named, root: root))
+			if let path = try names.resolved(spelled) 'spellable'
+				sources.push(DebugSourceFile.of(i as MxdbgIndex, recorded: spelled, path: path))
 			end 'spellable'
 		end 'eachFile'
 
-		return Self{reader: reader, code: code, programFiles: own, sourceFiles: sources, sourceRoot: root, executableDir: executableDir, siteEntries: siteEntriesOf(reader), spliceExits: DebugSpliceExitMap.create(), prologues: DebugPrologueMap.create()}
+		return Self{reader: reader, code: code, programFiles: own, sourceFiles: sources, sourceNames: names, executableDir: executableDir, siteEntries: siteEntriesOf(reader), spliceExits: DebugSpliceExitMap.create(), prologues: DebugPrologueMap.create()}
 	end 'create'
 
 	export function imageCode() returns ByteArray
@@ -932,7 +931,9 @@ export type DebugSymbols
 		let depth = pathComponentsOf(normalized.toString()).count() as DebugTally
 
 		if depth > 1 'aRelativePath'
-			match self.filesAt(named.resolve(self.sourceRoot).normalize()) 'fromTheRoot'
+			let anchored = try self.sourceNames.resolved(spelling.trim()) otherwise return DebugFileResolution.unknown
+
+			match self.filesAt(anchored) 'fromTheRoot'
 				unknown then break
 				ambiguous(candidates) then return DebugFileResolution.ambiguous(candidates)
 				files(fileIds, name, path) then return DebugFileResolution.files(fileIds, name: name, path: path)

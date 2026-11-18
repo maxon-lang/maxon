@@ -153,6 +153,22 @@ export type OpenRowLog
 	export function holds(owner ByteArray, row GenericInstanceId) returns bool
 		return self.seen.contains(joinedKey(String.from(owner), tail: "{row}"))
 	end 'holds'
+
+	export function ownersInByteOrder() returns NameRoster
+		let owners = NameRoster.create(self.byOwner.count(), zeroed: false)
+
+		for (owner, _) in self.byOwner 'eachOwner'
+			owners.push(owner)
+		end 'eachOwner'
+
+		sortNamesInByteOrder(owners)
+
+		return owners
+	end 'ownersInByteOrder'
+
+	export function rowsOf(owner ByteArray) returns GenericInstanceIdArray
+		return try self.byOwner.get(owner) otherwise panic("OpenRowLog.rowsOf: '{String.from(owner)}' was listed from the log, which holds every owner it lists")
+	end 'rowsOf'
 end 'OpenRowLog'
 
 typealias DenotersByBase = Map with (ByteArray, NameRoster)
@@ -191,7 +207,9 @@ type DependenceFlow
 	end 'settledOver'
 
 	function seedRowBases(signatures ProgramSignatures, seeding BaseSeeding)
-		for (owner, ids) in self.rows.byOwner 'eachOwner'
+		for owner in self.rows.ownersInByteOrder() 'eachOwner'
+			let ids = self.rows.rowsOf(owner)
+
 			self.seedBase(signatures, base: owner, seeding: seeding)
 
 			for id in ids 'eachRow'
@@ -241,7 +259,9 @@ type DependenceFlow
 	function growingAmong(signatures ProgramSignatures, reachedRows OpenRowLog) returns GrowingRows
 		let graph = InstantiationGraph.create(signatures, policy: self.policy)
 
-		for (owner, ids) in reachedRows.byOwner 'eachOwner'
+		for owner in reachedRows.ownersInByteOrder() 'eachOwner'
+			let ids = reachedRows.rowsOf(owner)
+
 			for id in ids 'eachRow'
 				graph.addRow(owner, row: id, only: TargetFilter.dependent(self.positions))
 			end 'eachRow'
@@ -255,7 +275,9 @@ type DependenceFlow
 	end 'dependsAt'
 
 	function indexDenoters(signatures ProgramSignatures)
-		for (owner, ids) in self.rows.byOwner 'eachOwner'
+		for owner in self.rows.ownersInByteOrder() 'eachOwner'
+			let ids = self.rows.rowsOf(owner)
+
 			for id in ids 'eachRow'
 				let denotersOfTarget = self.denotersOf(signatures.genericInstanceBaseName(id))
 
@@ -298,7 +320,7 @@ type DependenceFlow
 		let queue = NameRoster.create(0)
 		let queued = ClonerSet.create()
 
-		for (owner, _) in self.rows.byOwner 'eachOwner'
+		for owner in self.rows.ownersInByteOrder() 'eachOwner'
 			queue.push(owner)
 			queued.insert(owner)
 		end 'eachOwner'

@@ -3111,6 +3111,14 @@ extension ProgramSignatures
 		return not self.aggregateTypeIsImmutable(kind)
 	end 'recordKindIsWritableState'
 
+	function registerRecordKind(within HeldRecordKinds, kind immutable ByteArray)
+		if within.holds(kind) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+
+		within.register(kind, writable: self.recordKindIsWritableState(kind))
+	end 'registerRecordKind'
+
 	// `Promise` and `SharedValue` declare only `let` fields, but each names run-time state (a green
 	// thread, a shared cell) written underneath it, so its all-`let` layout must not make it shared
 	// like a value.
@@ -5294,7 +5302,7 @@ extension ProgramSignatures
 		end 'opaque'
 
 		if tagIsByteRecord(tag) 'bytes'
-			within.kinds.insert(HeldByteRecordKind)
+			self.registerRecordKind(within, kind: HeldByteRecordKind)
 			return
 		end 'bytes'
 
@@ -5339,7 +5347,7 @@ extension ProgramSignatures
 	end 'addRecordKindsOfType'
 
 	function addRecordKindsOfAggregate(name immutable ByteArray, within HeldRecordKinds, visited ClonerSet, settledFree ClonerSet)
-		within.kinds.insert(HeldTupleKind if isTupleTypeName(name) else name)
+		self.registerRecordKind(within, kind: HeldTupleKind if isTupleTypeName(name) else name)
 		self.addRecordKindsWithinAggregate(name, within: within, visited: visited, settledFree: settledFree)
 	end 'addRecordKindsOfAggregate'
 
@@ -5370,7 +5378,7 @@ extension ProgramSignatures
 	end 'addRecordKindsWithinGenericAlias'
 
 	function addRecordKindsOfInstance(id GenericInstanceId, within HeldRecordKinds, visited ClonerSet, settledFree ClonerSet)
-		within.kinds.insert(self.canonicalInstanceName(id))
+		self.registerRecordKind(within, kind: self.canonicalInstanceName(id))
 		self.addRecordKindsWithinInstance(id, within: within, visited: visited, settledFree: settledFree)
 	end 'addRecordKindsOfInstance'
 
@@ -5698,7 +5706,7 @@ extension ProgramSignatures
 	function precedesTheKeptSite(key ByteArray, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns bool
 		let kept = try self.declaredSiteOf(key) otherwise return false
 
-		return SourceSite.of(declFilePath, line: nameLine, column: nameColumn).precedes(SourceSite.of(kept.declFilePath, line: kept.nameLine, column: kept.nameColumn))
+		return self.sourceSiteOf(declFilePath, line: nameLine, column: nameColumn).precedes(self.sourceSiteOf(kept.declFilePath, line: kept.nameLine, column: kept.nameColumn))
 	end 'precedesTheKeptSite'
 
 	export function declaredSiteOf(key ByteArray) returns FunctionDeclSite throws AbsentError
@@ -7217,12 +7225,51 @@ extension ProgramSignatures
 			panic("ProgramSignatures: {site} reached an index that was never settled — `queryProgramSignatures` settles it before it hands it out")
 		end 'unsettled'
 
-		match self.baseline.fingerprint.firstMove(self.fingerprint(FingerprintDetail.valuesOnly)) 'moved'
-			none then return
-			value(position, was, now) then panic("ProgramSignatures: at {site}, `{self.fingerprint(FingerprintDetail.withLabels).valueLabel(position)}` holds {now} where the settled index held {was} — a write past the baseline that no restore undoes. A parse may not write the index it shares with every other parse, and a merge's writes must all be journaled")
-			digest(position) then panic("ProgramSignatures: at {site}, `{self.fingerprint(FingerprintDetail.withLabels).digestLabel(position)}` moved from the settled index's — a write past the baseline that no restore undoes")
-		end 'moved'
+		self.requireFingerprint(self.baseline.fingerprint, site: site)
 	end 'requireAtBaseline'
+
+	function requireFingerprint(marked IndexFingerprint, site String)
+		match marked.firstMove(self.fingerprint(FingerprintDetail.valuesOnly)) 'moved'
+			none then return
+			value(position, was, now) then panic("ProgramSignatures: at {site}, `{self.fingerprint(FingerprintDetail.withLabels).valueLabel(position)}` holds {now} where the marked index held {was} — a write past the mark that no rewind undoes. A parse may not write the index it shares with every other parse, and a merge's or a scratch band's writes must all be journaled")
+			digest(position) then panic("ProgramSignatures: at {site}, `{self.fingerprint(FingerprintDetail.withLabels).digestLabel(position)}` moved from the marked index's — a write past the mark that no rewind undoes")
+		end 'moved'
+	end 'requireFingerprint'
+
+	function openScratchBand() returns ScratchBandMark
+		if not self.holdsAMerge or not self.baseline.settled 'notAfterTheFold'
+			panic("ProgramSignatures.openScratchBand: a scratch band opens on the folded index, after every file has merged into its settled baseline")
+		end 'notAfterTheFold'
+
+		if self.baseline.overlaid 'anOverlay'
+			panic("ProgramSignatures.openScratchBand: an overlay holds one parse's band and is emptied by its close, so a scratch band has nothing to rewind to on one")
+		end 'anOverlay'
+
+		if self.descriptorReads.isSettled() 'aLoweringAlreadyRan'
+			panic("ProgramSignatures.openScratchBand: the descriptor-read log is settled, so a lowering already read the index this band would rewind under it")
+		end 'aLoweringAlreadyRan'
+
+		return ScratchBandMark.create(self.markParseBand(), mergeMintedSpeculative: self.genericInstances.mergeMintedSpeculative(), descriptorReads: self.descriptorReads, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
+	end 'openScratchBand'
+
+	function closeScratchBand(mark ScratchBandMark)
+		self.reportScratchBandWrites(mark.band)
+		self.rewindParseBand(mark.band)
+		self.genericInstances.rewindScratchBand(mark.band.instances, mergeMintedSpeculative: mark.mergeMintedSpeculative)
+		self.descriptorReads = mark.descriptorReads
+		self.requireFingerprint(mark.fingerprint, site: "the close of a scratch band")
+	end 'closeScratchBand'
+
+	function reportScratchBandWrites(opened ParseBandMark)
+		let log = compilerLogger(CompilerLogGroup.compiler)
+
+		if not log.enabled(LogLevel.debug) 'unreported'
+			return
+		end 'unreported'
+
+		let reached = self.markParseBand()
+		log.debug("{ScratchBandRewindLogPrefix}{reached.instances.rows - opened.instances.rows} instance rows, {reached.journal.total() - opened.journal.total()} journaled writes")
+	end 'reportScratchBandWrites'
 
 	function markParseBand() returns ParseBandMark
 		return ParseBandMark.create(self.genericInstances.markParseBand(), journal: self.journal.mark(), crossFileConstantReads: self.crossFileConstantReads.count(), mintedTupleLayouts: self.mintedTupleLayouts.count(), typeNames: self.typeNames.markTable(), told: self.rowSetLog.told.order.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.recordsHoldingAnInterfaceValueCounted)
@@ -7743,6 +7790,7 @@ extension ProgramSignatures
 		fingerprint.note("typeHeadClaims", value: declarations.typeHeadClaims.count())
 		fingerprint.note("topLevelBindingSites", value: declarations.topLevelBindingSites.count())
 		fingerprint.note("fileModuleDirectories", value: declarations.fileModuleDirectories.count())
+		fingerprint.note("fileOrderKeys", value: declarations.fileOrderKeys.count())
 		fingerprint.note("namespaceQualifiers", value: declarations.namespaceQualifiers.count())
 		fingerprint.note("libraryFilePaths", value: declarations.libraryFilePaths.count())
 		fingerprint.note("runtimeFilePaths", value: declarations.runtimeFilePaths.count())

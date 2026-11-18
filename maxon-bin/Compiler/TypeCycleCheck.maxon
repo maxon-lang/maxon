@@ -537,12 +537,14 @@ end 'typeDeclEarlier'
 // interface those three named.
 function buildTypeReferenceGraph(project Project, module MaxonModule, signatures ProgramSignatures) returns TypeCycleGraph
 	let graph = TypeCycleGraph.create(signatures.genericInstanceCount())
+	let structNames = structTypeNamesInByteOrder(project)
+	let enumNames = enumTypeNamesInByteOrder(project)
 
-	for (name, _) in project.structTypes 'eachStructName'
+	for name in structNames 'eachStructName'
 		graph.declareAggregate(name)
 	end 'eachStructName'
 
-	for (name, _) in project.enumTypes 'eachEnumName'
+	for name in enumNames 'eachEnumName'
 		graph.declareAggregate(name)
 	end 'eachEnumName'
 
@@ -557,7 +559,8 @@ function buildTypeReferenceGraph(project Project, module MaxonModule, signatures
 	graph.declareAggregate(ClosureValueNodeName)
 	graph.declareAggregate(TypeArgumentNodeName)
 
-	for (name, layout) in project.structTypes 'eachStruct'
+	for name in structNames 'eachStruct'
+		let layout = try project.structTypes.get(name) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' was listed from `structTypes`, which nothing has written since")
 		let owner = graph.nodeOfDeclaredAggregate(name)
 
 		for index in 0 upto layout.fieldTypes.count() 'eachField'
@@ -567,7 +570,8 @@ function buildTypeReferenceGraph(project Project, module MaxonModule, signatures
 		end 'eachField'
 	end 'eachStruct'
 
-	for (name, layout) in project.enumTypes 'eachEnum'
+	for name in enumNames 'eachEnum'
+		let layout = try project.enumTypes.get(name) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' was listed from `enumTypes`, which nothing has written since")
 		let owner = graph.nodeOfDeclaredAggregate(name)
 
 		for index in 0 upto layout.casePayloads.count() 'eachCase'
@@ -679,19 +683,13 @@ function addConformerEdges(project Project, signatures ProgramSignatures, graph 
 		return
 	end 'noReferenceNamedAnInterface'
 
-	let names = NameRoster.create(project.structTypes.count() + project.enumTypes.count(), zeroed: false)
-
-	for (name, _) in project.structTypes 'eachDeclaredStruct'
-		names.push(name)
-	end 'eachDeclaredStruct'
-
-	for (name, _) in project.enumTypes 'eachDeclaredEnum'
-		names.push(name)
-	end 'eachDeclaredEnum'
-
-	for name in names 'eachAggregate'
+	for name in structTypeNamesInByteOrder(project) 'eachStruct'
 		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
-	end 'eachAggregate'
+	end 'eachStruct'
+
+	for name in enumTypeNamesInByteOrder(project) 'eachEnumOrUnion'
+		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
+	end 'eachEnumOrUnion'
 
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		addInstanceConformerEdges(project, signatures: signatures, graph: graph, id: id)

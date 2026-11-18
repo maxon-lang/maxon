@@ -31,13 +31,20 @@ On Linux and macOS the executable is `app` and the sidecar `app.mxdbg`. No sidec
 the code you ship.
 
 The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
-the executable's code section) and the directory the build ran in, then the source files, functions with
-their prologue offset, frame size, local variables and origin, types, the line table and inlining
-records, and the image base, the `.data` words a debugger reads out of the running program and the record
-geometry it reads them by. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a
-`--coverage` build requires it.
+the executable's code section), the compiler's build stamp and the program's root directory, then the
+source files, functions with their prologue offset, frame size, local variables and origin, types, the
+line table and inlining records, and the image base, the `.data` words a debugger reads out of the running
+program and the record geometry it reads them by. `maxon debug` prints it; `maxon profile` and
+`maxon coverage` read it, and a `--coverage` build requires it.
 
-The sidecar format is versioned (version 11), and a reader refuses a sidecar of any other version: after
+The program's own files are recorded relative to its root directory. A file of the standard library, the
+runtime or a [scriptlib](/docs/cli/#the-scriptlib-directory) package is recorded under its tier, as `stdlib/…`,
+`runtime/…` or `scriptlib/…`, and a reader resolves it against the `stdlib/`, `runtime/` and `scriptlib/`
+of the compiler that reads. `maxon debug`, `maxon dap-server` and `maxon coverage` therefore refuse a
+sidecar another compiler wrote, naming both compiler versions; `maxon debug --dump-info` prints the
+writing compiler's version and says so beneath the header when it is not the reading compiler's.
+
+The sidecar format is versioned (version 12), and a reader refuses a sidecar of any other version: after
 upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ## Panics and backtraces
@@ -114,7 +121,7 @@ leave a program running.
 A program the debugger cannot drive is refused by name, with exit 1: every program on a host this build
 has no debug backend for (naming the host), a wasm module, a binary built for a target other than this host's
 (refused before launch, naming both targets), an arm64-macos program on a host with no `debugserver` (naming
-`xcode-select --install`), and a binary whose sidecar describes a different build.
+`xcode-select --install`), and a binary whose sidecar describes a different build or was written by another compiler.
 
 On arm64-macos the driver checks that the host's `debugserver` takes `--unmask-signals`, which is what lets a
 hardware fault reach the program's own handler; where an older one is found the driver says so on stderr, and
@@ -450,6 +457,12 @@ sidecar was written by the same build as that executable, and refuses a stale on
 
 ```text
 maxon debug: the .mxdbg sidecar describes a different build of this binary — rebuild it
+```
+
+**The compiler.** A sidecar another compiler wrote is refused with exit 1 as well, naming both versions:
+
+```text
+maxon debug: app.exe: its debug info was written by maxon 0.1.0 (a1b2c3d 2026-09-09) and this is maxon 0.2.0 (e4f5a6b 2026-11-01), so the stdlib/, runtime/ and scriptlib/ sources it names are not the ones the program was built from. Rebuild the program with this compiler
 ```
 
 A missing sidecar is refused with exit 1, naming the path it looked for and `--no-debug-info` as the

@@ -1,0 +1,69 @@
+let LibraryTierCaseLabel = "a-breakpoint-spelled-by-a-library-files-tier-path-is-set-in-that-file"
+let LibraryTierDirectories = ["stdlib/", "runtime/"]
+let LineColumnSeparator = ":"
+
+test 'a library file is recorded by its tier and its path inside it, and a breakpoint spelled that way is set in it'
+	let staged = builtFixture(LibraryTierCaseLabel, fixture: WalksFixtureName)
+	let executable = builtExecutable(staged)
+
+	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
+	try Expect.equal(dumpRun.exitCode(), expected: 0, message: "`--dump-info` did not print the sidecar: {dumpRun.stdout} {dumpRun.stderr}")
+
+	let dump = withoutCarriageReturns(dumpRun.stdout)
+	let files = dumpSectionRows(dump, heading: DumpFilesHeading)
+
+	var libraryFiles = 0 as Count
+
+	for row in files 'eachFile'
+		let name = (try whitespaceTokens(row).get(1) otherwise panic("the file row '{row}' names no file"))
+
+		if name == StagedProgramFileName 'theProgram'
+			continue
+		end 'theProgram'
+
+		if startsWithATier(name) 'aLibraryFile'
+			libraryFiles = libraryFiles + 1
+			continue
+		end 'aLibraryFile'
+
+		try Expect.fail("the sidecar records '{name}', which is neither the program's own file nor a library file named by its tier. A library file recorded by its physical path makes the sidecar depend on where the compiler's tiers sit. The files were: {listedLines(files)}")
+	end 'eachFile'
+
+	try Expect.isTrue(libraryFiles > 0, message: "the fixture's sidecar records no library file, so the case reads nothing it exists to pin. The files were: {listedLines(files)}")
+
+	let spelled = firstLibraryLineSpelling(dumpSectionRows(dump, heading: DumpLineTableHeading))
+	let commands = debugCommandLine(["{BreakCommand} {spelled}", RunCommand])
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {spelled}` printed {answers.count()} breakpoint answers. {said}")
+
+	let answer = eventAt(answers, index: 0)
+	try Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: SetAction, message: "a breakpoint spelled by the library file's tier path, as the dump prints it, resolves against the debugging compiler's own library and is set. {said}")
+
+	discardStagedDir(staged)
+end 'a library file is recorded by its tier and its path inside it, and a breakpoint spelled that way is set in it'
+
+function startsWithATier(name String) returns bool
+	for tier in LibraryTierDirectories 'eachTier'
+		if name.startsWith(tier) 'underThisTier'
+			return true
+		end 'underThisTier'
+	end 'eachTier'
+
+	return false
+end 'startsWithATier'
+
+function firstLibraryLineSpelling(rows StringArray) returns String
+	for row in rows 'eachRow'
+		let position = (try whitespaceTokens(row).get(1) otherwise panic("the line row '{row}' names no position"))
+
+		if startsWithATier(position) 'aLibraryRow'
+			return position.slice(position.startIndex(), endIndex: try position.findLast(LineColumnSeparator) otherwise panic("the line row '{row}' names no column"))
+		end 'aLibraryRow'
+	end 'eachRow'
+
+	panic("the fixture's line table holds no row in a library file, so there is no library line to break on")
+end 'firstLibraryLineSpelling'

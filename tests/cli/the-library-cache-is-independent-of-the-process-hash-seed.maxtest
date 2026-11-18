@@ -4,193 +4,61 @@ let TupleProgramDirName = "tuples"
 let TemplateProgramDirName = "template"
 let ContestsProgramDirName = "contests"
 let AliasesProgramDirName = "aliases"
-let TupleProgramOutputName = "tuples-program"
-let TemplateProgramOutputName = "template-program"
-let ContestsProgramOutputName = "contests-program"
-let AliasesProgramOutputName = "aliases-program"
-let ThirdHashSeed = "1111111111111111"
-let PlantedLibraryDigestSeed = "libseed1"
-let SeedWriterDirName = "seed-writer"
-let SeedRootDirPrefix = "seed-root-"
+let TupleLintLabel = "tuples-lint"
 
-test 'two builds under two process hash seeds from one stored library hash seed write the same library cache packs'
+test 'builds and a lint under three process hash seeds from one stored library hash seed write the same library cache packs'
 	requireHeldOutsideCheckout(TheLibraryCacheIsIndependentOfTheProcessHashSeedCaseDirName, check: LibraryCacheIsIndependentOfTheProcessHashSeed.create())
-end 'two builds under two process hash seeds from one stored library hash seed write the same library cache packs'
+end 'builds and a lint under three process hash seeds from one stored library hash seed write the same library cache packs'
 
-type LibraryCacheIsIndependentOfTheProcessHashSeed implements OutsideCheckoutCase
+type LibraryCacheIsIndependentOfTheProcessHashSeed implements OutsideCheckoutCase, EnvironmentCellCheck
 	static function create() returns LibraryCacheIsIndependentOfTheProcessHashSeed
 		return Self{}
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		stageStoredTree(fixtureDir(TheLibraryCacheIsIndependentOfTheProcessHashSeedFixtureDirName), into: dir)
-		stageProgram(dir, name: AppDirName, source: TrivialProgramSource)
 
-		let writerRoot = dir.join(SeedWriterDirName)
-		try requireBuilt(runUnderHashSeed(dir, root: writerRoot, seed: FirstHashSeed, command: buildCommandFor(dir, program: AppDirName, output: OutputName)), which: "the seed writer build under {HashSeedVariable}={FirstHashSeed}")
+		let programs = GateProgramArray.create(0)
 
-		let writerTiers = tierDirNamesIn(libraryCacheDirIn(writerRoot))
-		try Expect.equal(writerTiers.count(), expected: 1, message: "the seed writer build left {writerTiers.count()} hash tier directories under {libraryCacheDirIn(writerRoot).toString()}, where one build under {HashTierVariable}={HashTierSoftware} keys its library cache by exactly one.{listedLines(writerTiers)}")
+		for program in [ContestsProgramDirName, TupleProgramDirName, TemplateProgramDirName, AliasesProgramDirName] 'eachBuiltProgram'
+			programs.push(GateProgram.built(program, program: program, options: [CompilerDebugLogFlag]))
+		end 'eachBuiltProgram'
 
-		let tier = try writerTiers.get(0) otherwise panic("the count was checked to be one")
-		let firstRoot = dir.join("{SeedRootDirPrefix}{FirstHashSeed}")
-		try requireFilledFromPlantedSeed(dir, root: firstRoot, seed: FirstHashSeed, tier: tier)
+		programs.push(GateProgram.linted(TupleLintLabel, program: TupleProgramDirName, options: [CompilerDebugLogFlag]))
 
-		for seed in [SecondHashSeed, ThirdHashSeed] 'eachOtherSeed'
-			let root = dir.join("{SeedRootDirPrefix}{seed}")
-			try requireFilledFromPlantedSeed(dir, root: root, seed: seed, tier: tier)
-
-			let differing = differingPacks(libraryCacheDirIn(firstRoot), second: libraryCacheDirIn(root))
-			try Expect.isTrue(differing.isEmpty(), message: "the same builds and lint of the same programs from one stored library hash seed, under {HashSeedVariable}={FirstHashSeed} and {HashSeedVariable}={seed}, wrote library cache packs that differ, so a pack is a function of the process hash seed and not only of the source and the stored seed.{listedLines(differing)}")
-		end 'eachOtherSeed'
+		try requireIndependentOfTheEnvironment(try processHashSeedAxis(dir), programs: programs, staged: dir, check: self)
 	end 'requireHeldIn'
+
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+		let report = try libraryCacheReportOf(outcome.output, which: outcome.which)
+		try Expect.equal(report.rejected, expected: 0, message: "{outcome.which} rejected library cache entries, so it did not read them under the stored seed. It wrote: {report.line}")
+
+		let label = outcome.program.label
+
+		if label == ContestsProgramDirName 'theContests'
+			try Expect.equal(report.baseline, expected: LibraryBaseline.built, message: "{outcome.which}, whose contests are between its own directories and name nothing the library declares, did not build the library baseline into its empty cache. It wrote: {report.line}")
+			try Expect.isTrue(packsOfKindIn(outcome.environment.library(), prefix: ParsesEntryPrefix).count() > 0, message: "{outcome.which} wrote no `{ParsesEntryPrefix}` pack, so the library parses it settled reached no pack. It wrote: {report.line}")
+		end 'theContests' else if label == TupleProgramDirName 'theTuples'
+			try Expect.greaterThan(report.written, than: 0, message: "{outcome.which} wrote no library cache entry. It wrote: {report.line}")
+		end 'theTuples' else if label == TemplateProgramDirName 'theTemplate'
+			try Expect.equal(report.baseline, expected: LibraryBaseline.built, message: "{outcome.which}, which instantiates a library generic function, did not build the core library baseline. It wrote: {report.line}")
+		end 'theTemplate' else if label == AliasesProgramDirName 'theAliases'
+			try Expect.greaterThan(report.written, than: 0, message: "{outcome.which}, whose aliases contest the library's, wrote no library cache entry, so the library parses it settled under the contest reached no pack. It wrote: {report.line}")
+		end 'theAliases' else if label != TupleLintLabel 'anUnknownProgram'
+			panic("the-library-cache-is-independent-of-the-process-hash-seed: no check is written for the program labelled `{label}`")
+		end 'anUnknownProgram'
+	end 'requireAfterRun'
+
+	function requireAfterEnvironment(run EnvironmentRun) throws TestFailure
+		let library = run.environment.library()
+
+		for prefix in [BaselineEntryPrefix, CoreEntryPrefix, ParsesEntryPrefix, ViewsEntryPrefix, AuditEntryPrefix] 'eachKind'
+			let packs = packsOfKindIn(library, prefix: prefix)
+			try Expect.isTrue(packs.count() > 0, message: "the runs {run.environment.description} wrote no `{prefix}` pack under {library.toString()}, so there is none to compare.")
+
+			for pack in packs 'eachPack'
+				try Expect.isTrue(fileBytes(pack).count() > 0, message: "the runs {run.environment.description} wrote the `{prefix}` pack {pack.toString()} empty, so there is nothing in it to compare.")
+			end 'eachPack'
+		end 'eachKind'
+	end 'requireAfterEnvironment'
 end 'LibraryCacheIsIndependentOfTheProcessHashSeed'
-
-function buildCommandFor(dir FilePath, program String, output String) returns StringArray
-	return [BuildCommandWord, program, "{OutputOptionPrefix}{dir.join(output).toString()}", CompilerDebugLogFlag].clone()
-end 'buildCommandFor'
-
-function lintCommandFor(program String) returns StringArray
-	return [LintCommandWord, program, CompilerDebugLogFlag].clone()
-end 'lintCommandFor'
-
-function runUnderHashSeed(dir FilePath, root FilePath, seed String, command StringArray) returns CollectedOutput
-	let naming = hashPinsNaming(seed, tier: HashTierSoftware)
-	naming.upsert(CacheRootVariable, value: cacheRootIn(root).toString())
-
-	return runWithCacheRoots(command, naming: naming, workingDirectory: dir)
-end 'runUnderHashSeed'
-
-function requireFilledFromPlantedSeed(dir FilePath, root FilePath, seed String, tier String) throws TestFailure
-	let library = libraryCacheDirIn(root)
-	let home = stagingDir(library.join(tier).toString())
-	let planted = PlantedLibraryDigestSeed.toByteArray()
-	rewrittenFile(home.join(HashSeedFileName), bytes: planted)
-
-	let which = "under {HashSeedVariable}={seed} from the stored library hash seed `{PlantedLibraryDigestSeed}`"
-
-	// Built first: after the `tuples` build has filled the cache this build writes nothing, and its
-	// baseline and `parses-` checks fail.
-	let contests = try libraryCacheReportOf(runUnderHashSeed(dir, root: root, seed: seed, command: buildCommandFor(dir, program: ContestsProgramDirName, output: ContestsProgramOutputName)), which: "the build of `{ContestsProgramDirName}` {which}")
-	try Expect.equal(contests.baseline, expected: LibraryBaseline.built, message: "the build of `{ContestsProgramDirName}` {which}, whose contests are between its own directories and name nothing the library declares, did not build the library baseline into its empty cache. It wrote: {contests.line}")
-	try Expect.isTrue(packsOfKindIn(library, prefix: ParsesEntryPrefix).count() > 0, message: "the build of `{ContestsProgramDirName}` {which} wrote no `{ParsesEntryPrefix}` pack, so the library parses it settled reached no pack. It wrote: {contests.line}")
-	try requireNoneRejected(contests, which: "the build of `{ContestsProgramDirName}` {which}")
-
-	let tuples = try libraryCacheReportOf(runUnderHashSeed(dir, root: root, seed: seed, command: buildCommandFor(dir, program: TupleProgramDirName, output: TupleProgramOutputName)), which: "the build of `{TupleProgramDirName}` {which}")
-	try Expect.greaterThan(tuples.written, than: 0, message: "the build of `{TupleProgramDirName}` {which} wrote no library cache entry. It wrote: {tuples.line}")
-	try requireNoneRejected(tuples, which: "the build of `{TupleProgramDirName}` {which}")
-
-	let template = try libraryCacheReportOf(runUnderHashSeed(dir, root: root, seed: seed, command: buildCommandFor(dir, program: TemplateProgramDirName, output: TemplateProgramOutputName)), which: "the build of `{TemplateProgramDirName}` {which}")
-	try Expect.equal(template.baseline, expected: LibraryBaseline.built, message: "the build of `{TemplateProgramDirName}` {which}, which instantiates a library generic function, did not build the core library baseline. It wrote: {template.line}")
-	try requireNoneRejected(template, which: "the build of `{TemplateProgramDirName}` {which}")
-
-	let aliases = try libraryCacheReportOf(runUnderHashSeed(dir, root: root, seed: seed, command: buildCommandFor(dir, program: AliasesProgramDirName, output: AliasesProgramOutputName)), which: "the build of `{AliasesProgramDirName}` {which}")
-	try Expect.greaterThan(aliases.written, than: 0, message: "the build of `{AliasesProgramDirName}` {which}, whose aliases contest the library's, wrote no library cache entry, so the library parses it settled under the contest reached no pack. It wrote: {aliases.line}")
-	try requireNoneRejected(aliases, which: "the build of `{AliasesProgramDirName}` {which}")
-
-	let linted = try libraryCacheReportOf(runUnderHashSeed(dir, root: root, seed: seed, command: lintCommandFor(TupleProgramDirName)), which: "the lint of `{TupleProgramDirName}` {which}")
-	try requireNoneRejected(linted, which: "the lint of `{TupleProgramDirName}` {which}")
-
-	let seeds = seedFilesIn(library)
-	try Expect.equal(seeds.count(), expected: 1, message: "the runs {which} left {seeds.count()} '{HashSeedFileName}' files under {library.toString()}, where the planted one should be the only one.")
-
-	let stored = try seeds.get(0) otherwise panic("the count was checked to be one")
-	try Expect.isTrue(fileBytes(stored).equals(planted), message: "the runs {which} replaced the planted stored seed {stored.toString()}, so they did not adopt it.")
-
-	let tiers = tierDirNamesIn(library)
-	try Expect.equal(tiers.count(), expected: 1, message: "the runs {which} left {tiers.count()} hash tier directories under {library.toString()}, where the planted one should be the only one.{listedLines(tiers)}")
-
-	for prefix in [BaselineEntryPrefix, CoreEntryPrefix, ParsesEntryPrefix, ViewsEntryPrefix, AuditEntryPrefix] 'eachKind'
-		let packs = packsOfKindIn(library, prefix: prefix)
-		try Expect.isTrue(packs.count() > 0, message: "the runs {which} wrote no `{prefix}` pack under {library.toString()}, so there is none to compare.")
-
-		for pack in packs 'eachPack'
-			try Expect.isTrue(fileBytes(pack).count() > 0, message: "the runs {which} wrote the `{prefix}` pack {pack.toString()} empty, so there is nothing in it to compare.")
-		end 'eachPack'
-	end 'eachKind'
-end 'requireFilledFromPlantedSeed'
-
-function requireNoneRejected(report LibraryCacheReport, which String) throws TestFailure
-	try Expect.equal(report.rejected, expected: 0, message: "{which} rejected library cache entries, so it did not read them under the stored seed. It wrote: {report.line}")
-end 'requireNoneRejected'
-
-function tierDirNamesIn(library FilePath) returns StringArray
-	let names = StringArray.create(0)
-
-	for entry in listing(library) 'eachEntry'
-		if Directory.isDirectory(entry) 'aTier'
-			names.push(entry.filename())
-		end 'aTier'
-	end 'eachEntry'
-
-	return names
-end 'tierDirNamesIn'
-
-function packNamesIn(library FilePath) returns StringArray
-	let names = StringArray.create(0)
-
-	for file in filesUnder(library) 'eachFile'
-		if file.filename() == HashSeedFileName 'theStoredSeed'
-			continue
-		end 'theStoredSeed'
-
-		names.push(file.toString().replaceFirst(library.toString(), with: ""))
-	end 'eachFile'
-
-	names.sort()
-
-	return names
-end 'packNamesIn'
-
-function packsOfKindIn(library FilePath, prefix String) returns FilePathArray
-	let matching = FilePathArray.create(0)
-
-	for file in filesUnder(library) 'eachFile'
-		if file.filename().startsWith(prefix) 'ofTheKind'
-			matching.push(file)
-		end 'ofTheKind'
-	end 'eachFile'
-
-	return matching
-end 'packsOfKindIn'
-
-function packIn(library FilePath, name String) returns FilePath
-	return try FilePath.from("{library.toString()}{name}") otherwise panic("the gate could not run — {library.toString()}{name} is not a spellable path.")
-end 'packIn'
-
-function differingPacks(first FilePath, second FilePath) returns StringArray
-	let firstNames = packNamesIn(first)
-	let secondNames = packNamesIn(second)
-	let differing = StringArray.create(0)
-
-	if listedLines(firstNames) != listedLines(secondNames) 'differentNames'
-		differing.push("the two roots hold different pack names. The first holds:{listedLines(firstNames)}{LineFeed}  and the second holds:{listedLines(secondNames)}")
-	end 'differentNames'
-
-	for name in firstNames 'eachPack'
-		if not secondNames.contains(name) 'inTheFirstOnly'
-			continue
-		end 'inTheFirstOnly'
-
-		let firstBytes = fileBytes(packIn(first, name: name))
-		let secondBytes = fileBytes(packIn(second, name: name))
-
-		if not firstBytes.equals(secondBytes) 'differs'
-			differing.push("`{name}` holds {firstBytes.count()} bytes in the first root and {secondBytes.count()} in the second, and the first differing byte is at offset {firstDifferingOffsetOf(firstBytes, second: secondBytes)}")
-		end 'differs'
-	end 'eachPack'
-
-	return differing
-end 'differingPacks'
-
-function firstDifferingOffsetOf(first ByteArray, second ByteArray) returns ElementIndex
-	let shared = first.count() if first.count() <= second.count() else second.count()
-	let firstShared = try first.slice(0, endIndex: shared) otherwise panic("the gate could not run — the shared length lies inside the first image.")
-	let secondShared = try second.slice(0, endIndex: shared) otherwise panic("the gate could not run — the shared length lies inside the second image.")
-
-	return match compareBytes(firstShared, second: secondShared) 'which'
-		identical gives shared as ElementIndex
-		differsAt(offset) gives offset
-		differentLengths panic("the gate could not run — two images of one length were found to differ in length.")
-	end 'which'
-end 'firstDifferingOffsetOf'

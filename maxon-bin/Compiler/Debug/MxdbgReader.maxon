@@ -93,6 +93,7 @@ end 'MxdbgReadError'
 export enum MxdbgPoolString
 	targetTriple
 	sourceRoot
+	compilerVersion
 	fileName
 	functionName
 	functionDisplayName
@@ -108,6 +109,7 @@ function poolStringText(string MxdbgPoolString, record MxdbgIndex) returns Strin
 	return match string 'which'
 		targetTriple gives "header's target triple"
 		sourceRoot gives "header's source root"
+		compilerVersion gives "header's compiler version"
 		fileName gives "name of file {record}"
 		functionName gives "name of function {record}"
 		functionDisplayName gives "display name of function {record}"
@@ -409,6 +411,7 @@ export type MxdbgReader
 	export let imageBase as MachineWord
 	export let target as Target
 	export let sourceRoot as String
+	export let compilerVersion as String
 	let stringPoolOff as ByteOffset
 	let stringPoolSize as BytePos
 	let fileTableOff as ByteOffset
@@ -518,11 +521,14 @@ export type MxdbgReader
 		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
 		let rootOff = imageReadU32(image, at: MxdbgOffSourceRootOff) as ByteOffset
 		let rootLen = imageReadU32(image, at: MxdbgOffSourceRootLen) as BytePos
+		let compilerOff = imageReadU32(image, at: MxdbgOffCompilerOff) as ByteOffset
+		let compilerLen = imageReadU32(image, at: MxdbgOffCompilerLen) as BytePos
 
 		try requirePoolSliceFits(tripleOff, length: tripleLen, poolSize: poolSize, string: MxdbgPoolString.targetTriple, record: 0)
 		try requirePoolSliceFits(rootOff, length: rootLen, poolSize: poolSize, string: MxdbgPoolString.sourceRoot, record: 0)
+		try requirePoolSliceFits(compilerOff, length: compilerLen, poolSize: poolSize, string: MxdbgPoolString.compilerVersion, record: 0)
 
-		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, imageBase: imageReadU64(image, at: MxdbgOffImageBase), target: try targetOfTriple(String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen))), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, globalTableOff: globalTableOff, globalTally: globalTally, layoutTableOff: layoutTableOff, layoutTally: layoutTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		let reader = Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, imageBase: imageReadU64(image, at: MxdbgOffImageBase), target: try targetOfTriple(String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen))), sourceRoot: String.from(imageSlice(image, start: stringPoolOff + rootOff, count: rootLen)), compilerVersion: String.from(imageSlice(image, start: stringPoolOff + compilerOff, count: compilerLen)), stringPoolOff: stringPoolOff, stringPoolSize: poolSize, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, globalTableOff: globalTableOff, globalTally: globalTally, layoutTableOff: layoutTableOff, layoutTally: layoutTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
 		try reader.requireReferencesHold()
 		try reader.requireOrderedTables()
 

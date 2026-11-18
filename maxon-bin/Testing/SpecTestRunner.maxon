@@ -1967,9 +1967,8 @@ type FilterPatternTally
 	end 'unmatched'
 end 'FilterPatternTally'
 
-// The `*.md` spec files directly under `specDir`, in directory-listing order —
-// deterministic per host filesystem (String is not Comparable, so there is no
-// portable key to sort on; NTFS returns names in a stable order).
+// The `*.md` spec files directly under `specDir`, in byte order of their names, so no host's
+// listing order reaches the report.
 //
 // THIS ORDER IS THE REPORT ORDER. The pool reassembles every worker's out-of-order answers
 // back into it, which is how `--workers=1` and `--workers=N` print the same bytes.
@@ -1982,6 +1981,8 @@ function specFilePaths(specDir FilePath) returns FilePathArray throws CompileErr
 			specs.push(entry)
 		end 'isSpec'
 	end 'eachEntry'
+
+	specs.sortBy(function(left FilePath, right FilePath) gives compareBytesOrdinally(left.stem().toByteArray(), right: right.stem().toByteArray()))
 
 	return specs
 end 'specFilePaths'

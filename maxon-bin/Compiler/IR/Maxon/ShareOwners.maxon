@@ -132,7 +132,9 @@ type OwnerClosure
 	function requireFiniteInstantiation() throws CompileError
 		let reached = OpenRowLog.create()
 
-		for (owner, rows) in self.flow.rows.byOwner 'eachOwner'
+		for owner in self.flow.rows.ownersInByteOrder() 'eachOwner'
+			let rows = self.flow.rows.rowsOf(owner)
+
 			for row in rows 'eachDenotedInstance'
 				if self.relevant.contains(self.signatures.genericInstanceBaseName(row)) 'anInstanceTheVerdictReaches'
 					reached.file(owner, row: row)

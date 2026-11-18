@@ -1568,7 +1568,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:4:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
+error E3207: <fragment>:4:2: 'upsert' writes its receiver (line 170: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
 ```
 
 <!-- test: a-top-level-let-map-read-is-range-known -->
@@ -1627,7 +1627,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:5:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'TABLE' is immutable
+error E3207: <fragment>:5:2: 'upsert' writes its receiver (line 170: `try values.set(slotIndex as ElementIndex, value: value)`); 'TABLE' is immutable
 ```
 
 <!-- test: error.a-let-map-passed-to-a-mutating-parameter-is-refused -->
@@ -1736,7 +1736,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:10:9: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); the receiver is immutable
+error E3207: <fragment>:10:9: 'upsert' writes its receiver (line 170: `try values.set(slotIndex as ElementIndex, value: value)`); the receiver is immutable
 ```
 
 <!-- test: error.a-closure-capturing-a-let-map-cannot-write-it -->
@@ -1778,7 +1778,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:15:5: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); the receiver is read-only
+error E3207: <fragment>:15:5: 'upsert' writes its receiver (line 170: `try values.set(slotIndex as ElementIndex, value: value)`); the receiver is read-only
 ```
 
 <!-- test: error.a-let-map-handed-to-a-function-value-that-writes-it-is-refused -->
@@ -1891,4 +1891,83 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:3:21: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: a-churn-of-inserts-and-removes-makes-the-same-allocations-wherever-the-keys-hash -->
+How many allocations a sequence of inserts and removes makes is a function of the sequence, not of where
+the keys' hashes land. The same churn is run four times over keys whose hash multiplies the key by a
+different odd constant, so each run lays the keys and the tombstones out differently, and the four runs
+count the same allocations.
+```maxon
+typealias Key = int(0 to 4000)
+typealias Wide = int(0 to u64.max)
+typealias SaltedMap = Map with (Salted, Key)
+typealias Multipliers = Array with Wide
+typealias Tallies = Array with HeapCount
+
+let HashSpace = 4294967296
+let ChurnLength = 2000
+let LiveWindow = 5
+
+type Salted implements Hashable, Equatable
+	let value as Key
+	let multiplier as Wide
+
+	static function create(value Key, multiplier Wide) returns Self
+		return Self{value: value, multiplier: multiplier}
+	end 'create'
+
+	function hash() returns HashValue
+		return ((self.value as Wide * self.multiplier) mod HashSpace) as HashValue
+	end 'hash'
+
+	function equals(other Salted) returns bool
+		return self.value == other.value
+	end 'equals'
+end 'Salted'
+
+function churnAllocations(multiplier Wide) returns HeapCount
+	let table = SaltedMap.create()
+	let before = HeapStats.allocationsMade()
+
+	for i in 0 upto ChurnLength 'eachStep'
+		let k = i as Key
+		table.upsert(Salted.create(k, multiplier: multiplier), value: k)
+
+		if k >= LiveWindow 'oneLeavesTheWindow'
+			_ = table.remove(Salted.create((k - LiveWindow) as Key, multiplier: multiplier))
+		end 'oneLeavesTheWindow'
+	end 'eachStep'
+
+	return HeapStats.allocationsMade() - before
+end 'churnAllocations'
+
+function main() returns ExitCode
+	let tallies = Tallies.create(0)
+
+	for multiplier in Multipliers from [2654435761, 2246822519, 3266489917, 668265263] 'eachLayout'
+		tallies.push(churnAllocations(multiplier))
+	end 'eachLayout'
+
+	let first = try tallies.get(0) otherwise panic("four tallies were pushed")
+
+	for tally in tallies 'eachTally'
+		if tally != first 'differs'
+			for shown in tallies 'eachShown'
+				print("{shown} ")
+			end 'eachShown'
+
+			return 1
+		end 'differs'
+	end 'eachTally'
+
+	print("equal\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+equal
 ```

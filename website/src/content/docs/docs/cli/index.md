@@ -544,6 +544,7 @@ The reason a compiling build gives is one of these:
 | `the output is missing`, `the output was replaced since it was written` | The output is gone or differs from what the compile wrote; the same for `the debug-info sidecar` |
 | `--rebuild was requested` | [`--rebuild`](#maxon-build) was given |
 | `<flag> observes the compile` | See below |
+| `lint runs its checks over the program` | [`maxon lint --output=`](#maxon-lint) built the program |
 | `the output is the running compiler` | See [Rebuilding a running compiler](/docs/cli/project-structure/#rebuilding-a-running-compiler) |
 | `no build record can be kept: <why>` | See below |
 | `the build record is unreadable: <why>` | The record is damaged |
@@ -555,6 +556,7 @@ The reason a compiling build gives is one of these:
   `--allocations-by-tag`, or `--log=` at `debug` or `trace` for any category — because what it asked for is
   produced by the compile itself;
 - a build whose output is the compiler running it;
+- the build of [`maxon lint --output=`](#maxon-lint), which compiles with the lint rules enforced;
 - a build with **no record to keep**: no usable cache root, or an input that cannot be listed or read. It
   says `no build record can be kept: <why>` and otherwise builds and exits as usual;
 - a build whose debug-info sidecar could not be written, so the next build compiles again.
@@ -597,7 +599,8 @@ build's.
 ## `maxon lint`
 
 Runs the front end and every check on a program, the lint rules included, and stops before code
-generation. It writes no executable, no sidecar and no build record.
+generation. It writes no executable, no sidecar and no build record, unless `--output=` asks for the
+program's image.
 
 ```bash
 maxon lint [--fix] [<file|directory|target>...] [options]
@@ -642,6 +645,13 @@ own `main` counts as used. The program is staged in `<project>/.maxon/lint/`, or
 `<its directory>/.maxon/lint/<file name>/`, beside the `.maxon/test/` tree `maxon test` compiles from.
 Diagnostics name the files you wrote. A project that declares no `test` is refused, and so is `--define=`
 beside `--tests`.
+
+**`--output=<path>`** builds the program as [`maxon build --output=`](#maxon-build) does, with every lint
+rule enforced, and writes the executable and its debug-info sidecar at `<path>` when the lint finds nothing.
+A program with a finding writes nothing and exits 1. The compile always runs, because an
+[up-to-date](#up-to-date) output was built without the lint rules, and no build record is written; the
+build takes the output's [build lock](/docs/cli/project-structure/#the-build-lock). It is refused with exit 1 beside
+`--fix`, beside `--tests`, and beside a `.maxproj` or `.maxtasks` file named alone.
 
 **`--fix`** rewrites the program's own source files in place with the repair of every finding that has
 exactly one mechanical repair, then lints again, round after round, until no finding it reports has one.
@@ -718,6 +728,7 @@ all of their block, the first is deleted and the second is left and reported.
 | `--fix` | Rewrite the program's own sources with the repair of every finding that has exactly one, and lint again until none has one |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default, as for `maxon build`. See [Defines](#defines). |
 | `--target=<cpu>-<os>` | Lint the program as compiled for this target: `#if` branches, target refusals and the lint rules all read that target |
+| `--output=<path>` | Write the program's executable at `<path>` when the lint finds nothing, built with the lint rules enforced. Refused beside `--fix`, `--tests` and a manifest. |
 | `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. Refused beside `--fix`. |
 
 **Output.** Diagnostics go to stderr as `maxon build` prints them; E3092 and E3219 are reported once
@@ -1257,6 +1268,14 @@ cache entries this compile loaded, wrote and rejected, then the library files wh
 and the library files it parsed. `rejected` includes the entries removed, and a damaged `hash-seed`
 replaced, when this compile wrote the tier's seed. The lines prefixed `library cache:` say why an entry was
 rejected or a baseline went unused, or, as `no library cache: <reason>`, why the compile ran without it.
+
+**The whole-program index.** After the front end, `the whole-program index after the front end: <field>=<value> …`
+lists the fields of the index's fingerprint, each a count or a digest, so two compiles of one program can be
+compared field by field.
+
+**The scratch band.** A compile that enforces the lint rules runs each lint-only audit over a scratch band of
+the index, and `a scratch band rewound <R> instance rows, <W> journaled writes` says how much one audit wrote
+before the index was put back as it was.
 
 **The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature

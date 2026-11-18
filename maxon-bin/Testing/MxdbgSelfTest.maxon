@@ -8,12 +8,13 @@
 // (`MxdbgWriter.requireAscendingTables`) rather than sorting it.
 
 let AccountFileName = "account.maxon"
-let IoFileName = "io.maxon"
+let IoFileName = "stdlib/io.maxon"
 let WithdrawName = "withdraw"
 let ParseBatchName = "parseBatch"
 let ParseBatchDisplayName = "test 'parses a batch'"
 let SelfTestTriple = "x64-windows"
 let SelfTestSourceRoot = "C:/projects/ledger"
+let SelfTestCompilerVersion = "0.0.0 (0123abc 2026-01-01)"
 
 // `withdraw` occupies [0, 100) and `parseBatch` [100, 200); 250 is the gap past both, which every lookup
 // must answer nothing for rather than naming the nearest function.
@@ -225,7 +226,7 @@ function checkRefusesACyclicSiteParent(broken StringArray, buildId HashDigest)
 	writer.addInlineSite(CheckFundsName, parent: DebitSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.library)
 	writer.addInlineRange(DebitStart, codeEnd: DebitEnd, site: DebitSite)
 
-	let image = writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot)
+	let image = writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot, compilerVersion: SelfTestCompilerVersion)
 	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteParent, value: CheckFundsSite as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.siteParent, record: DebitSite, names: CheckFundsSite), damage: "an image whose inline sites '{DebitName}' and '{CheckFundsName}' name each other as parents")
 end 'checkRefusesACyclicSiteParent'
@@ -516,7 +517,7 @@ function selfTestImage(buildId HashDigest) returns ByteArray
 	writer.addInlineRange(CheckFundsStart, codeEnd: CheckFundsEnd, site: CheckFundsSite)
 	writer.addInlineRange(CheckFundsEnd, codeEnd: DebitEnd, site: DebitSite)
 
-	return writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot)
+	return writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot, compilerVersion: SelfTestCompilerVersion)
 end 'selfTestImage'
 
 // ⭐ **THE INLINE-FRAME ANSWERS, INCLUDING THE NESTED ONE.** An offset inside the inner body names the
@@ -627,6 +628,14 @@ function checkHeader(broken StringArray, reader MxdbgReader, buildId HashDigest)
 	if reader.sourceRoot != SelfTestSourceRoot 'sourceRootLost'
 		broken.push("the source root reads back as '{reader.sourceRoot}' rather than '{SelfTestSourceRoot}' — a relative file-table path resolves against it, so a breakpoint spelled by its path would name nothing")
 	end 'sourceRootLost'
+
+	if reader.compilerVersion != SelfTestCompilerVersion 'compilerVersionLost'
+		broken.push("the compiler version reads back as '{reader.compilerVersion}' rather than '{SelfTestCompilerVersion}' — a reader compares it with its own to refuse resolving library sources against a different compiler's tiers")
+	end 'compilerVersionLost'
+
+	if mxdbgNamesALibraryFile(AccountFileName) or not mxdbgNamesALibraryFile(IoFileName) 'tierNamesMisread'
+		broken.push("'{AccountFileName}' and '{IoFileName}' are not told apart as a program file and a library file")
+	end 'tierNamesMisread'
 
 	if reader.fileCount() != 2 or reader.functionCount() != 2 or reader.lineCount() != 6 'countsLost'
 		broken.push("the table counts read back as {reader.fileCount()} files / {reader.functionCount()} functions / {reader.lineCount()} rows against 2 / 2 / 6")

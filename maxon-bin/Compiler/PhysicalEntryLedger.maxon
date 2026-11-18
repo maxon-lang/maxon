@@ -1,4 +1,5 @@
 typealias PhysicalIdentitySet = Set with FilePath
+typealias PhysicalIdentityMap = Map with (FilePath, FilePath)
 
 /// The physical identities a source walk has already taken. A walk claims each directory before
 /// descending into it and each file before registering it, so an entry reached through several
@@ -6,31 +7,64 @@ typealias PhysicalIdentitySet = Set with FilePath
 /// first spelling the walk reaches.
 type PhysicalEntryLedger
 	var identities as PhysicalIdentitySet
+	var sourceIdentities as PhysicalIdentityMap
 
 	static function create() returns Self
-		return Self{identities: PhysicalIdentitySet.create()}
+		return Self{identities: PhysicalIdentitySet.create(), sourceIdentities: PhysicalIdentityMap.create()}
 	end 'create'
 
 	export function claimsFirst(entry FilePath) returns bool throws CompileError
-		let identity = try walkIdentityOf(entry) otherwise (e) 'unidentifiable'
-			throw unidentifiablePathFailure(e)
-		end 'unidentifiable'
+		let identity = try walkIdentityOf(entry)
+		return self.claimed(identity.identity)
+	end 'claimsFirst'
 
+	function claimsFirstSource(entry FilePath) returns bool throws CompileError
+		let identity = try walkIdentityOf(entry)
+
+		if not self.claimed(identity.identity) 'seenBefore'
+			return false
+		end 'seenBefore'
+
+		if identity.physical 'physicallyResolved'
+			self.sourceIdentities.upsert(entry, value: identity.identity)
+		end 'physicallyResolved'
+
+		return true
+	end 'claimsFirstSource'
+
+	function physicalIdentityOf(source FilePath) returns FilePath throws AbsentError
+		return try self.sourceIdentities.get(source) otherwise throw AbsentError.absent
+	end 'physicalIdentityOf'
+
+	function claimed(identity FilePath) returns bool
 		if self.identities.contains(identity) 'seenBefore'
 			return false
 		end 'seenBefore'
 
 		self.identities.insert(identity)
 		return true
-	end 'claimsFirst'
+	end 'claimed'
 end 'PhysicalEntryLedger'
+
+type WalkIdentity
+	let identity as FilePath
+	let physical as bool
+
+	static function create(identity FilePath, physical bool) returns WalkIdentity
+		return Self{identity: identity, physical: physical}
+	end 'create'
+end 'WalkIdentity'
 
 // A path the host refuses to resolve (access denied, a link loop) is keyed by its resolved parent and its own
 // name, so the load that follows reports `could not read` instead of the walk failing.
-function walkIdentityOf(entry FilePath) returns FilePath throws RunCacheError
+function walkIdentityOf(entry FilePath) returns WalkIdentity throws CompileError
 	let physical = try projectIdentityPathOf(entry) otherwise 'refused'
-		return try entryIdentityPathOf(entry)
+		let kept = try entryIdentityPathOf(entry) otherwise (e) 'unidentifiable'
+			throw unidentifiablePathFailure(e)
+		end 'unidentifiable'
+
+		return WalkIdentity.create(kept, physical: false)
 	end 'refused'
 
-	return physical
+	return WalkIdentity.create(physical, physical: true)
 end 'walkIdentityOf'

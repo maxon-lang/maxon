@@ -1,0 +1,57 @@
+let TheOutputIsIndependentOfWhetherLintRanCaseDirName = "output-independent-of-lint"
+let TheOutputIsIndependentOfWhetherLintRanFixtureDirName = "tests/cli/fixtures/lint-only-mint"
+let LintOnlyMintBuildLabel = "lint-only-mint"
+
+test 'a program whose discarded-result audit mints an instance row, built with lint skipped and with lint enforced, writes the same bytes and packs and leaves the same index after the front end'
+	requireHeldOutsideCheckout(TheOutputIsIndependentOfWhetherLintRanCaseDirName, check: OutputIsIndependentOfWhetherLintRan.create())
+end 'a program whose discarded-result audit mints an instance row, built with lint skipped and with lint enforced, writes the same bytes and packs and leaves the same index after the front end'
+
+type OutputIsIndependentOfWhetherLintRan implements OutsideCheckoutCase, EnvironmentCellCheck
+	static function create() returns OutputIsIndependentOfWhetherLintRan
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+		stageStoredTree(fixtureDir(TheOutputIsIndependentOfWhetherLintRanFixtureDirName), into: app)
+
+		let programs = GateProgramArray.create(0)
+		programs.push(GateProgram.built(LintOnlyMintBuildLabel, program: AppDirName, options: [CompilerDebugLogFlag]))
+
+		try requireIndependentOfTheEnvironment(try lintAxis(dir), programs: programs, staged: dir, check: self)
+	end 'requireHeldIn'
+
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+		requireTheAuditMintedWhenLintRan(outcome)
+	end 'requireAfterRun'
+
+	function requireAfterEnvironment(_ EnvironmentRun) throws TestFailure
+		return
+	end 'requireAfterEnvironment'
+end 'OutputIsIndependentOfWhetherLintRan'
+
+function requireTheAuditMintedWhenLintRan(outcome GateOutcome)
+	let rewinds = linesOpeningIn(outcome.output.stderr, prefix: ScratchBandRewindLinePrefix)
+
+	match outcome.program.command 'command'
+		build then requireNoScratchBand(outcome, rewinds: rewinds)
+		lintedImage then requireAScratchBandWrote(outcome, rewinds: rewinds)
+		lint then panic("the-output-is-independent-of-whether-lint-ran: the gate could not run - the cell compares images, and {outcome.which} writes none.")
+	end 'command'
+end 'requireTheAuditMintedWhenLintRan'
+
+function requireNoScratchBand(outcome GateOutcome, rewinds StringArray)
+	if not rewinds.isEmpty() 'aBandOpened'
+		panic("the-output-is-independent-of-whether-lint-ran: the gate could not run - {outcome.which} logged a lint audit's scratch band, so it is not the build with lint skipped this cell compares against:{listedLines(rewinds)}")
+	end 'aBandOpened'
+end 'requireNoScratchBand'
+
+function requireAScratchBandWrote(outcome GateOutcome, rewinds StringArray)
+	for line in rewinds 'eachRewind'
+		if not line.contains(NothingRewoundWording) 'wrote'
+			return
+		end 'wrote'
+	end 'eachRewind'
+
+	panic("the-output-is-independent-of-whether-lint-ran: the gate could not run - no lint audit of {outcome.which} wrote the index, so the fixture no longer reaches the lint-only mint whose rewind this cell exists to hold:{listedLines(rewinds)}")
+end 'requireAScratchBandWrote'

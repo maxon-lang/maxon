@@ -541,6 +541,7 @@ The reason a compiling build gives is one of these:
 | `the output is missing`, `the output was replaced since it was written` | The output is gone or differs from what the compile wrote; the same for `the debug-info sidecar` |
 | `--rebuild was requested` | [`--rebuild`](#maxon-build) was given |
 | `<flag> observes the compile` | See below |
+| `lint runs its checks over the program` | [`maxon lint --output=`](#maxon-lint) built the program |
 | `the output is the running compiler` | See [Rebuilding a running compiler](#rebuilding-a-running-compiler) |
 | `no build record can be kept: <why>` | See below |
 | `the build record is unreadable: <why>` | The record is damaged |
@@ -552,6 +553,7 @@ The reason a compiling build gives is one of these:
   `--allocations-by-tag`, or `--log=` at `debug` or `trace` for any category — because what it asked for is
   produced by the compile itself;
 - a build whose output is the compiler running it;
+- the build of [`maxon lint --output=`](#maxon-lint), which compiles with the lint rules enforced;
 - a build with **no record to keep**: no usable cache root, or an input that cannot be listed or read. It
   says `no build record can be kept: <why>` and otherwise builds and exits as usual;
 - a build whose debug-info sidecar could not be written, so the next build compiles again.
@@ -594,7 +596,8 @@ build's.
 ### `maxon lint`
 
 Runs the front end and every check on a program, the lint rules included, and stops before code
-generation. It writes no executable, no sidecar and no build record.
+generation. It writes no executable, no sidecar and no build record, unless `--output=` asks for the
+program's image.
 
 ```bash
 maxon lint [--fix] [<file|directory|target>...] [options]
@@ -639,6 +642,13 @@ own `main` counts as used. The program is staged in `<project>/.maxon/lint/`, or
 `<its directory>/.maxon/lint/<file name>/`, beside the `.maxon/test/` tree `maxon test` compiles from.
 Diagnostics name the files you wrote. A project that declares no `test` is refused, and so is `--define=`
 beside `--tests`.
+
+**`--output=<path>`** builds the program as [`maxon build --output=`](#maxon-build) does, with every lint
+rule enforced, and writes the executable and its debug-info sidecar at `<path>` when the lint finds nothing.
+A program with a finding writes nothing and exits 1. The compile always runs, because an
+[up-to-date](#up-to-date) output was built without the lint rules, and no build record is written; the
+build takes the output's [build lock](#the-build-lock). It is refused with exit 1 beside
+`--fix`, beside `--tests`, and beside a `.maxproj` or `.maxtasks` file named alone.
 
 **`--fix`** rewrites the program's own source files in place with the repair of every finding that has
 exactly one mechanical repair, then lints again, round after round, until no finding it reports has one.
@@ -715,6 +725,7 @@ all of their block, the first is deleted and the second is left and reported.
 | `--fix` | Rewrite the program's own sources with the repair of every finding that has exactly one, and lint again until none has one |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default, as for `maxon build`. See [Defines](#defines). |
 | `--target=<cpu>-<os>` | Lint the program as compiled for this target: `#if` branches, target refusals and the lint rules all read that target |
+| `--output=<path>` | Write the program's executable at `<path>` when the lint finds nothing, built with the lint rules enforced. Refused beside `--fix`, `--tests` and a manifest. |
 | `--metrics=<path>` | Write the compile's per-phase time and memory to `<path>` as TSV, in the rows of [`maxon build --metrics=`](#maxon-build) less `code`. The code-generation phases read zero. Refused beside `--fix`. |
 
 **Output.** Diagnostics go to stderr as `maxon build` prints them; E3092 and E3219 are reported once
@@ -1255,6 +1266,14 @@ and the library files it parsed. `rejected` includes the entries removed, and a 
 replaced, when this compile wrote the tier's seed. The lines prefixed `library cache:` say why an entry was
 rejected or a baseline went unused, or, as `no library cache: <reason>`, why the compile ran without it.
 
+**The whole-program index.** After the front end, `the whole-program index after the front end: <field>=<value> …`
+lists the fields of the index's fingerprint, each a count or a digest, so two compiles of one program can be
+compared field by field.
+
+**The scratch band.** A compile that enforces the lint rules runs each lint-only audit over a scratch band of
+the index, and `a scratch band rewound <R> instance rows, <W> journaled writes` says how much one audit wrote
+before the index was put back as it was.
+
 **The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature
 index before they parse: a warm compile of a one-file program adopts at most one. The next line,
@@ -1702,8 +1721,8 @@ it to the new holder.
 ### The build lock
 
 Two builds of one output would overwrite each other's executable and [build record](#up-to-date), so
-every `maxon build` — `--output=` builds included — locks its **output** before it decides whether the
-output is up to date, and holds the lock until the build record is written. The lock is
+every `maxon build` — `--output=` builds included — and every `maxon lint --output=` locks its **output**
+before it decides whether the output is up to date, and holds the lock until the build record is written. The lock is
 `<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's physical path the build record is named by,
 with its claim file `<key>.lock.claim` beside it, so a build takes it only where a cache root is usable.
 
@@ -1747,13 +1766,20 @@ On Linux and macOS the executable is `app` and the sidecar `app.mxdbg`. No sidec
 the code you ship.
 
 The sidecar maps machine code back to the source. It records the target, a **build id** (a hash of
-the executable's code section) and the directory the build ran in, then the source files, functions with
-their prologue offset, frame size, local variables and origin, types, the line table and inlining
-records, and the image base, the `.data` words a debugger reads out of the running program and the record
-geometry it reads them by. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a
-`--coverage` build requires it.
+the executable's code section), the compiler's build stamp and the program's root directory, then the
+source files, functions with their prologue offset, frame size, local variables and origin, types, the
+line table and inlining records, and the image base, the `.data` words a debugger reads out of the running
+program and the record geometry it reads them by. `maxon debug` prints it; `maxon profile` and
+`maxon coverage` read it, and a `--coverage` build requires it.
 
-The sidecar format is versioned (version 11), and a reader refuses a sidecar of any other version: after
+The program's own files are recorded relative to its root directory. A file of the standard library, the
+runtime or a [scriptlib](#the-scriptlib-directory) package is recorded under its tier, as `stdlib/…`,
+`runtime/…` or `scriptlib/…`, and a reader resolves it against the `stdlib/`, `runtime/` and `scriptlib/`
+of the compiler that reads. `maxon debug`, `maxon dap-server` and `maxon coverage` therefore refuse a
+sidecar another compiler wrote, naming both compiler versions; `maxon debug --dump-info` prints the
+writing compiler's version and says so beneath the header when it is not the reading compiler's.
+
+The sidecar format is versioned (version 12), and a reader refuses a sidecar of any other version: after
 upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ### Panics and backtraces
@@ -1830,7 +1856,7 @@ leave a program running.
 A program the debugger cannot drive is refused by name, with exit 1: every program on a host this build
 has no debug backend for (naming the host), a wasm module, a binary built for a target other than this host's
 (refused before launch, naming both targets), an arm64-macos program on a host with no `debugserver` (naming
-`xcode-select --install`), and a binary whose sidecar describes a different build.
+`xcode-select --install`), and a binary whose sidecar describes a different build or was written by another compiler.
 
 On arm64-macos the driver checks that the host's `debugserver` takes `--unmask-signals`, which is what lets a
 hardware fault reach the program's own handler; where an older one is found the driver says so on stderr, and
@@ -2166,6 +2192,12 @@ sidecar was written by the same build as that executable, and refuses a stale on
 
 ```text
 maxon debug: the .mxdbg sidecar describes a different build of this binary — rebuild it
+```
+
+**The compiler.** A sidecar another compiler wrote is refused with exit 1 as well, naming both versions:
+
+```text
+maxon debug: app.exe: its debug info was written by maxon 0.1.0 (a1b2c3d 2026-09-09) and this is maxon 0.2.0 (e4f5a6b 2026-11-01), so the stdlib/, runtime/ and scriptlib/ sources it names are not the ones the program was built from. Rebuild the program with this compiler
 ```
 
 A missing sidecar is refused with exit 1, naming the path it looked for and `--no-debug-info` as the

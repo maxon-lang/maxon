@@ -905,7 +905,7 @@ end 'main'
 ```maxoncstderr
 error E3220: <fragment>:16:9: the initializer of 'H' calls 'Holder.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 error E3209: <fragment>:19:2: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
-error E3207: <fragment>:24:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
+error E3207: <fragment>:24:2: 'upsert' writes its receiver (line 170: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
 ```
 
 <!-- test: error.top-level-let-array-ternary-alias -->

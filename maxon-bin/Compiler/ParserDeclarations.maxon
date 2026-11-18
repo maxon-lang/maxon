@@ -5458,7 +5458,7 @@ extension Parser
 
 						let keeper = try index.extensionInnerAliasKeeper(nestedQualified) otherwise panic("Parser.foldExtensionDeclarationInto: '{String.from(nestedQualified)}' has no keeper right after one was recorded for it")
 
-						if nestedSite.compare(keeper) != Ordering.equalTo 'aRefusedDuplicate'
+						if not nestedSite.equals(keeper) 'aRefusedDuplicate'
 							continue
 						end 'aRefusedDuplicate'
 					end 'anAuthorsMember'
@@ -10293,7 +10293,7 @@ extension Parser
 
 	function declaredBefore(declFilePath FilePath, line LineNumber, column ColumnNumber, nameTok Token) returns bool
 		if not declFilePath.equals(self.job.path) 'anotherFile'
-			return self.signatures.declaredByTheCorpus(declFilePath) == self.job.isStdlibSource and precedesInPathOrder(declFilePath, other: self.job.path)
+			return self.signatures.declaredByTheCorpus(declFilePath) == self.job.isStdlibSource and self.signatures.compareSourceOrder(declFilePath, other: self.job.path) == Ordering.lessThan
 		end 'anotherFile'
 
 		return line < nameTok.line or (line == nameTok.line and column < nameTok.column)

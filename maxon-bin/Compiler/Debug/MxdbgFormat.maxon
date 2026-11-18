@@ -23,7 +23,7 @@ let MxdbgMagicByte4 = 71
 // ⚠ A bump needs TWO self-compiles for the same reason an emitted-runtime change does: the first writes the
 // next compiler's sidecar stamped with the version it itself speaks, so between the two builds that
 // compiler's `--dump-info` refuses its own sidecar by name.
-let MxdbgFormatVersion = 11
+let MxdbgFormatVersion = 12
 
 // Appended to the binary's path WITH its extension still on: `foo.exe` -> `foo.exe.mxdbg`.
 export let MxdbgSidecarExtension = ".mxdbg"
@@ -98,7 +98,11 @@ let MxdbgOffLayoutCount = 140
 
 let MxdbgOffImageBase = 144
 
-let MxdbgHeaderSize = 152
+let MxdbgOffCompilerOff = 152
+
+let MxdbgOffCompilerLen = 156
+
+let MxdbgHeaderSize = 160
 
 let MxdbgFileEntrySize = 8
 
@@ -538,6 +542,38 @@ function mxdbgFigureWord(value MxdbgRecordFigure) returns MxdbgIndex
 
 	return value as MxdbgIndex
 end 'mxdbgFigureWord'
+
+enum MxdbgLibraryTier
+	stdlib
+	runtime
+	scriptlib
+end 'MxdbgLibraryTier'
+
+function mxdbgLibraryTierDirectory(tier MxdbgLibraryTier) returns String
+	return match tier 'which'
+		stdlib gives StdlibDirName
+		runtime gives RuntimeDirName
+		scriptlib gives ScriptlibDirName
+	end 'which'
+end 'mxdbgLibraryTierDirectory'
+
+function mxdbgLibraryFileName(tier MxdbgLibraryTier, below String) returns String
+	return "{mxdbgLibraryTierDirectory(tier)}{PortablePathSeparator}{below}"
+end 'mxdbgLibraryFileName'
+
+function mxdbgOpensWithATierDirectory(spelled String, separator String) returns bool
+	for tier in MxdbgLibraryTier.allCases 'eachTier'
+		if spelled.startsWith("{mxdbgLibraryTierDirectory(tier)}{separator}") 'underThisTier'
+			return true
+		end 'underThisTier'
+	end 'eachTier'
+
+	return false
+end 'mxdbgOpensWithATierDirectory'
+
+export function mxdbgNamesALibraryFile(recorded String) returns bool
+	return mxdbgOpensWithATierDirectory(recorded, separator: PortablePathSeparator)
+end 'mxdbgNamesALibraryFile'
 
 // Whether `image` opens with the sidecar magic. Split from the reader so a caller can ask before
 // paying for a parse.

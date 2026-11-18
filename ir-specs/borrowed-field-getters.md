@@ -305,7 +305,7 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp __il_body#40
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_57]  ; "panic at Map.maxon:325: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -316,7 +316,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Map.maxon:326: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -565,7 +565,7 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp __il_body#40
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_57]  ; "panic at Map.maxon:325: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -576,7 +576,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Map.maxon:326: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -814,7 +814,7 @@ func @main {
     arm64.b.ne tryerr#19
     arm64.b __il_body#40
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_58  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_57  ; "panic at Map.maxon:325: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -824,7 +824,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   tryerr#19:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at Map.maxon:326: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1065,7 +1065,7 @@ func @main {
     arm64.b.ne tryerr#19
     arm64.b __il_body#40
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_58  ; "panic at Map.maxon:329: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_57  ; "panic at Map.maxon:325: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1075,7 +1075,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   tryerr#19:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at Map.maxon:330: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at Map.maxon:326: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

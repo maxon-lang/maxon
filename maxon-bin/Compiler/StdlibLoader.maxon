@@ -42,7 +42,7 @@
 //
 //   • EMISSION ORDER IS DECIDED AT THE MERGE. Function order and which of two same-named UNEXPORTED
 //     globals gets the `$1` suffix follow the order the merge folds the files in, and that order is
-//     `Queries.sourceFilesInEmissionOrder`'s key over each file's tier and path, never the walk's.
+//     `Queries.sourceFilesInSourceOrder`'s key over each file's tier and relative path, never the walk's.
 //
 // ⚠ **THE LIBRARY IS CACHED ONLY THROUGH THE QUERY SPINE.** These files are registered as ordinary
 // sources, so the query spine's memos cover them and a second cache would be the same fact stored
@@ -234,7 +234,7 @@ function loadLibrarySources(project Project) throws CompileError
 	try loadScriptlibPackages(project, usersOwn: usersOwn)
 end 'loadLibrarySources'
 
-export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
+export function scriptlibPackageSources(scriptlibDir FilePath, recording WalkRecording = WalkRecording.none) returns MaxonSourcePathArray throws CompileError
 	if not Directory.exists(scriptlibDir) 'noPackages'
 		return MaxonSourcePathArray.create(0)
 	end 'noPackages'
@@ -253,18 +253,18 @@ export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSour
 	end 'eachEntry'
 
 	// One call for every package directory: a link from one package to another lists a file once.
-	return try namedSourceFiles(packageDirectories)
+	return try namedSourceFiles(packageDirectories, recording: recording)
 end 'scriptlibPackageSources'
 
 // Only a program whose root is one file loads scriptlib: a directory program already composes its own
 // files. The run cache and the build record key on this same answer (`RunCache.scriptlibInputs`), so
 // they cannot disagree with the loader about which files a program compiles.
-export function scriptlibSourcesLoadedBy(root FilePath, scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
+export function scriptlibSourcesLoadedBy(root FilePath, scriptlibDir FilePath, recording WalkRecording = WalkRecording.none) returns MaxonSourcePathArray throws CompileError
 	if not rootIsASingleFile(root) 'aProgramOfSeveralFiles'
 		return MaxonSourcePathArray.create(0)
 	end 'aProgramOfSeveralFiles'
 
-	return try scriptlibPackageSources(scriptlibDir)
+	return try scriptlibPackageSources(scriptlibDir, recording: recording)
 end 'scriptlibSourcesLoadedBy'
 
 // Unlike `loadLibraryRoot`, nothing here is marked a shared token source: that memo holds the
@@ -272,7 +272,7 @@ end 'scriptlibSourcesLoadedBy'
 function loadScriptlibPackages(project Project, usersOwn MaxonSourcePathSet) throws CompileError
 	let scriptlibDir = try project.scriptlib.packagesRoot() otherwise return
 
-	for path in try scriptlibSourcesLoadedBy(project.rootPath, scriptlibDir: scriptlibDir) 'eachPackageFile'
+	for path in try scriptlibSourcesLoadedBy(project.rootPath, scriptlibDir: scriptlibDir, recording: WalkRecording.into(project.db.walkedSources)) 'eachPackageFile'
 		if usersOwn.contains(path) 'theUsersOwnFile'
 			continue
 		end 'theUsersOwnFile'
@@ -316,7 +316,7 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 	end 'theTierDidNotArrive'
 
 	let found = MaxonSourcePathArray.create(0)
-	_ = try collectMaxonSources(root, into: found)
+	_ = try collectMaxonSources(root, into: found, recording: WalkRecording.into(project.db.walkedSources))
 
 	if found.isEmpty() 'contributedNothing'
 		return false

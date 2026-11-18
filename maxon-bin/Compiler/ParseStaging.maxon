@@ -1910,7 +1910,7 @@ end 'ownedNames'
 //   2. offset-merge the artifact's MaxonModule fragment into `target`,
 //   3. fold its op source spans onto `project.opRanges`, in lockstep with (2),
 //   4. commit the artifact's registry contributions into `Project` — all but its type-name
-//      declarations, which `commitTypeNameDeclsInPathOrder` commits once every file has merged.
+//      declarations, which `commitTypeNameDeclsInSourceOrder` commits once every file has merged.
 // `target` is the accumulator module `FrontEndRun` builds (and caches); the
 // registries land on `Project`.
 function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
@@ -2184,15 +2184,15 @@ end 'commitTypeNameDecls'
 
 // Type-name collision is not transitive — d1's `enum Box` collides with d2's, d2's collides with an alias
 // `Box` in d2, yet d1's enum and d2's alias coexist — so which declarations are admitted depends on the
-// order they are committed. Committing the file whose path identity sorts earliest first makes that order,
-// and so the blame, the same on every host and for every spelling of the invocation. `entry.position`
+// order they are committed. Committing the file whose source order key sorts earliest first makes that order,
+// and so the blame, the same on every host and for every spelling of the invocation. `slot.position`
 // indexes `artifacts` because `parseEveryFile` returns one artifact per source path, in source-path order.
-function commitTypeNameDeclsInPathOrder(project Project, artifacts FileParseArtifactArray, pathOrder SourceFileInPathOrderArray, signatures ProgramSignatures)
-	for entry in pathOrder 'eachInPathOrder'
-		let artifact = try artifacts.get(entry.position) otherwise panic("commitTypeNameDeclsInPathOrder: artifacts.get OOB at {entry.position} below count {artifacts.count()}")
+function commitTypeNameDeclsInSourceOrder(project Project, artifacts FileParseArtifactArray, sourceOrder SourceOrderSlotArray, signatures ProgramSignatures)
+	for slot in sourceOrder 'eachInSourceOrder'
+		let artifact = try artifacts.get(slot.position) otherwise panic("commitTypeNameDeclsInSourceOrder: artifacts.get OOB at {slot.position} below count {artifacts.count()}")
 		commitTypeNameDecls(project, artifact: artifact, signatures: signatures)
-	end 'eachInPathOrder'
-end 'commitTypeNameDeclsInPathOrder'
+	end 'eachInSourceOrder'
+end 'commitTypeNameDeclsInSourceOrder'
 
 typealias TypeNameDeclsByFile = Map with (String, TypeNameDeclArray)
 
@@ -2214,8 +2214,7 @@ function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, d
 
 	let registry = TypeNameRegistry.create()
 
-	for entry in sourceFilesInPathOrder(paths) 'eachInPathOrder'
-		let path = try paths.get(entry.position) otherwise panic("nominalNameCollisionsOf: paths.get OOB at {entry.position} below count {paths.count()}")
+	for path in paths 'eachInSourceOrder'
 		let declared = (try byFile.get(path.toString()) otherwise continue).clone()
 		declared.sortBy(function(left TypeNameDecl, right TypeNameDecl) gives compareTypeNameDecls(left, right: right))
 
@@ -2226,7 +2225,7 @@ function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, d
 
 			collisions.push(collision)
 		end 'eachCollisionHere'
-	end 'eachInPathOrder'
+	end 'eachInSourceOrder'
 
 	return collisions
 end 'nominalNameCollisionsOf'
@@ -2236,29 +2235,6 @@ function reportTypeNameCollisions(project Project, collisions TypeNameCollisionA
 		reportTypeNameCollision(project, decl: collision.decl, winner: collision.winner)
 	end 'eachCollision'
 end 'reportTypeNameCollisions'
-
-function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
-	let ordered = SourceFileInPathOrderArray.create(paths.count(), zeroed: false)
-	let workingDirectory = Directory.currentPath()
-
-	for (iter, path) in paths.withIterator() 'eachSourcePath'
-		ordered.push(SourceFileInPathOrder.create(pathIdentity(path, workingDirectory: workingDirectory), position: iter.index()))
-	end 'eachSourcePath'
-
-	ordered.sortBy(function(left SourceFileInPathOrder, right SourceFileInPathOrder) gives compareBytesOrdinally(left.identity, right: right.identity))
-	return ordered
-end 'sourceFilesInPathOrder'
-
-type SourceFileInPathOrder
-	export let identity as ByteArray
-	export let position as ElementIndex
-
-	static function create(identity ByteArray, position ElementIndex) returns SourceFileInPathOrder
-		return Self{identity: identity, position: position}
-	end 'create'
-end 'SourceFileInPathOrder'
-
-typealias SourceFileInPathOrderArray = Array with SourceFileInPathOrder
 
 // The two texts a collision can have, kept together because the CHOICE between them is the thing
 // worth reading in one place.
@@ -3149,7 +3125,7 @@ function newcomerDisplacesTheFloor(project Project, newcomer FuncSignatureEntry,
 		return newcomerIsTheLibrarys
 	end 'oneIsTheLibrarys'
 
-	return precedesInPathOrder(newcomer.sourceFilePath, other: floor.sourceFilePath)
+	return fileProvenanceOf(project, path: newcomer.sourceFilePath).orderKey.compare(fileProvenanceOf(project, path: floor.sourceFilePath).orderKey) == Ordering.lessThan
 end 'newcomerDisplacesTheFloor'
 
 function duplicateFunctionMessage(blamed FuncSignatureEntry) returns String

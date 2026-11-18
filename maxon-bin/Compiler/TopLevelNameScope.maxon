@@ -19,11 +19,10 @@ type TopLevelNameClaim
 	let family as TopLevelNameFamily
 	let keyword as String
 	let filePath as FilePath
-	let line as LineNumber
-	let column as ColumnNumber
+	let site as SourceSite
 
-	static function create(name ByteArray, family TopLevelNameFamily, keyword String, filePath FilePath, line LineNumber, column ColumnNumber) returns TopLevelNameClaim
-		return Self{name: name, family: family, keyword: keyword, filePath: filePath, line: line, column: column}
+	static function create(name ByteArray, family TopLevelNameFamily, keyword String, filePath FilePath, site SourceSite) returns TopLevelNameClaim
+		return Self{name: name, family: family, keyword: keyword, filePath: filePath, site: site}
 	end 'create'
 
 	function directoryKey(directories ModuleDirectoryByFile) returns immutable ByteArray
@@ -31,21 +30,11 @@ type TopLevelNameClaim
 	end 'directoryKey'
 
 	function comparePosition(other TopLevelNameClaim) returns Ordering
-		if not self.filePath.equals(other.filePath) 'differentFiles'
-			return comparePathIdentity(self.filePath, other: other.filePath)
-		end 'differentFiles'
-
-		let byLine = self.line.compare(other.line)
-
-		if byLine != Ordering.equalTo 'differentLines'
-			return byLine
-		end 'differentLines'
-
-		return self.column.compare(other.column)
+		return self.site.compare(other.site)
 	end 'comparePosition'
 
 	function report(project Project, incumbent TopLevelNameClaim)
-		reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateDefinitionMessage(String.from(self.name), incumbentKeyword: incumbent.keyword), line: self.line, column: self.column, filePath: self.filePath)
+		reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateDefinitionMessage(String.from(self.name), incumbentKeyword: incumbent.keyword), line: self.site.line, column: self.site.column, filePath: self.filePath)
 	end 'report'
 end 'TopLevelNameClaim'
 
@@ -108,19 +97,19 @@ type TopLevelNameLedger
 		self.first.upsert(key, value: claim)
 	end 'note'
 
-	function noteTypes(project Project, directories ModuleDirectoryByFile)
+	function noteTypes(project Project, signatures ProgramSignatures, directories ModuleDirectoryByFile)
 		for decl in project.typeNameDecls.declarations() 'eachTypeDecl'
-			self.note(TopLevelNameClaim.create(project.shadowRoster.bareSpellingOf(decl.name), family: TopLevelNameFamily.typeLike, keyword: typeDeclKeyword(decl.claim.kind), filePath: decl.claim.declFilePath, line: decl.nameLine, column: decl.nameColumn), directories: directories)
+			self.note(TopLevelNameClaim.create(project.shadowRoster.bareSpellingOf(decl.name), family: TopLevelNameFamily.typeLike, keyword: typeDeclKeyword(decl.claim.kind), filePath: decl.claim.declFilePath, site: signatures.sourceSiteOf(decl.claim.declFilePath, line: decl.nameLine, column: decl.nameColumn)), directories: directories)
 		end 'eachTypeDecl'
 	end 'noteTypes'
 
-	function noteFunctions(project Project, directories ModuleDirectoryByFile)
+	function noteFunctions(project Project, signatures ProgramSignatures, directories ModuleDirectoryByFile)
 		for (registered, entry) in project.funcSignatureFloors 'eachFunction'
 			if entry.synthesized or not registersAFreeFunction(registered) 'notAFreeFunctionTheAuthorWrote'
 				continue
 			end 'notAFreeFunctionTheAuthorWrote'
 
-			self.note(TopLevelNameClaim.create(bareNameOfMint(registered), family: TopLevelNameFamily.freeFunction, keyword: FunctionKeyword, filePath: entry.sourceFilePath, line: entry.nameLine, column: entry.nameColumn), directories: directories)
+			self.note(TopLevelNameClaim.create(bareNameOfMint(registered), family: TopLevelNameFamily.freeFunction, keyword: FunctionKeyword, filePath: entry.sourceFilePath, site: signatures.sourceSiteOf(entry.sourceFilePath, line: entry.nameLine, column: entry.nameColumn)), directories: directories)
 		end 'eachFunction'
 	end 'noteFunctions'
 
@@ -128,7 +117,7 @@ type TopLevelNameLedger
 		for index in 0 upto signatures.topLevelDeclCount() 'eachBinding'
 			let decl = signatures.declAt(index)
 
-			self.note(TopLevelNameClaim.create(signatures.shadowRoster().bareSpellingOf(decl.name), family: TopLevelNameFamily.binding, keyword: BindingKeyword, filePath: decl.declFilePath, line: decl.nameLine, column: decl.nameColumn), directories: directories)
+			self.note(TopLevelNameClaim.create(signatures.shadowRoster().bareSpellingOf(decl.name), family: TopLevelNameFamily.binding, keyword: BindingKeyword, filePath: decl.declFilePath, site: signatures.sourceSiteOf(decl.declFilePath, line: decl.nameLine, column: decl.nameColumn)), directories: directories)
 		end 'eachBinding'
 	end 'noteBindings'
 
@@ -175,8 +164,8 @@ function checkTopLevelNameScopes(project Project, signatures ProgramSignatures)
 
 	let directories = signatures.settledDeclarations().fileModuleDirectories
 	let ledger = TopLevelNameLedger.create()
-	ledger.noteTypes(project, directories: directories)
-	ledger.noteFunctions(project, directories: directories)
+	ledger.noteTypes(project, signatures: signatures, directories: directories)
+	ledger.noteFunctions(project, signatures: signatures, directories: directories)
 	ledger.noteBindings(signatures, directories: directories)
 
 	for collision in ledger.collisions() 'eachCollision'

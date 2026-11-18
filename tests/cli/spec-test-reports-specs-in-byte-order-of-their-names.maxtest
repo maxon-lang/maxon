@@ -1,0 +1,49 @@
+let SpecTestReportsSpecsInByteOrderCaseDirName = "spec-test-reports-specs-in-byte-order"
+let ByteOrderedSpecNames = ["Bravo", "Delta", "Foxtrot", "alpha", "charlie", "echo"]
+let ByteOrderedSpecDirName = "spec"
+let ByteOrderedSpecFileSuffix = ".md"
+let ByteOrderedSpecTestName = "only"
+let ByteOrderedSpecBody = "## Tests\n\n<!-- test: only -->\n```maxon\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n```\n```exitcode\n0\n```\n\n"
+let ByteOrderedSpecLabelSeparator = "/"
+let ByteOrderedSpecNameSeparator = ", "
+
+test 'spec-test reports its specs in the byte order of their names, whatever order the directory lists them in'
+	requireHeldOutsideCheckout(SpecTestReportsSpecsInByteOrderCaseDirName, check: SpecTestReportsSpecsInByteOrder.create())
+end 'spec-test reports its specs in the byte order of their names, whatever order the directory lists them in'
+
+type SpecTestReportsSpecsInByteOrder implements OutsideCheckoutCase
+	static function create() returns SpecTestReportsSpecsInByteOrder
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let specDir = stagingDir(dir.join(ByteOrderedSpecDirName).toString())
+		let expected = StringArray.create(0)
+
+		for name in ByteOrderedSpecNames 'eachSpec'
+			writeStagedFile(specDir.join("{name}{ByteOrderedSpecFileSuffix}"), content: "---\nfeature: {name}\n---\n\n# {name}\n\n{ByteOrderedSpecBody}")
+			expected.push("{name}{ByteOrderedSpecLabelSeparator}{ByteOrderedSpecTestName}")
+		end 'eachSpec'
+
+		let run = spawnCompiler([HiddenAnchorCommand, specDir.toString()], staged: specDir, what: "`maxon {HiddenAnchorCommand}` over the byte-ordered specs", environment: confinedCacheEnvironment(dir, naming: EnvMap.create()))
+		let said = withoutCarriageReturns("{run.stdout}{LineFeed}{run.stderr}")
+
+		try Expect.equal(run.exitCode(), expected: 0, message: "the run over the byte-ordered specs did not pass. It said:\n{said}")
+
+		let reported = StringArray.create(0)
+
+		for line in said.split(LineFeed) 'eachLine'
+			if not line.startsWith(PassLinePrefix) 'notAVerdict'
+				continue
+			end 'notAVerdict'
+
+			let label = line.replaceFirst(PassLinePrefix, with: "")
+
+			if reported.isEmpty() or (try reported.get(reported.count() - 1) otherwise panic("a list that is not empty has a last element")) != label 'aNewSpec'
+				reported.push(label)
+			end 'aNewSpec'
+		end 'eachLine'
+
+		try Expect.equal(joined(reported, separator: LineFeed), expected: joined(expected, separator: LineFeed), message: "the specs {joined(ByteOrderedSpecNames, separator: ByteOrderedSpecNameSeparator)} are staged, and the report names them in an order that is not the byte order of their names. It said:\n{said}")
+	end 'requireHeldIn'
+end 'SpecTestReportsSpecsInByteOrder'

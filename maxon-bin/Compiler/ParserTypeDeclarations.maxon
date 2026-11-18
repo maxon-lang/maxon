@@ -243,7 +243,7 @@ extension Parser
 		let qualified = joinQualifiedName(self.enclosingTypeName(), member: nameTok.value)
 
 		if let keeper = try self.signatures.extensionInnerAliasKeeper(qualified) 'someExtensionDeclaresIt'
-			if self.extensionInnerAliasSiteAt(nameTok).compare(keeper) != Ordering.equalTo 'aLaterDeclaration'
+			if not self.extensionInnerAliasSiteAt(nameTok).equals(keeper) 'aLaterDeclaration'
 				throw self.duplicateNestedAliasRefusal(nameTok, qualified: qualified, declaredBy: "by an `extension` in {keeper.declFilePath.filename()}")
 			end 'aLaterDeclaration'
 		end 'someExtensionDeclaresIt'
@@ -7490,14 +7490,14 @@ extension Parser
 
 	function valueHoldsNoWritableRecordWithin(value ValueId) returns bool
 		if self.tagOf(value) == ValueTypeTag.genericInstance 'anInstance'
-			return self.signatures.recordKindsWithinInstance(self.valueInstanceId(value)).holdsNoWritableRecord(self.kindWritability)
+			return self.signatures.recordKindsWithinInstance(self.valueInstanceId(value)).holdsNoWritableRecord()
 		end 'anInstance'
 
 		if not self.signatures.tagMayNameAggregate(self.tagOf(value)) 'anyOtherKind'
 			return false
 		end 'anyOtherKind'
 
-		return self.signatures.recordKindsWithinAggregate(self.valueTypeName(value)).holdsNoWritableRecord(self.kindWritability)
+		return self.signatures.recordKindsWithinAggregate(self.valueTypeName(value)).holdsNoWritableRecord()
 	end 'valueHoldsNoWritableRecordWithin'
 
 	export function forgetKindVerdicts()

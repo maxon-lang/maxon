@@ -4888,16 +4888,23 @@ type MaxonToStdLowering
 		reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: func.sourceFilePath)
 	end 'reportAtOp'
 
-	// A witness entry on a growing row is dropped, not refused: its calls pass the zero
-	// `NullWitnessArgRequest` proves unread. Dropping changes the rows, so
-	// `requireDescriptorTablesAreFinite` must read the ones returned.
-	function dropGrowingWitnessEntries(growing GrowingRows) returns GrowingRows
+	function descriptorOwnersInByteOrder() returns NameRoster
 		let owners = NameRoster.create(self.descriptorTables.count(), zeroed: false)
 
 		for (owner, _) in self.descriptorTables 'eachOwner'
 			owners.push(owner)
 		end 'eachOwner'
 
+		sortNamesInByteOrder(owners)
+
+		return owners
+	end 'descriptorOwnersInByteOrder'
+
+	// A witness entry on a growing row is dropped, not refused: its calls pass the zero
+	// `NullWitnessArgRequest` proves unread. Dropping changes the rows, so
+	// `requireDescriptorTablesAreFinite` must read the ones returned.
+	function dropGrowingWitnessEntries(growing GrowingRows) returns GrowingRows
+		let owners = self.descriptorOwnersInByteOrder()
 		let partitions = WitnessPartitionArray.create(owners.count(), zeroed: false)
 		var shedAny = false
 
@@ -4957,7 +4964,9 @@ type MaxonToStdLowering
 	function growingDescriptorRows() returns GrowingRows
 		let reached = OpenRowLog.create()
 
-		for (owner, table) in self.descriptorTables 'eachOwner'
+		for owner in self.descriptorOwnersInByteOrder() 'eachOwner'
+			let table = try self.descriptorTables.get(owner) otherwise panic("growingDescriptorRows: '{String.from(owner)}' was just listed and is not there")
+
 			for row in table.reachedInstances() 'eachReachedInstance'
 				reached.file(owner, row: row)
 			end 'eachReachedInstance'

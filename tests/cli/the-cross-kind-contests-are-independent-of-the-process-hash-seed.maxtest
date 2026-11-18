@@ -1,0 +1,48 @@
+let TheCrossKindContestsAreIndependentOfTheProcessHashSeedCaseDirName = "cross-kind-contests-independent-of-process-hash-seed"
+let TheCrossKindContestsAreIndependentOfTheProcessHashSeedFixtureDirName = "tests/cli/fixtures/cross-kind-contests"
+let CrossKindBuildLabel = "cross-kind"
+let CrossKindContestSpellings = ["FullRangeInt@alias", "DecimalDigit@alias", "Widget@alias", "Gauge@alias", "Lever@alias", "stdlib.FullRangeInt", "stdlib.DecimalDigit", "stdlib.BigBitCount", "stdlib.HalfRadix", "stdlib.PadWidth", "stdlib.RadixDigit", "stdlib.RenderedMagnitude", "stdlib.RepeatCount"]
+
+test 'builds of a program whose type names are each held by two kinds of declaration, under three process hash seeds from one stored library hash seed, write the same bytes and packs'
+	requireHeldOutsideCheckout(TheCrossKindContestsAreIndependentOfTheProcessHashSeedCaseDirName, check: CrossKindContestsAreIndependentOfTheProcessHashSeed.create())
+end 'builds of a program whose type names are each held by two kinds of declaration, under three process hash seeds from one stored library hash seed, write the same bytes and packs'
+
+type CrossKindContestsAreIndependentOfTheProcessHashSeed implements OutsideCheckoutCase, EnvironmentCellCheck
+	static function create() returns CrossKindContestsAreIndependentOfTheProcessHashSeed
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+		stageStoredTree(fixtureDir(TheCrossKindContestsAreIndependentOfTheProcessHashSeedFixtureDirName), into: app)
+
+		let programs = GateProgramArray.create(0)
+		programs.push(GateProgram.built(CrossKindBuildLabel, program: AppDirName, options: StringArray.create(0)))
+
+		try requireIndependentOfTheEnvironment(try processHashSeedAxis(dir), programs: programs, staged: dir, check: self)
+	end 'requireHeldIn'
+
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+		requireEveryCrossKindContestIn(outcome.sidecar)
+	end 'requireAfterRun'
+
+	function requireAfterEnvironment(run EnvironmentRun) throws TestFailure
+		let library = run.environment.library()
+		let packs = packNamesIn(library)
+		try Expect.isFalse(packs.isEmpty(), message: "the build {run.environment.description} wrote no library cache pack under {library.toString()}, so there is none to compare.")
+
+		for name in packs 'eachPack'
+			try Expect.isTrue(fileBytes(packIn(library, name: name)).count() > 0, message: "the build {run.environment.description} wrote the pack `{name}` under {library.toString()} empty, so there is nothing in it to compare.")
+		end 'eachPack'
+	end 'requireAfterEnvironment'
+end 'CrossKindContestsAreIndependentOfTheProcessHashSeed'
+
+function requireEveryCrossKindContestIn(sidecar FilePath)
+	let bytes = fileBytes(sidecar)
+
+	for spelling in CrossKindContestSpellings 'eachSpelling'
+		if not bytes.containsSequence(bytesOfText(spelling)) 'notContested'
+			panic("the-cross-kind-contests-are-independent-of-the-process-hash-seed: the gate could not run - {sidecar.toString()} names no '{spelling}', so the fixture no longer files that name in the cross-kind contest table whose walk order this case exists to hold.")
+		end 'notContested'
+	end 'eachSpelling'
+end 'requireEveryCrossKindContestIn'

@@ -1369,7 +1369,7 @@ export union CompileError implements Error
 	// FILESYSTEM ROOT, which `isInside` cannot answer for: it tests the prefix `dir` + separator and a
 	// root already ends in one, so the narrowing walk keeps climbing and runs out of parents at the top.
 	// `Compiler.commonAncestorOf` derives the project ROOT from that shared directory (and
-	// `Queries.namespaceAnchorFor` measures every file's namespace from the root), so both causes leave
+	// `ProgramAnchor` measures every file's namespace from the root), so both causes leave
 	// the build with no anchor it could be given: it is refused rather than rooted. Carries both ends of
 	// the disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
 	noCommonRoot(first FilePath, other FilePath)
@@ -1402,6 +1402,7 @@ export union CompileError implements Error
 	runtimeTierIsNotAProgram(root FilePath)
 	requiredFunctionAbsent(name String)
 	unidentifiablePath(reason String)
+	sourceOutsideItsRoot(path FilePath, root FilePath)
 	abandoned
 	compileError
 
@@ -1424,7 +1425,8 @@ export union CompileError implements Error
 			sourceOrderUnrecognized or
 			runtimeTierIsNotAProgram or
 			requiredFunctionAbsent or
-			unidentifiablePath gives false
+			unidentifiablePath or
+			sourceOutsideItsRoot gives false
 		end 'failure'
 	end 'refusesTheSourceOrder'
 
@@ -1447,7 +1449,8 @@ export union CompileError implements Error
 			sourceNotReorderable or
 			runtimeTierIsNotAProgram or
 			requiredFunctionAbsent or
-			unidentifiablePath gives CompileFailure.driverFailed
+			unidentifiablePath or
+			sourceOutsideItsRoot gives CompileFailure.driverFailed
 		end 'kind'
 	end 'failure'
 end 'CompileError'

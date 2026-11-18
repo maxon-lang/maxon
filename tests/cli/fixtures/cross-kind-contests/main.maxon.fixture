@@ -1,0 +1,119 @@
+typealias Value = int(0 to 200)
+typealias Bits = int(0 to u64.max)
+
+type FullRangeInt
+	export let value as Value
+
+	static function create(value Value) returns FullRangeInt
+		return Self{value: value}
+	end 'create'
+end 'FullRangeInt'
+
+type DecimalDigit
+	export let value as Value
+
+	static function create(value Value) returns DecimalDigit
+		return Self{value: value}
+	end 'create'
+end 'DecimalDigit'
+
+type RenderedMagnitude
+	export let value as Value
+
+	static function create(value Value) returns RenderedMagnitude
+		return Self{value: value}
+	end 'create'
+end 'RenderedMagnitude'
+
+type BigBitCount
+	export let value as Value
+
+	static function create(value Value) returns BigBitCount
+		return Self{value: value}
+	end 'create'
+end 'BigBitCount'
+
+enum RepeatCount
+	once = 1
+	twice = 2
+end 'RepeatCount'
+
+enum RadixDigit
+	low = 3
+	high = 4
+end 'RadixDigit'
+
+enum HalfRadix
+	octal = 5
+	hex = 6
+end 'HalfRadix'
+
+union PadWidth
+	narrow
+	wide(by Value)
+end 'PadWidth'
+
+union MagnitudeOrder
+	below
+	above(by Value)
+end 'MagnitudeOrder'
+
+union DecimalPrecision
+	coarse
+	fine(by Value)
+end 'DecimalPrecision'
+
+typealias FullRangeIntBoxes = Array with FullRangeInt
+typealias DecimalDigitBoxes = Array with DecimalDigit
+
+function padded(p PadWidth) returns Value
+	return match p 'pick'
+		narrow gives 1
+		wide(by) gives by
+	end 'pick'
+end 'padded'
+
+function ordered(m MagnitudeOrder) returns Value
+	return match m 'pick'
+		below gives 1
+		above(by) gives by
+	end 'pick'
+end 'ordered'
+
+function precise(d DecimalPrecision) returns Value
+	return match d 'pick'
+		coarse gives 1
+		fine(by) gives by
+	end 'pick'
+end 'precise'
+
+function main() returns ExitCode
+	let boxes = FullRangeIntBoxes.create(0)
+	boxes.push(FullRangeInt.create(3))
+	boxes.push(FullRangeInt.create(4))
+
+	let digits = DecimalDigitBoxes.create(0)
+	digits.push(DecimalDigit.create(2))
+
+	let x = 2.5
+	let n = 48879 as Bits
+	print("{x} {-x} {n:x} {n:06x}\n")
+
+	var total = 0 as Value
+
+	for b in boxes 'eachBox'
+		total = total + b.value
+	end 'eachBox'
+
+	for d in digits 'eachDigit'
+		total = total + d.value
+	end 'eachDigit'
+
+	total = total + RenderedMagnitude.create(1).value + BigBitCount.create(1).value
+	total = total + RepeatCount.twice.rawValue as Value + RadixDigit.high.rawValue as Value + HalfRadix.hex.rawValue as Value
+	total = total + padded(PadWidth.wide(2)) + ordered(MagnitudeOrder.above(2)) + precise(DecimalPrecision.fine(2))
+
+	let elsewhere = measuredInA(2) + measuredInB(1)
+
+	return (total as Count + elsewhere - 540) as ExitCode
+end 'main'

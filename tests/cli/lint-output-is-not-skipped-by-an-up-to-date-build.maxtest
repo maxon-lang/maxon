@@ -1,0 +1,32 @@
+let LintOutputNotSkippedCaseDirName = "lint-output-is-not-skipped-by-an-up-to-date-build"
+let LintOutputNotSkippedFixture = "lint-discarded-pure-result"
+let LintOutputNotSkippedStem = "linted"
+let LintOutputNotSkippedCleanExit = 0
+
+test 'lint with --output= runs its checks over an output a build left up to date'
+	requireHeldOutsideCheckout(LintOutputNotSkippedCaseDirName, check: LintOutputNotSkippedByAnUpToDateBuild.create())
+end 'lint with --output= runs its checks over an output a build left up to date'
+
+type LintOutputNotSkippedByAnUpToDateBuild implements OutsideCheckoutCase
+	static function create() returns LintOutputNotSkippedByAnUpToDateBuild
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagedCliFixture(dir, fixture: LintOutputNotSkippedFixture)
+		let output = executableIn(dir, stem: LintOutputNotSkippedStem)
+		let outputOption = "{OutputOptionPrefix}{output.toString()}"
+		let built = runConfinedIn(dir, arguments: [BuildCommandWord, app.filename(), outputOption])
+		let builtSaid = "It wrote to stdout: {built.stdout} and to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode(), expected: LintOutputNotSkippedCleanExit, message: "`maxon {BuildCommandWord} {app.filename()} {outputOption}` refused a program whose only fault is a lint finding. {builtSaid}")
+		try Expect.isTrue(File.exists(output), message: "`maxon {BuildCommandWord}` wrote no {output.toString()}. {builtSaid}")
+
+		let linted = lintedIn(dir, app: app, options: [outputOption])
+		let typed = linted.typed
+		let said = linted.said()
+
+		try Expect.notEqual(linted.output.exitCode(), expected: LintOutputNotSkippedCleanExit, message: "{typed} succeeded on a program with a finding, over an output a build had left up to date. {said}")
+		try Expect.contains(linted.output.stderr, needle: DiscardedPureResultCode, message: "{typed} did not report the program's {DiscardedPureResultCode}. {said}")
+	end 'requireHeldIn'
+end 'LintOutputNotSkippedByAnUpToDateBuild'

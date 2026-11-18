@@ -1,0 +1,28 @@
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type Echo implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'Echo'
+
+function main() returns ExitCode
+	let pinger = (spawn Echo.create()) as Pinger.handle
+	let logger = (spawn TextLogHandler.create(LogHandlerOptions.standard())) as LogHandler.handle
+
+	print("{try await pinger.ping() otherwise 0}\n")
+	pinger.shutdown()
+	logger.shutdown()
+
+	return 0
+end 'main'

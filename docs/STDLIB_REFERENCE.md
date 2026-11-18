@@ -816,7 +816,7 @@ resizes when it is three-quarters full.
 | `contains(key Key)` | `bool` | Key test. |
 | `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
 | `count()` | `EntryCount` | Number of entries. |
-| `getCapacity()` | table capacity | Total slots in the table: `0` for a map from `create()` until its first insert, `16` after that for a small map. |
+| `getCapacity()` | table capacity | Total slots in the table: `0` for a map from `create()` until its first insert, `16` after that for a small map. A table is rebuilt, at its capacity or twice it, once its entries plus the removals since its last rebuild reach 3/4 of the slots, so the capacity after a run of inserts and removes follows that sequence. |
 | `clone()` | `Map` | An independent copy of every key and value; writing either map leaves the other unchanged. A map whose values are or hold promises is E3141. |
 | `createIterator()` | `MapIterator` | Throws `IterationError.exhausted` when empty. |
 
@@ -879,7 +879,7 @@ with [`Hasher`](#hasher); integer and float elements hash without it.
 | `contains(element Element)` | `bool` | Membership test. |
 | `remove(element Element)` | `bool` | Remove; true when the element was present. |
 | `count()` | `MemberCount` | Number of elements. |
-| `getCapacity()` | table capacity | Total slots in the table. |
+| `getCapacity()` | table capacity | Total slots in the table. A table is rebuilt, at its capacity or twice it, once its members plus the removals since its last rebuild reach 3/4 of the slots, so the capacity after a run of inserts and removes follows that sequence. |
 | `clone()` | `Set` | An independent copy of every element; changing either set leaves the other unchanged. |
 | `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
 

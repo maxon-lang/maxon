@@ -213,6 +213,7 @@ end 'lineKey'
 // count executions OF THAT LINE, and the arm counts are a subset of the statement's. A line is
 // `eliminated` only when EVERY point on it lost its code.
 function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
+	let sources = sidecarSourcesOf(sidecar)
 	let merged = CovMergedLineMap.create()
 	let order = CovLineKeyArray.create(0)
 
@@ -220,10 +221,11 @@ function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
 		let point = sidecar.coveragePoint(index as MxdbgIndex)
 		let count = countOf(point, data: data, index: index as CovSlot)
 		let incoming = CovLine.create(point.line as CovLineNumber, state: stateOf(point, count: count), count: count)
-		let key = lineKey(point.file, line: incoming.line)
+		let file = sourceFileOf(sources, point: point)
+		let key = lineKey(file, line: incoming.line)
 
 		if not merged.contains(key) 'firstPointOnThisLine'
-			order.push(CovLineKey.create(point.file, line: incoming.line))
+			order.push(CovLineKey.create(file, line: incoming.line))
 		end 'firstPointOnThisLine'
 
 		let winner = busierOf(merged, key: key, incoming: incoming)
@@ -234,6 +236,14 @@ function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
 
 	return groupedFiles(order, merged: merged)
 end 'joinFiles'
+
+function sidecarSourcesOf(sidecar MxdbgReader) returns SidecarSources
+	return SidecarSources.of(try FilePath.from(sidecar.sourceRoot) otherwise panic("coverage: the sidecar's source root '{sidecar.sourceRoot}' is not a spellable path, though the compiler wrote it from one"))
+end 'sidecarSourcesOf'
+
+function sourceFileOf(sources SidecarSources, point MxdbgCovPointInfo) returns String
+	return (try sources.resolved(point.file) otherwise return point.file).toString()
+end 'sourceFileOf'
 
 // Which of two points on one line the report keeps. Real code outranks eliminated code (the line HAS code),
 // and among real code the larger count wins.
@@ -290,6 +300,7 @@ end 'groupedFiles'
 // That is a total order even when two arms share a line (an `if` and its implicit `else` both sit at the
 // `if`), which a sort by position would not be — so the sort below must be STABLE.
 function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArray
+	let sources = sidecarSourcesOf(sidecar)
 	let rows = CovArmRowArray.create(0)
 
 	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
@@ -300,7 +311,7 @@ function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArra
 		end 'notAnArm'
 
 		let arm = CovArm.create(armKind(point), line: point.line as CovLineNumber, column: point.column as CovSourceColumn, count: countOf(point, data: data, index: index as CovSlot), eliminated: point.eliminated(), isImplicit: point.isImplicitArm())
-		rows.push(CovArmRow.create(point.file, branchLine: point.branchLine as CovLineNumber, branchColumn: point.branchColumn as CovSourceColumn, arm: arm))
+		rows.push(CovArmRow.create(sourceFileOf(sources, point: point), branchLine: point.branchLine as CovLineNumber, branchColumn: point.branchColumn as CovSourceColumn, arm: arm))
 	end 'eachPoint'
 
 	rows.sortBy(function(left CovArmRow, right CovArmRow) gives compareBranchPosition(left, right: right))
@@ -716,6 +727,11 @@ function loadSidecar(binary FilePath, buildId HashDigest) returns CovSidecarLoad
 	if reader.buildId != buildId 'differentBuild'
 		return CovSidecarLoad.refused("the .mxdbg sidecar describes a different build of this binary — rebuild it")
 	end 'differentBuild'
+
+	match compilerAgreementOf(reader) 'compiler'
+		agrees then break
+		differs(built, running) then return CovSidecarLoad.refused("{reportPathDisplay(sidecarPath)}: {compilerDifferenceText(built, running: running)}")
+	end 'compiler'
 
 	return CovSidecarLoad.loaded(reader)
 end 'loadSidecar'

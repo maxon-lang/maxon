@@ -1,3 +1,5 @@
+typealias TypeNameFileSet = Set with String
+
 extension ProgramSignatures
 	function settledDeclarations() returns SettledDeclarations
 		return match self.ownSettled 'source'
@@ -36,10 +38,12 @@ extension ProgramSignatures
 	//
 	// The directory rides the hash: it decides unexported visibility and a file's namespace, so moving a
 	// file changes what other files compile to while no file's bytes change.
-	export function recordFileModuleDirectory(path FilePath, moduleDirectory String, isLibrary bool, isRuntime bool, isScriptlib bool)
+	function recordFileModuleDirectory(path FilePath, moduleDirectory String, orderKey SourceOrderKey, isLibrary bool, isRuntime bool, isScriptlib bool)
 		self.mainThreadSettled().fileModuleDirectories.upsert(path.toString(), value: moduleDirectory)
+		self.mainThreadSettled().fileOrderKeys.upsert(path.toString(), value: orderKey)
 		self.noteNamespaceQualifiers(freeze qualifierForNamespace(namespaceForModuleDirectory(moduleDirectory)).toByteArray())
 		self.hash = mixBytes(mixBytes(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeModuleDirectory), bytes: path.toString().toByteArray()), bytes: moduleDirectory.toByteArray())
+		self.hash = mixBytes(KeyedHasher.combined(KeyedHasher.combined(self.hash, value: SignatureDiscriminator.declShapeFileOrderKey), value: sourceOrderLayerOf(orderKey.layer).rawValue as HashDigest), bytes: orderKey.relative)
 
 		if isLibrary 'aFileTheCompilerLoadedFromItsLibrary'
 			self.mainThreadSettled().libraryFilePaths.insert(path.toString())
@@ -57,6 +61,26 @@ extension ProgramSignatures
 	function hasRecordedFile(path FilePath) returns bool
 		return self.settledDeclarations().fileModuleDirectories.contains(path.toString())
 	end 'hasRecordedFile'
+
+	function compareSourceOrder(path FilePath, other FilePath) returns Ordering
+		return self.sourceOrderKeyOf(path).compare(self.sourceOrderKeyOf(other))
+	end 'compareSourceOrder'
+
+	function sourceOrderKeyOf(path FilePath) returns SourceOrderKey
+		return try self.settledDeclarations().fileOrderKeys.get(path.toString()) otherwise panic("ProgramSignatures.sourceOrderKeyOf: '{path.toString()}' has no source order key — every file the token-fact discovery visits files one beside its module directory, so this path was never discovered")
+	end 'sourceOrderKeyOf'
+
+	function sourceSiteOf(path FilePath, line LineNumber, column ColumnNumber) returns SourceSite
+		return SourceSite.of(self.sourceOrderKeyOf(path), line: line, column: column)
+	end 'sourceSiteOf'
+
+	function topLevelSiteOf(decl TopLevelDecl, index ElementIndex) returns DeclarationSite
+		return DeclarationSite.of(decl, index: index, site: self.sourceSiteOf(decl.declFilePath, line: decl.nameLine, column: decl.nameColumn))
+	end 'topLevelSiteOf'
+
+	function sortInSourceOrder(paths FilePathArray)
+		paths.sortBy(function(left FilePath, right FilePath) gives self.compareSourceOrder(left, other: right))
+	end 'sortInSourceOrder'
 
 	function noteNamespaceQualifiers(qualifier immutable ByteArray)
 		for at in 0 upto qualifier.count() 'eachSeparator'
@@ -600,7 +624,25 @@ extension ProgramSignatures
 			declared.push(self.libraryDeclarationUnderItsMintedName(decl))
 		end 'eachHeaderDecl'
 
-		for collision in nominalNameCollisionsOf(declared, paths: paths, directories: self.mainThreadSettled().fileModuleDirectories) 'eachCollision'
+		let declaringFiles = TypeNameFileSet.create()
+
+		for decl in declared 'eachDeclared'
+			declaringFiles.insert(decl.claim.declFilePath.toString())
+		end 'eachDeclared'
+
+		let filed = FilePathArray.create(paths.count(), zeroed: false)
+
+		for path in paths 'eachSourcePath'
+			if self.settledDeclarations().fileOrderKeys.contains(path.toString()) 'filedHere'
+				filed.push(path)
+			end 'filedHere' else if declaringFiles.contains(path.toString()) 'declaresWithoutAKey'
+				panic("ProgramSignatures.settleNominalNameCollisions: '{path.toString()}' declares type names but has no source order key — every file the token-fact discovery visits files one beside its module directory, so this path was never discovered")
+			end 'declaresWithoutAKey'
+		end 'eachSourcePath'
+
+		self.sortInSourceOrder(filed)
+
+		for collision in nominalNameCollisionsOf(declared, paths: filed, directories: self.mainThreadSettled().fileModuleDirectories) 'eachCollision'
 			self.mainThreadSettled().nominalNameCollisions.push(collision)
 		end 'eachCollision'
 
@@ -1464,7 +1506,7 @@ extension ProgramSignatures
 	function keepEarliestSpawnSite(position ElementIndex, declFilePath FilePath, line LineNumber, column ColumnNumber)
 		let held = try self.settledDeclarations().serviceSpawnCandidateList.get(position) otherwise panic("ProgramSignatures.keepEarliestSpawnSite: serviceSpawnCandidateList.get OOB at {position}")
 
-		if not SourceSite.of(declFilePath, line: line, column: column).precedes(SourceSite.of(held.declFilePath, line: held.line, column: held.column)) 'heldIsEarlier'
+		if not self.sourceSiteOf(declFilePath, line: line, column: column).precedes(self.sourceSiteOf(held.declFilePath, line: held.line, column: held.column)) 'heldIsEarlier'
 			return
 		end 'heldIsEarlier'
 
@@ -1472,7 +1514,7 @@ extension ProgramSignatures
 	end 'keepEarliestSpawnSite'
 
 	function sortServiceSpawnCandidates()
-		self.mainThreadSettled().serviceSpawnCandidateList.sortBy(function(left ServiceSpawnCandidate, right ServiceSpawnCandidate) gives SourceSite.of(left.declFilePath, line: left.line, column: left.column).compare(SourceSite.of(right.declFilePath, line: right.line, column: right.column)))
+		self.mainThreadSettled().serviceSpawnCandidateList.sortBy(function(left ServiceSpawnCandidate, right ServiceSpawnCandidate) gives self.sourceSiteOf(left.declFilePath, line: left.line, column: left.column).compare(self.sourceSiteOf(right.declFilePath, line: right.line, column: right.column)))
 
 		let positions = ServiceSpawnCandidateKeyIndex.create()
 
@@ -1583,10 +1625,10 @@ extension ProgramSignatures
 				continue
 			end 'anotherLevelOrKey'
 
-			if not seenOne or precedesInPathOrder(declaration.declFilePath, other: self.notedDefaultAt(firstIndex).declFilePath) 'firstInPathOrderSoFar'
+			if not seenOne or self.compareSourceOrder(declaration.declFilePath, other: self.notedDefaultAt(firstIndex).declFilePath) == Ordering.lessThan 'firstInSourceOrderSoFar'
 				firstIndex = iter.index()
 				seenOne = true
-			end 'firstInPathOrderSoFar'
+			end 'firstInSourceOrderSoFar'
 		end 'eachDeclaration'
 
 		if not seenOne 'noDeclaration'
@@ -5886,7 +5928,7 @@ extension ProgramSignatures
 		self.requireBeforeTheBaseline("recordExtensionInnerAliasKeeper")
 
 		if let keeper = try self.settledDeclarations().extensionInnerAliasKeepers.get(qualified) 'anEarlierDeclaration'
-			if site.compare(keeper) != Ordering.lessThan 'theKeeperPrecedes'
+			if not self.sourceSiteOf(site.declFilePath, line: site.nameLine, column: site.nameColumn).precedes(self.sourceSiteOf(keeper.declFilePath, line: keeper.nameLine, column: keeper.nameColumn)) 'theKeeperPrecedes'
 				return
 			end 'theKeeperPrecedes'
 		end 'anEarlierDeclaration'
@@ -6454,7 +6496,7 @@ extension ProgramSignatures
 	// Add one top-level DECLARATION (a `let`) to the arena. No value yet:
 	// `evaluateInitializers` supplies that once every file has been folded in.
 	//
-	// On a duplicate storage key the declaration whose file's path identity sorts earliest is held, so the
+	// On a duplicate storage key the declaration whose file's source order key sorts earliest is held, so the
 	// kept binding does not depend on the order files are folded in. A file that declares the same name
 	// twice — `let A = 1` then `let A = 2` — keeps the FIRST here and is
 	// diagnosed E3006 by the real parse (`isRedeclaredBinding` → `Parser.raiseBindingFailure`), the
@@ -6464,9 +6506,9 @@ extension ProgramSignatures
 	// in another family is judged by the ledger in `TopLevelNameScope.maxon` rather than here.
 	function recordDecl(decl TopLevelDecl)
 		if let held = try self.mainThreadSettled().declIndex.get(decl.storageKey) 'duplicate'
-			if DeclarationSite.of(decl, index: held).precedes(DeclarationSite.of(self.declAt(held), index: held)) 'declaredFirstInPathOrder'
+			if self.topLevelSiteOf(decl, index: held).precedes(self.topLevelSiteOf(self.declAt(held), index: held)) 'declaredFirstInSourceOrder'
 				try self.mainThreadSettled().decls.set(held, value: decl) otherwise panic("ProgramSignatures.recordDecl: decls.set OOB at {held} — every index declIndex holds is one this arena minted")
-			end 'declaredFirstInPathOrder'
+			end 'declaredFirstInSourceOrder'
 
 			return
 		end 'duplicate'
@@ -7621,7 +7663,7 @@ extension ProgramSignatures
 		for i in arcStart upto stack.count() 'eachMember'
 			let member = try stack.get(i) otherwise panic("ProgramSignatures.recordCycle: stack.get OOB at {i}")
 			let memberDecl = self.declAt(member)
-			arc.push(DeclarationSite.of(memberDecl, index: member))
+			arc.push(self.topLevelSiteOf(memberDecl, index: member))
 		end 'eachMember'
 
 		arc.sortBy(function(left DeclarationSite, right DeclarationSite) gives left.compare(right))
@@ -7950,13 +7992,6 @@ extension ProgramSignatures
 
 		return try decl.dataLabel.label() otherwise panic("ProgramSignatures.dataLabelOf: top-level '{String.from(decl.name)}' has no .data label — `assignDataLabels` labels every STORED decl in the arena, and it runs inside `evaluateInitializers`")
 	end 'dataLabelOf'
-
-	export function addImagedModuleLetKinds(into HeldRecordKinds)
-		for i in 0 upto self.settledDeclarations().decls.count() 'eachDecl'
-			let kind = try self.imagedRecordKindOf(self.declAt(i)) otherwise continue
-			into.kinds.insert(kind)
-		end 'eachDecl'
-	end 'addImagedModuleLetKinds'
 
 	export function nameIsAnImagedRecordLet(name ByteArray, readerFilePath FilePath) returns bool
 		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
@@ -10241,8 +10276,8 @@ extension ProgramSignatures
 	// it and a `type Box` + `typealias Box` pair would be offered only as `structType`, which is exactly
 	// what the cascade answers.
 	//
-	// ⚠ **EMPTY FOR EVERY PROGRAM IN THE CORPUS**, which is what keeps the readers free: each is one probe
-	// of a map with no entries, and none of them allocates.
+	// ⚠ **EMPTY UNLESS TWO KINDS OF DECLARATION SHARE A TYPE NAME**, which is what keeps the readers free:
+	// each is one probe of a map with no entries, and none of them allocates.
 	export function settleCrossKindContests()
 		self.requireWholeProgramIndex("settleCrossKindContests")
 
@@ -10378,7 +10413,7 @@ extension ProgramSignatures
 			let firstDeclaringFile = claims.count() as ElementIndex
 
 			for (_, alias) in contestedAliases 'eachDeclaringFile'
-				insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+				self.insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
 			end 'eachDeclaringFile'
 		end 'severalFilesDeclareTheRangedAlias' else 'atMostOneFileDoes'
 			match self.settledDeclarations().typeAliases.declarationInAnyFile(aliasKey) 'theSoleRangedAlias'
@@ -10393,7 +10428,7 @@ extension ProgramSignatures
 			let firstDeclaringFile = claims.count() as ElementIndex
 
 			for (_, alias) in contestedFunctionAliases 'eachDeclaringFile'
-				insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+				self.insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
 			end 'eachDeclaringFile'
 		end 'severalFilesDeclareTheFunctionAlias' else 'atMostOneFileDoes'
 			match self.functionAliasInAnyFile(aliasKey) 'theSoleFunctionAlias'
@@ -10412,7 +10447,7 @@ extension ProgramSignatures
 			let firstDeclaringFile = claims.count() as ElementIndex
 
 			for (_, tuple) in byFile 'eachDeclaringFile'
-				insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: tuple.claim)
+				self.insertInDeclaringFileOrder(claims, segmentStart: firstDeclaringFile, claim: tuple.claim)
 			end 'eachDeclaringFile'
 		end 'severalFilesDeclareTheTupleAlias' else 'atMostOneFileDoes'
 			if let tuple = try self.aliasNamed(aliasKey) 'aTupleAlias'
@@ -10432,7 +10467,8 @@ extension ProgramSignatures
 	// alias hold this name" is `distinctRangeClaimants`' question and the registry is where it is asked. A
 	// name with no ranged declaration is skipped there, in the one place that can see it.
 	//
-	// ⚠ Empty for every program in the corpus, which is what keeps both settles at one `count()`.
+	// ⚠ Empty unless two kinds of declaration share a type name, which is what keeps both settles at one
+	// `count()`.
 	export function crossKindScopedAliasNames() returns NameRoster
 		match self.settledDeclarations().crossKindContests 'index'
 			unwritten then return NameRoster.create(0)
@@ -12329,23 +12365,23 @@ extension ProgramSignatures
 
 		return mixed
 	end 'mixRegionBounds'
+
+	function insertInDeclaringFileOrder(claims TypeNameClaimArray, segmentStart ElementIndex, claim TypeNameClaim)
+		var at = claims.count() as ElementIndex
+
+		while at > segmentStart 'findItsPlace'
+			let before = try claims.get(at - 1) otherwise panic("ProgramSignatures.insertInDeclaringFileOrder: claims.get OOB at {at - 1} below count {claims.count()}")
+
+			if self.compareSourceOrder(before.declFilePath, other: claim.declFilePath) != Ordering.greaterThan 'inItsPlace'
+				break
+			end 'inItsPlace'
+
+			at = at - 1
+		end 'findItsPlace'
+
+		claims.insert(at, value: claim)
+	end 'insertInDeclaringFileOrder'
 end 'ProgramSignatures'
-
-function insertInDeclaringFileOrder(claims TypeNameClaimArray, segmentStart ElementIndex, claim TypeNameClaim)
-	var at = claims.count() as ElementIndex
-
-	while at > segmentStart 'findItsPlace'
-		let before = try claims.get(at - 1) otherwise panic("insertInDeclaringFileOrder: claims.get OOB at {at - 1} below count {claims.count()}")
-
-		if comparePathSpelling(before.declFilePath, right: claim.declFilePath) != Ordering.greaterThan 'inItsPlace'
-			break
-		end 'inItsPlace'
-
-		at = at - 1
-	end 'findItsPlace'
-
-	claims.insert(at, value: claim)
-end 'insertInDeclaringFileOrder'
 
 union NestedSiteFiling
 	unfiled

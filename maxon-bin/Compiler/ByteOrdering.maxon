@@ -38,39 +38,28 @@ function sortNamesInByteOrder(names NameRoster)
 	names.sortUnstableBy(function(left immutable ByteArray, right immutable ByteArray) gives compareBytesOrdinally(left, right: right))
 end 'sortNamesInByteOrder'
 
-function sortPathsBySpelling(paths FilePathArray)
-	paths.sortUnstableBy(function(left FilePath, right FilePath) gives comparePathSpelling(left, right: right))
-end 'sortPathsBySpelling'
+function structTypeNamesInByteOrder(project Project) returns NameRoster
+	let names = NameRoster.create(project.structTypes.count(), zeroed: false)
 
-function comparePathIdentity(path FilePath, other FilePath) returns Ordering
-	let workingDirectory = Directory.currentPath()
-	return compareBytesOrdinally(pathIdentity(path, workingDirectory: workingDirectory), right: pathIdentity(other, workingDirectory: workingDirectory))
-end 'comparePathIdentity'
+	for (name, _) in project.structTypes 'eachStruct'
+		names.push(name)
+	end 'eachStruct'
 
-function precedesInPathOrder(path FilePath, other FilePath) returns bool
-	return comparePathIdentity(path, other: other) == Ordering.lessThan
-end 'precedesInPathOrder'
+	sortNamesInByteOrder(names)
 
-// Identity, not spelling, because it decides which duplicate declaration is blamed: a relative user path
-// beside an absolute stdlib path, `maxon build a.maxon` beside `maxon build .`, `\` (0x5C, between the
-// uppercase letters and `_`) where `/` (0x2F) sorts before both, and the `c:` the MCP server hands beside
-// a `C:` would each otherwise change the answer.
-function pathIdentity(path FilePath, workingDirectory FilePath) returns ByteArray
-	let spelled = path.resolve(workingDirectory).toString().replace(FilePath.separator(), with: PortablePathSeparator).toByteArray()
+	return names
+end 'structTypeNamesInByteOrder'
 
-	if spelled.count() < DrivePrefixLength 'noDrivePrefix'
-		return spelled
-	end 'noDrivePrefix'
+function enumTypeNamesInByteOrder(project Project) returns NameRoster
+	let names = NameRoster.create(project.enumTypes.count(), zeroed: false)
 
-	let letter = try spelled.get(0) otherwise panic("pathIdentity: get OOB at 0 below the {DrivePrefixLength}-byte drive prefix")
-	let colon = try spelled.get(1) otherwise panic("pathIdentity: get OOB at 1 below the {DrivePrefixLength}-byte drive prefix")
+	for (name, _) in project.enumTypes 'eachEnumOrUnion'
+		names.push(name)
+	end 'eachEnumOrUnion'
 
-	if colon == DriveColonByte and letter >= AsciiLowerA and letter <= AsciiLowerZ 'aLowercaseDriveLetter'
-		try spelled.set(0, value: letter - AsciiCaseDistance) otherwise panic("pathIdentity: set OOB at 0 below the {DrivePrefixLength}-byte drive prefix")
-	end 'aLowercaseDriveLetter'
+	sortNamesInByteOrder(names)
 
-	return spelled
-end 'pathIdentity'
+	return names
+end 'enumTypeNamesInByteOrder'
 
-let DrivePrefixLength = 2
 let DriveColonByte = 0x3A

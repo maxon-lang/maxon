@@ -1,0 +1,601 @@
+let FirstHashSeed = "0123456789abcdef"
+let SecondHashSeed = "fedcba9876543210"
+let ThirdHashSeed = "1111111111111111"
+let PlantedLibraryDigestSeed = "libseed1"
+let SeedWriterDirName = "seed-writer"
+let SeedRootDirPrefix = "seed-root-"
+let TotalRowKind = "total"
+let UnattributedRowKind = "unattributed"
+let LintSkippedRootDirName = "lint-skipped"
+let LintEnforcedRootDirName = "lint-enforced"
+let IndexAfterTheFrontEndLinePrefix = "[CMP] DEBUG: the whole-program index after the front end: "
+let StdlibLocationFirstDirName = "0-stdlib-location"
+let StdlibLocationLastDirName = "z-stdlib-location"
+let StdlibLocationRootDirPrefix = "location-root-"
+let ShallowRootDirName = "depth-flat"
+let DeepRootDirName = "depth-deep"
+let ScratchBandRewindLinePrefix = "[CMP] DEBUG: a scratch band rewound "
+let NothingRewoundWording = "rewound 0 instance rows, 0 journaled writes"
+
+enum GateCommand
+	build
+	lint
+	lintedImage
+end 'GateCommand'
+
+type GateProgram
+	let label as String
+	let program as String
+	let command as GateCommand
+	let options as StringArray
+
+	static function built(label String, program String, options StringArray) returns GateProgram
+		return Self{label: label, program: program, command: GateCommand.build, options: options}
+	end 'built'
+
+	static function linted(label String, program String, options StringArray) returns GateProgram
+		return Self{label: label, program: program, command: GateCommand.lint, options: options}
+	end 'linted'
+
+	function commandWord() returns String
+		return match self.command 'word'
+			build gives BuildCommandWord
+			lint or
+			lintedImage gives LintCommandWord
+		end 'word'
+	end 'commandWord'
+
+	function lintEnforced() returns GateProgram
+		return match self.command 'enforced'
+			build gives Self{label: self.label, program: self.program, command: GateCommand.lintedImage, options: self.options}
+			lint or
+			lintedImage panic("EnvironmentGateHarness: the lint axis builds each program with lint enforced in place of its `{BuildCommandWord}`, so every program it is handed is a build")
+		end 'enforced'
+	end 'lintEnforced'
+
+	function writesAnImage() returns bool
+		return match self.command 'image'
+			build or
+			lintedImage gives true
+			lint gives false
+		end 'image'
+	end 'writesAnImage'
+end 'GateProgram'
+
+typealias GateProgramArray = Array with GateProgram
+
+enum ProgramSpelling
+	relativeToTheWorkingDirectory
+	absolute
+end 'ProgramSpelling'
+
+type GateEnvironment
+	let description as String
+	let root as FilePath
+	let naming as EnvMap
+	let compiler as FilePath
+	let descent as StringArray
+	let spelling as ProgramSpelling
+
+	static function create(description String, root FilePath, naming EnvMap, compiler FilePath = testedCompilerPath(), descent StringArray = StringArray.create(0), spelling ProgramSpelling = ProgramSpelling.relativeToTheWorkingDirectory) returns GateEnvironment
+		return Self{description: description, root: root, naming: naming, compiler: compiler, descent: descent, spelling: spelling}
+	end 'create'
+
+	function library() returns FilePath
+		return libraryCacheDirIn(self.root)
+	end 'library'
+
+	function workingDirectory(staged FilePath) returns FilePath
+		var directory = staged
+
+		for name in self.descent 'eachComponent'
+			directory = directory.join(name)
+		end 'eachComponent'
+
+		return directory
+	end 'workingDirectory'
+
+	function programSpelling(program GateProgram, staged FilePath) returns String
+		return match self.spelling 'spelling'
+			relativeToTheWorkingDirectory gives program.program
+			absolute gives staged.join(program.program).toString()
+		end 'spelling'
+	end 'programSpelling'
+
+	function run(program GateProgram, staged FilePath) returns GateOutcome throws TestFailure
+		let image = self.root.join("{program.label}{executableSuffix()}")
+		let metrics = self.root.join("{program.label}{MetricsFileSuffix}")
+		let arguments = [program.commandWord(), self.programSpelling(program, staged: staged)].clone()
+
+		if program.writesAnImage() 'output'
+			arguments.push("{OutputOptionPrefix}{self.root.join(program.label).toString()}")
+		end 'output'
+
+		arguments.push("{MetricsOptionPrefix}{metrics.toString()}")
+
+		for option in program.options 'eachOption'
+			arguments.push(option)
+		end 'eachOption'
+
+		let which = "the {program.commandWord()} of `{program.program}` ({program.label}) {self.description}"
+		let ran = runWithCacheRoots(arguments, naming: self.naming, workingDirectory: self.workingDirectory(staged), binary: self.compiler)
+
+		match program.command 'succeeded'
+			build then try requireCompiled(ran, reason: ObservedCompileReason, which: which)
+			lint or
+			lintedImage then try requireBuilt(ran, which: which)
+		end 'succeeded'
+
+		return GateOutcome.create(program, environment: self, output: ran, image: image, sidecar: self.root.join("{program.label}{executableSuffix()}{SidecarSuffix}"), metrics: fileText(metrics), which: which)
+	end 'run'
+end 'GateEnvironment'
+
+typealias GateEnvironmentArray = Array with GateEnvironment
+
+type GateOutcome
+	let program as GateProgram
+	let environment as GateEnvironment
+	let output as CollectedOutput
+	let image as FilePath
+	let sidecar as FilePath
+	let metrics as String
+	let which as String
+
+	static function create(program GateProgram, environment GateEnvironment, output CollectedOutput, image FilePath, sidecar FilePath, metrics String, which String) returns GateOutcome
+		return Self{program: program, environment: environment, output: output, image: image, sidecar: sidecar, metrics: metrics, which: which}
+	end 'create'
+
+	function allocations() returns ReportedTally
+		return metricsCell(self.metrics, kind: TotalRowKind, name: MetricsUnnamedRow, field: MetricsAllocsField)
+	end 'allocations'
+
+	function indexAfterTheFrontEnd() returns String
+		let reported = linesOpeningIn(self.output.stderr, prefix: IndexAfterTheFrontEndLinePrefix)
+
+		if reported.count() != 1 'notReportedOnce'
+			panic("EnvironmentGateHarness: the gate could not run - {self.which} logged {reported.count()} line(s) opening `{IndexAfterTheFrontEndLinePrefix}`, where a compile run with `{CompilerDebugLogFlag}` logs one.")
+		end 'notReportedOnce'
+
+		return try reported.get(0) otherwise panic("the count was checked to be one")
+	end 'indexAfterTheFrontEnd'
+end 'GateOutcome'
+
+typealias GateOutcomeArray = Array with GateOutcome
+
+type EnvironmentRun
+	let environment as GateEnvironment
+	let outcomes as GateOutcomeArray
+
+	static function create(environment GateEnvironment, outcomes GateOutcomeArray) returns EnvironmentRun
+		return Self{environment: environment, outcomes: outcomes}
+	end 'create'
+
+	function outcomeOf(label String) returns GateOutcome
+		for outcome in self.outcomes 'eachOutcome'
+			if outcome.program.label == label 'theOne'
+				return outcome
+			end 'theOne'
+		end 'eachOutcome'
+
+		panic("EnvironmentGateHarness: the gate could not run - no program labelled `{label}` ran {self.environment.description}.")
+	end 'outcomeOf'
+end 'EnvironmentRun'
+
+interface EnvironmentCellCheck
+	function requireAfterRun(outcome GateOutcome) throws TestFailure
+	function requireAfterEnvironment(run EnvironmentRun) throws TestFailure
+end 'EnvironmentCellCheck'
+
+enum EnvironmentAxisKind
+	processHashSeed
+	lint
+	stdlibLocation
+	workingDirectoryDepth
+end 'EnvironmentAxisKind'
+
+type EnvironmentAxis
+	let kind as EnvironmentAxisKind
+	let baseline as GateEnvironment
+	let varied as GateEnvironmentArray
+
+	static function create(kind EnvironmentAxisKind, baseline GateEnvironment, varied GateEnvironmentArray) returns EnvironmentAxis
+		return Self{kind: kind, baseline: baseline, varied: varied}
+	end 'create'
+
+	function comparesPacks() returns bool
+		return match self.kind 'packs'
+			processHashSeed or
+			lint gives true
+			stdlibLocation or
+			workingDirectoryDepth gives false
+		end 'packs'
+	end 'comparesPacks'
+
+	function packKindsOnlyTheVariedRunWrites() returns StringArray
+		return match self.kind 'kinds'
+			processHashSeed or
+			stdlibLocation or
+			workingDirectoryDepth gives StringArray.create(0)
+			lint gives [AuditEntryPrefix]
+		end 'kinds'
+	end 'packKindsOnlyTheVariedRunWrites'
+
+	function comparesBuilds() returns bool
+		return match self.kind 'builds'
+			processHashSeed or
+			lint or
+			stdlibLocation or
+			workingDirectoryDepth gives true
+		end 'builds'
+	end 'comparesBuilds'
+
+	function comparesAllocations() returns bool
+		return match self.kind 'allocations'
+			workingDirectoryDepth gives true
+			processHashSeed or
+			lint or
+			stdlibLocation gives false
+		end 'allocations'
+	end 'comparesAllocations'
+
+	function comparesTheIndex() returns bool
+		return match self.kind 'index'
+			processHashSeed or
+			stdlibLocation or
+			workingDirectoryDepth gives false
+			lint gives true
+		end 'index'
+	end 'comparesTheIndex'
+
+	function variedProgram(program GateProgram) returns GateProgram
+		return match self.kind 'varied'
+			processHashSeed or
+			stdlibLocation or
+			workingDirectoryDepth gives program
+			lint gives program.lintEnforced()
+		end 'varied'
+	end 'variedProgram'
+
+	function requireHeldThrough(run EnvironmentRun) throws TestFailure
+		match self.kind 'held'
+			processHashSeed or
+			lint or
+			stdlibLocation or
+			workingDirectoryDepth then try requireThePlantedSeedHeld(run.environment)
+		end 'held'
+	end 'requireHeldThrough'
+end 'EnvironmentAxis'
+
+function processHashSeedAxis(dir FilePath) returns EnvironmentAxis throws TestFailure
+	let tier = try seedWriterTier(dir)
+	let varied = GateEnvironmentArray.create(0)
+
+	for seed in [SecondHashSeed, ThirdHashSeed] 'eachVariedSeed'
+		varied.push(plantedSeedEnvironment(dir, seed: seed, tier: tier))
+	end 'eachVariedSeed'
+
+	return EnvironmentAxis.create(EnvironmentAxisKind.processHashSeed, baseline: plantedSeedEnvironment(dir, seed: FirstHashSeed, tier: tier), varied: varied)
+end 'processHashSeedAxis'
+
+function lintAxis(dir FilePath) returns EnvironmentAxis throws TestFailure
+	let tier = try seedWriterTier(dir)
+	let skipped = plantedSeedEnvironmentAt(dir.join(LintSkippedRootDirName), seed: FirstHashSeed, tier: tier)
+	let enforced = plantedSeedEnvironmentAt(dir.join(LintEnforcedRootDirName), seed: FirstHashSeed, tier: tier)
+
+	return EnvironmentAxis.create(EnvironmentAxisKind.lint, baseline: GateEnvironment.create("{skipped.description}, built by `{BuildCommandWord}` with lint skipped", root: skipped.root, naming: skipped.naming), varied: [GateEnvironment.create("{enforced.description}, built by `{LintCommandWord} {OutputOptionPrefix}` with lint enforced", root: enforced.root, naming: enforced.naming)])
+end 'lintAxis'
+
+function stdlibLocationAxis(dir FilePath) returns EnvironmentAxis throws TestFailure
+	let tier = try seedWriterTier(dir)
+
+	return EnvironmentAxis.create(EnvironmentAxisKind.stdlibLocation, baseline: stdlibLocationEnvironment(dir, location: StdlibLocationFirstDirName, tier: tier), varied: [stdlibLocationEnvironment(dir, location: StdlibLocationLastDirName, tier: tier)])
+end 'stdlibLocationAxis'
+
+function stdlibLocationEnvironment(dir FilePath, location String, tier String) returns GateEnvironment
+	let compiler = stagedLibraryTierCompiler(dir.join(location), staged: dir)
+	let planted = plantedSeedEnvironmentAt(dir.join("{StdlibLocationRootDirPrefix}{location}"), seed: FirstHashSeed, tier: tier)
+
+	return GateEnvironment.create("{planted.description}, by the compiler staged in `{location}`", root: planted.root, naming: planted.naming, compiler: compiler)
+end 'stdlibLocationEnvironment'
+
+function workingDirectoryDepthAxis(dir FilePath) returns EnvironmentAxis throws TestFailure
+	let tier = try seedWriterTier(dir)
+	let shallow = plantedSeedEnvironmentAt(dir.join(ShallowRootDirName), seed: FirstHashSeed, tier: tier)
+	let deep = plantedSeedEnvironmentAt(dir.join(DeepRootDirName), seed: FirstHashSeed, tier: tier)
+	let descent = deeperDirNames()
+	var below = dir
+
+	for name in descent 'eachComponent'
+		below = stagingDir(below.join(name).toString())
+	end 'eachComponent'
+
+	return EnvironmentAxis.create(EnvironmentAxisKind.workingDirectoryDepth, baseline: GateEnvironment.create("{shallow.description}, started in the staging directory", root: shallow.root, naming: shallow.naming, spelling: ProgramSpelling.absolute), varied: [GateEnvironment.create("{deep.description}, started {descent.count()} directories below it", root: deep.root, naming: deep.naming, descent: descent, spelling: ProgramSpelling.absolute)])
+end 'workingDirectoryDepthAxis'
+
+function deeperDirNames() returns StringArray
+	return ["deeper-one", "deeper-two", "deeper-three"]
+end 'deeperDirNames'
+
+function seedWriterTier(dir FilePath) returns String throws TestFailure
+	let writer = seedEnvironment(dir.join(SeedWriterDirName), seed: FirstHashSeed)
+	stageProgram(writer.root, name: AppDirName, source: TrivialProgramSource)
+	try requireBuilt(runWithCacheRoots([BuildCommandWord, AppDirName, "{OutputOptionPrefix}{writer.root.join(OutputName).toString()}"], naming: writer.naming, workingDirectory: writer.root), which: "the seed writer build {writer.description}")
+
+	let writerTiers = tierDirNamesIn(writer.library())
+	try Expect.equal(writerTiers.count(), expected: 1, message: "the seed writer build left {writerTiers.count()} hash tier directories under {writer.library().toString()}, where one build under {HashTierVariable}={HashTierSoftware} keys its library cache by exactly one.{listedLines(writerTiers)}")
+
+	return try writerTiers.get(0) otherwise panic("the count was checked to be one")
+end 'seedWriterTier'
+
+function seedEnvironment(root FilePath, seed String) returns GateEnvironment
+	let naming = hashPinsNaming(seed, tier: HashTierSoftware)
+	naming.upsert(CacheRootVariable, value: cacheRootIn(root).toString())
+
+	return GateEnvironment.create("under {HashSeedVariable}={seed}", root: root, naming: naming)
+end 'seedEnvironment'
+
+function plantedSeedEnvironment(dir FilePath, seed String, tier String) returns GateEnvironment
+	return plantedSeedEnvironmentAt(dir.join("{SeedRootDirPrefix}{seed}"), seed: seed, tier: tier)
+end 'plantedSeedEnvironment'
+
+function plantedSeedEnvironmentAt(root FilePath, seed String, tier String) returns GateEnvironment
+	let environment = seedEnvironment(root, seed: seed)
+	let home = stagingDir(environment.library().join(tier).toString())
+	rewrittenFile(home.join(HashSeedFileName), bytes: PlantedLibraryDigestSeed.toByteArray())
+
+	return GateEnvironment.create("{environment.description} from the stored library hash seed `{PlantedLibraryDigestSeed}`", root: environment.root, naming: environment.naming)
+end 'plantedSeedEnvironmentAt'
+
+function requireThePlantedSeedHeld(environment GateEnvironment) throws TestFailure
+	let library = environment.library()
+	let seeds = seedFilesIn(library)
+	try Expect.equal(seeds.count(), expected: 1, message: "the runs {environment.description} left {seeds.count()} '{HashSeedFileName}' files under {library.toString()}, where the planted one should be the only one.")
+
+	let stored = try seeds.get(0) otherwise panic("the count was checked to be one")
+	try Expect.isTrue(fileBytes(stored).equals(PlantedLibraryDigestSeed.toByteArray()), message: "the runs {environment.description} replaced the planted stored seed {stored.toString()}, so they did not adopt it.")
+
+	let tiers = tierDirNamesIn(library)
+	try Expect.equal(tiers.count(), expected: 1, message: "the runs {environment.description} left {tiers.count()} hash tier directories under {library.toString()}, where the planted one should be the only one.{listedLines(tiers)}")
+end 'requireThePlantedSeedHeld'
+
+function requireIndependentOfTheEnvironment(axis EnvironmentAxis, programs GateProgramArray, staged FilePath, check EnvironmentCellCheck) throws TestFailure
+	let baseline = try environmentRun(axis, environment: axis.baseline, programs: programs, staged: staged, check: check)
+	var agreed = true
+
+	let variedPrograms = GateProgramArray.create(programs.count(), zeroed: false)
+
+	for program in programs 'eachProgram'
+		variedPrograms.push(axis.variedProgram(program))
+	end 'eachProgram'
+
+	for environment in axis.varied 'eachVariedEnvironment'
+		let varied = try environmentRun(axis, environment: environment, programs: variedPrograms, staged: staged, check: check)
+		agreed = runsAgree(axis, baseline: baseline, varied: varied) and agreed
+	end 'eachVariedEnvironment'
+
+	if not agreed 'differed'
+		throw TestFailure.assertion
+	end 'differed'
+end 'requireIndependentOfTheEnvironment'
+
+function environmentRun(axis EnvironmentAxis, environment GateEnvironment, programs GateProgramArray, staged FilePath, check EnvironmentCellCheck) returns EnvironmentRun throws TestFailure
+	let outcomes = GateOutcomeArray.create(0)
+
+	for program in programs 'eachProgram'
+		let outcome = try environment.run(program, staged: staged)
+		try check.requireAfterRun(outcome)
+		outcomes.push(outcome)
+	end 'eachProgram'
+
+	let run = EnvironmentRun.create(environment, outcomes: outcomes)
+	try axis.requireHeldThrough(run)
+	try check.requireAfterEnvironment(run)
+
+	return run
+end 'environmentRun'
+
+function runsAgree(axis EnvironmentAxis, baseline EnvironmentRun, varied EnvironmentRun) returns bool
+	var agreed = true
+
+	for (position, first) in baseline.outcomes.withIterator() 'eachOutcome'
+		let second = try varied.outcomes.get(position.index()) otherwise panic("EnvironmentGateHarness: every environment runs the same programs")
+		agreed = outcomesAgree(axis, first: first, second: second) and agreed
+	end 'eachOutcome'
+
+	if axis.comparesPacks() 'packsCompared'
+		let differing = differingPacks(baseline.environment.library(), second: varied.environment.library(), variedOnly: axis.packKindsOnlyTheVariedRunWrites())
+		agreed = reported(differing.isEmpty(), message: "the same runs of the same programs {baseline.environment.description} and {varied.environment.description} wrote library cache packs that differ, so a pack is a function of the environment and not only of the source and the stored seed.{listedLines(differing)}") and agreed
+	end 'packsCompared'
+
+	return agreed
+end 'runsAgree'
+
+function outcomesAgree(axis EnvironmentAxis, first GateOutcome, second GateOutcome) returns bool
+	var agreed = true
+
+	if first.program.writesAnImage() and axis.comparesBuilds() 'compared'
+		agreed = buildsAgree(first, second: second)
+	end 'compared'
+
+	if axis.comparesTheIndex() 'indexCompared'
+		agreed = reported(first.indexAfterTheFrontEnd() == second.indexAfterTheFrontEnd(), message: "{second.which} left the whole-program index after the front end as{LineFeed}  {second.indexAfterTheFrontEnd()}{LineFeed}  and {first.which} left it as{LineFeed}  {first.indexAfterTheFrontEnd()}{LineFeed}  so what lowering reads is a function of the environment and not only of the program.") and agreed
+	end 'indexCompared'
+
+	if not axis.comparesAllocations() 'allocationsNotCompared'
+		return agreed
+	end 'allocationsNotCompared'
+
+	let firstAllocations = first.allocations()
+	let secondAllocations = second.allocations()
+
+	return reported(firstAllocations == secondAllocations, message: "{second.which} made {secondAllocations} allocations and {first.which} made {firstAllocations}, so `--metrics` reports a count that is a function of the environment and not only of the program. The rows that differ:{listedLines(differingAllocationRows(first.metrics, second: second.metrics))}") and agreed
+end 'outcomesAgree'
+
+function buildsAgree(first GateOutcome, second GateOutcome) returns bool
+	let imageAgreed = sameBytesReported(first.image, second: second.image, why: "the executable of {second.which} is not the one of {first.which}, so the environment reached the program.")
+	let sidecarAgreed = sameBytesReported(first.sidecar, second: second.sidecar, why: "the debug sidecar of {second.which} is not the one of {first.which}, so the environment reached what the debugger is told.")
+
+	return imageAgreed and sidecarAgreed
+end 'buildsAgree'
+
+function reported(held bool, message String) returns bool
+	try Expect.isTrue(held, message: message) otherwise return false
+
+	return true
+end 'reported'
+
+function sameBytesReported(first FilePath, second FilePath, why String) returns bool
+	let offset = firstDifferingOffsetOf(fileBytes(first), second: fileBytes(second))
+
+	try requireSameBytes(first, second: second, why: "{why} The first differing byte is at offset {offset}.") otherwise return false
+
+	return true
+end 'sameBytesReported'
+
+function differingAllocationRows(first String, second String) returns StringArray
+	let secondRows = metricsRowsOf(second)
+	let differing = StringArray.create(0)
+
+	for row in metricsRowsOf(first) 'eachRow'
+		if not isAllocationRow(row) 'notAnAllocationRow'
+			continue
+		end 'notAnAllocationRow'
+
+		let firstAllocations = row.tally(MetricsAllocsField)
+
+		if let secondRow = try rowNamed(secondRows, kind: row.kind, name: row.name) 'inBoth'
+			let secondAllocations = secondRow.tally(MetricsAllocsField)
+
+			if firstAllocations != secondAllocations 'differs'
+				differing.push("`{row.kind} {row.name}`: {firstAllocations} first, {secondAllocations} second")
+			end 'differs'
+		end 'inBoth' else 'inTheFirstOnly'
+			differing.push("`{row.kind} {row.name}`: {firstAllocations} first, and the second table has no such row")
+		end 'inTheFirstOnly'
+	end 'eachRow'
+
+	return differing
+end 'differingAllocationRows'
+
+function isAllocationRow(row MetricsRow) returns bool
+	return row.kind == PhaseRowKind or row.kind == MetricsRegAllocKind or row.kind == TotalRowKind or row.kind == UnattributedRowKind
+end 'isAllocationRow'
+
+enum MetricsRowError implements Error
+	absent
+end 'MetricsRowError'
+
+function rowNamed(rows MetricsRowArray, kind String, name String) returns MetricsRow throws MetricsRowError
+	for row in rows 'eachRow'
+		if row.kind == kind and row.name == name 'theRow'
+			return row
+		end 'theRow'
+	end 'eachRow'
+
+	throw MetricsRowError.absent
+end 'rowNamed'
+
+function tierDirNamesIn(library FilePath) returns StringArray
+	let names = StringArray.create(0)
+
+	for entry in listing(library) 'eachEntry'
+		if Directory.isDirectory(entry) 'aTier'
+			names.push(entry.filename())
+		end 'aTier'
+	end 'eachEntry'
+
+	return names
+end 'tierDirNamesIn'
+
+function packNamesIn(library FilePath) returns StringArray
+	let names = StringArray.create(0)
+
+	for file in filesUnder(library) 'eachFile'
+		if file.filename() == HashSeedFileName 'theStoredSeed'
+			continue
+		end 'theStoredSeed'
+
+		names.push(file.toString().replaceFirst(library.toString(), with: ""))
+	end 'eachFile'
+
+	names.sort()
+
+	return names
+end 'packNamesIn'
+
+function packsOfKindIn(library FilePath, prefix String) returns FilePathArray
+	let matching = FilePathArray.create(0)
+
+	for file in filesUnder(library) 'eachFile'
+		if file.filename().startsWith(prefix) 'ofTheKind'
+			matching.push(file)
+		end 'ofTheKind'
+	end 'eachFile'
+
+	return matching
+end 'packsOfKindIn'
+
+function packIn(library FilePath, name String) returns FilePath
+	return try FilePath.from("{library.toString()}{name}") otherwise panic("the gate could not run — {library.toString()}{name} is not a spellable path.")
+end 'packIn'
+
+function packNamesOutsideKinds(names StringArray, kinds StringArray) returns StringArray
+	let kept = StringArray.create(0)
+
+	for name in names 'eachName'
+		if not packNameIsOfAKind(name, kinds: kinds) 'outsideTheKinds'
+			kept.push(name)
+		end 'outsideTheKinds'
+	end 'eachName'
+
+	return kept
+end 'packNamesOutsideKinds'
+
+function packNameIsOfAKind(name String, kinds StringArray) returns bool
+	let filename = try FilePath.from(name) otherwise panic("the gate could not run — the pack name {name} is not a spellable path.")
+
+	for kind in kinds 'eachKind'
+		if filename.filename().startsWith(kind) 'ofTheKind'
+			return true
+		end 'ofTheKind'
+	end 'eachKind'
+
+	return false
+end 'packNameIsOfAKind'
+
+function differingPacks(first FilePath, second FilePath, variedOnly StringArray) returns StringArray
+	let firstNames = packNamesIn(first)
+	let secondNames = packNamesOutsideKinds(packNamesIn(second), kinds: variedOnly)
+	let differing = StringArray.create(0)
+
+	if listedLines(firstNames) != listedLines(secondNames) 'differentNames'
+		differing.push("the two roots hold different pack names. The first holds:{listedLines(firstNames)}{LineFeed}  and the second holds:{listedLines(secondNames)}")
+	end 'differentNames'
+
+	for name in firstNames 'eachPack'
+		if not secondNames.contains(name) 'inTheFirstOnly'
+			continue
+		end 'inTheFirstOnly'
+
+		let firstBytes = fileBytes(packIn(first, name: name))
+		let secondBytes = fileBytes(packIn(second, name: name))
+
+		if not firstBytes.equals(secondBytes) 'differs'
+			differing.push("`{name}` holds {firstBytes.count()} bytes in the first root and {secondBytes.count()} in the second, and the first differing byte is at offset {firstDifferingOffsetOf(firstBytes, second: secondBytes)}")
+		end 'differs'
+	end 'eachPack'
+
+	return differing
+end 'differingPacks'
+
+function firstDifferingOffsetOf(first ByteArray, second ByteArray) returns ElementIndex
+	let shared = first.count() if first.count() <= second.count() else second.count()
+	let firstShared = try first.slice(0, endIndex: shared) otherwise panic("the gate could not run — the shared length lies inside the first image.")
+	let secondShared = try second.slice(0, endIndex: shared) otherwise panic("the gate could not run — the shared length lies inside the second image.")
+
+	return match compareBytes(firstShared, second: secondShared) 'which'
+		identical gives shared as ElementIndex
+		differsAt(offset) gives offset
+		differentLengths panic("the gate could not run — two images of one length were found to differ in length.")
+	end 'which'
+end 'firstDifferingOffsetOf'

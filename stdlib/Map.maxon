@@ -39,8 +39,10 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// giving an empty slot back — so a table that is inserted into and removed from in turn spends its
 	/// empty slots one at a time and ends up probing its whole capacity for every key it does not hold,
 	/// while `count` never moves and a load factor reading `count` alone never rehashes. `ensureCapacity`
-	/// reads occupancy as `count + tombstones` for that reason, and a rehash clears them.
-	var tombstones = 0 as TableCapacity
+	/// reads occupancy as `count + removalsSinceRehash` for that reason, and a rehash clears it. An insert
+	/// that takes a tombstone does not give one back, so the churn spec
+	/// `a-churn-of-inserts-and-removes-makes-the-same-allocations-wherever-the-keys-hash` holds.
+	var removalsSinceRehash = 0 as TableCapacity
 
 	/// Create an empty map
 	public static function create() returns Self
@@ -89,7 +91,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	end 'init'
 
 	// Internal: initialize storage when capacity is zero, then rehash when the slots a probe walks —
-	// live entries and tombstones alike — pass 75% of them
+	// live entries and the removals since the last rehash — pass 75% of them
 	function ensureCapacity()
 		if capacity == 0 'init_empty'
 			keys = KeyArray{}
@@ -110,7 +112,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			return
 		end 'full_of_entries'
 
-		if storedCount + tombstones < loadLimit 'every_probe_path_still_ends'
+		if storedCount + removalsSinceRehash < loadLimit 'every_probe_path_still_ends'
 			return
 		end 'every_probe_path_still_ends'
 
@@ -128,11 +130,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	// The panics name "the probe" rather than `findSlot` because `rehash` also calls this, with an
 	// index from its own inline empty-slot scan; both probes mask with `capacity - 1`, so both
 	// hand over an index in [0, capacity).
-	function insertAtSlot(slotIndex TableSlotIndex, key Key, value Value, hash HashValue, takesATombstone bool)
-		if takesATombstone 'one_tombstone_fewer'
-			tombstones = tombstones - 1
-		end 'one_tombstone_fewer'
-
+	function insertAtSlot(slotIndex TableSlotIndex, key Key, value Value, hash HashValue)
 		try keys.set(slotIndex as ElementIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from the probe is always in-bounds")
 		try values.set(slotIndex as ElementIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from the probe is always in-bounds")
 		try states.set(slotIndex as ElementIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
@@ -149,15 +147,13 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		let hash = key.hash()
 		let slotIndex = try findSlot(key, hash: hash) otherwise panic("Map.insert: findSlot named no slot — ensureCapacity established capacity > 0, which is the only condition findSlot throws on")
 
-		// ONE read of the slot answers both questions the write needs — is the key already here, and is
-		// the vacancy a tombstone this insert takes back (see `tombstones`).
 		let state = try states.get(slotIndex as ElementIndex) otherwise panic("Map.insert: states.get OOB — slot from findSlot is always in-bounds")
 
 		if stateIsOccupied(state) 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
 
-		insertAtSlot(slotIndex, key: key, value: value, hash: hash, takesATombstone: stateIsDeleted(state))
+		insertAtSlot(slotIndex, key: key, value: value, hash: hash)
 	end 'insert'
 
 	/// Insert or update a key-value pair in the map
@@ -175,7 +171,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			return
 		end 'found'
 
-		insertAtSlot(slotIndex, key: key, value: value, hash: hash, takesATombstone: stateIsDeleted(state))
+		insertAtSlot(slotIndex, key: key, value: value, hash: hash)
 	end 'upsert'
 
 	/// Get the value for a key, throws if not found
@@ -210,7 +206,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			try values.clearSlot(slotIndex as ElementIndex) otherwise panic("Map.remove: values.clearSlot OOB — slot from findSlot is always in-bounds")
 			try states.set(slotIndex as ElementIndex, value: SlotState.Deleted) otherwise panic("Map.remove: states.set OOB — slot from findSlot is always in-bounds")
 			storedCount = storedCount - 1
-			tombstones = tombstones + 1
+			removalsSinceRehash = removalsSinceRehash + 1
 			return true
 		end 'found'
 
@@ -338,15 +334,6 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'occupied'
 	end 'stateIsOccupied'
 
-	// A tombstone is a vacancy an insert may take, and it is already counted as occupancy — see `tombstones`.
-	function stateIsDeleted(state SlotState) returns bool
-		return match state 'tombstoned'
-			Deleted gives true
-			Empty gives false
-			Occupied gives false
-		end 'tombstoned'
-	end 'stateIsDeleted'
-
 	// Internal: rebuild the table at `wantedCapacity`, which is twice the current one when the live
 	// entries have filled it and the current one when only tombstones have — the fresh table has none,
 	// which is what a churning map is rehashed for.
@@ -379,7 +366,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		hashes = newHashes
 		capacity = newCapacity
 		storedCount = 0
-		tombstones = 0
+		removalsSinceRehash = 0
 
 		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
@@ -419,7 +406,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 					end 'ns2'
 				end 'find_slot'
 
-				insertAtSlot(index, key: key, value: value, hash: hash, takesATombstone: false)
+				insertAtSlot(index, key: key, value: value, hash: hash)
 			end 'occupied'
 		end 'eachOldSlot'
 	end 'rehash'

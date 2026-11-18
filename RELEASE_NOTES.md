@@ -746,6 +746,13 @@ release's version as its heading when the release is cut.
   judged only the outer instance and compiled it.
   Fix: correct the argument of the nested instance, or give the argument type the interfaces the base requires.
 
+- A `Map` or `Set` rebuilds its table when its entries plus the removals since its last rebuild reach 3/4 of
+  the slots, where 0.5.0 counted the tombstones standing, so an insert that took a tombstone back lowered the
+  count. After a run of inserts and removes, a table can hold a different capacity (`getCapacity()`) and walk
+  its entries in a different order than with 0.5.0.
+  Fix: a program that prints or compares a table's capacity or walk order after removals takes the new
+  values; collect the keys and sort them where the order matters.
+
 ## 0.5.0 — 2026-10-08
 
 ### Breaking changes

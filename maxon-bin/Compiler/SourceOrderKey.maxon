@@ -1,0 +1,251 @@
+// Not `SourceTier`'s declaration order: this is the order files fold in, which numbers blobs and
+// everything emitted after them, so a program with scriptlib files would emit differently.
+enum SourceOrderLayer
+	program = 0
+	scriptlib = 1
+	stdlib = 2
+	runtime = 3
+end 'SourceOrderLayer'
+
+function sourceOrderLayerOf(tier SourceTier) returns SourceOrderLayer
+	return match tier 'tier'
+		author gives SourceOrderLayer.program
+		scriptlib gives SourceOrderLayer.scriptlib
+		stdlib gives SourceOrderLayer.stdlib
+		runtime gives SourceOrderLayer.runtime
+	end 'tier'
+end 'sourceOrderLayerOf'
+
+type SourceOrderKey
+	let layer as SourceTier
+	let relative as immutable ByteArray
+
+	static function create(layer SourceTier, relative immutable ByteArray) returns SourceOrderKey
+		return Self{layer: layer, relative: relative}
+	end 'create'
+
+	function compare(other SourceOrderKey) returns Ordering
+		let byLayer = sourceOrderLayerOf(self.layer).rawValue.compare(sourceOrderLayerOf(other.layer).rawValue)
+
+		if byLayer != Ordering.equalTo 'layersDiffer'
+			return byLayer
+		end 'layersDiffer'
+
+		return compareBytesOrdinally(self.relative, right: other.relative)
+	end 'compare'
+
+	function moduleDirectory() returns String
+		var lastSeparator = 0 as ElementIndex
+		var found = false
+
+		for (iter, byte) in self.relative.withIterator() 'eachByte'
+			if byte == PortablePathSeparatorByte 'aSeparator'
+				lastSeparator = iter.index()
+				found = true
+			end 'aSeparator'
+		end 'eachByte'
+
+		if not found 'atTheAnchor'
+			return NoModuleDirectoryPrefix
+		end 'atTheAnchor'
+
+		return String.from(try self.relative.slice(0, endIndex: lastSeparator) otherwise panic("SourceOrderKey.moduleDirectory: the last separator at {lastSeparator} lies inside the {self.relative.count()}-byte relative path"))
+	end 'moduleDirectory'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.layer.ordinal as CacheUnsigned)
+		writer.bytes(self.relative)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns SourceOrderKey throws LibraryCacheDamage
+		let f_layer = try cacheReadSourceTier(reader)
+		let f_relative = freeze try reader.bytes()
+
+		return Self{layer: f_layer, relative: f_relative}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(SourceOrderKey) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'SourceOrderKey'
+
+typealias FileOrderKeyMap = Map with (String, SourceOrderKey)
+
+// @generated library-cache begin
+function cacheWriteFileOrderKeyMap(writer LibraryCacheWriter, value FileOrderKeyMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	let ordered = StringWriteOrder.create(value.count(), zeroed: false)
+
+	for (key, _) in value 'eachKey'
+		ordered.push(key)
+	end 'eachKey'
+
+	ordered.sortUnstable()
+
+	for key in ordered 'eachEntry'
+		let entry = try value.get(key) otherwise panic("cacheWriteFileOrderKeyMap: a key collected from the map is not in it")
+		writer.text(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteFileOrderKeyMap'
+
+function cacheReadFileOrderKeyMap(reader LibraryCacheReader) returns FileOrderKeyMap throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = FileOrderKeyMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.text()
+		let entry = try SourceOrderKey.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadFileOrderKeyMap'
+
+// @generated library-cache end
+
+union SpelledProgramAnchor
+	directory(path FilePath)
+	theWorkingDirectory
+end 'SpelledProgramAnchor'
+
+type ProgramAnchor
+	let rootPath as FilePath
+	let rootIsADirectory as bool
+	let spelled as SpelledProgramAnchor
+
+	static function of(rootPath FilePath, rootIdentity FilePath) returns ProgramAnchor
+		if Directory.isDirectory(rootIdentity) 'aDirectoryRoot'
+			return Self{rootPath: rootPath, rootIsADirectory: true, spelled: SpelledProgramAnchor.directory(rootPath)}
+		end 'aDirectoryRoot'
+
+		let spelled = try rootPath.parent() otherwise return Self{rootPath: rootPath, rootIsADirectory: false, spelled: SpelledProgramAnchor.theWorkingDirectory}
+
+		return Self{rootPath: rootPath, rootIsADirectory: false, spelled: SpelledProgramAnchor.directory(spelled)}
+	end 'of'
+
+	function resolved() returns FilePath
+		let resolvedRoot = self.rootPath.resolve(Directory.currentPath())
+
+		if self.rootIsADirectory 'aDirectoryRoot'
+			return resolvedRoot
+		end 'aDirectoryRoot'
+
+		return try resolvedRoot.parent() otherwise panic("ProgramAnchor.resolved: '{resolvedRoot.toString()}' has no parent, though a single-file root is an absolute file path once resolved")
+	end 'resolved'
+end 'ProgramAnchor'
+
+export type WalkedSource
+	let identity as FilePath
+	let walkRoot as FilePath
+
+	static function create(identity FilePath, walkRoot FilePath) returns WalkedSource
+		return Self{identity: identity, walkRoot: walkRoot}
+	end 'create'
+end 'WalkedSource'
+
+export typealias WalkedSourceMap = Map with (FilePath, WalkedSource)
+
+export union WalkRecording
+	none
+	into(walked WalkedSourceMap)
+
+	function note(files MaxonSourcePathArray, firstWalked ElementIndex, walkRoot FilePath, ledger PhysicalEntryLedger)
+		match self 'recording'
+			none then return
+			into(walked) then noteWalkedSources(files, firstWalked: firstWalked, walkRoot: walkRoot, ledger: ledger, walked: walked)
+		end 'recording'
+	end 'note'
+end 'WalkRecording'
+
+function noteWalkedSources(files MaxonSourcePathArray, firstWalked ElementIndex, walkRoot FilePath, ledger PhysicalEntryLedger, walked WalkedSourceMap)
+	for position in firstWalked upto files.count() 'eachWalkedFile'
+		let file = try files.get(position) otherwise panic("noteWalkedSources: files.get OOB at {position} below count {files.count()}")
+
+		if let identity = try ledger.physicalIdentityOf(file) 'physicallyIdentified'
+			walked.upsert(file, value: WalkedSource.create(identity, walkRoot: walkRoot))
+		end 'physicallyIdentified'
+	end 'eachWalkedFile'
+end 'noteWalkedSources'
+
+typealias WalkRootRelativeMap = Map with (FilePath, String)
+
+function sourceOrderKeyOf(project Project, path FilePath, identity FilePath, tier SourceTier) returns SourceOrderKey throws CompileError
+	let relative = try relativeSourcePathOf(project, path: path, identity: identity, tier: tier)
+
+	return SourceOrderKey.create(tier, relative: freeze relative.replace(FilePath.separator(), with: PortablePathSeparator).toByteArray())
+end 'sourceOrderKeyOf'
+
+function relativeSourcePathOf(project Project, path FilePath, identity FilePath, tier SourceTier) returns String throws CompileError
+	return match tier 'tier'
+		author gives try programRelativePathOf(project, path: path)
+		stdlib gives try libraryRelativePathOf(path, identity: identity, root: project.stdlibDir)
+		runtime gives try libraryRelativePathOf(path, identity: identity, root: project.runtimeDir)
+		scriptlib gives try libraryRelativePathOf(path, identity: identity, root: try project.scriptlib.packagesRoot() otherwise panic("relativeSourcePathOf: a scriptlib-tier file in a compile that holds no scriptlib — the tier is derived from the directory this project carries"))
+	end 'tier'
+end 'relativeSourcePathOf'
+
+function libraryRelativePathOf(path FilePath, identity FilePath, root FilePath) returns String throws CompileError
+	if let walked = try path.relativeTo(root) 'lexicallyUnderTheRoot'
+		return walked.toString()
+	end 'lexicallyUnderTheRoot'
+
+	return (try identity.relativeTo(root) otherwise throw CompileError.sourceOutsideItsRoot(path, root: root)).toString()
+end 'libraryRelativePathOf'
+
+function programRelativePathOf(project Project, path FilePath) returns String throws CompileError
+	if let lexical = try spelledProgramRelativeOf(project, path: path) 'underTheSpelledAnchor'
+		return lexical
+	end 'underTheSpelledAnchor'
+
+	if let walked = try project.db.walkedSources.get(path) 'aWalkedFile'
+		if let belowTheWalkRoot = try path.relativeTo(walked.walkRoot) 'belowItsWalkRoot'
+			return joinedRelative(try walkRootRelativeOf(project, walkRoot: walked.walkRoot), below: belowTheWalkRoot.toString())
+		end 'belowItsWalkRoot'
+	end 'aWalkedFile'
+
+	let anchor = project.programAnchor.resolved()
+
+	return (try path.resolve(Directory.currentPath()).relativeTo(anchor) otherwise throw CompileError.sourceOutsideItsRoot(path, root: anchor)).toString()
+end 'programRelativePathOf'
+
+function spelledProgramRelativeOf(project Project, path FilePath) returns String throws AbsentError
+	match project.programAnchor.spelled 'spelled'
+		directory(spelledAnchor) then return (try path.relativeTo(spelledAnchor) otherwise throw AbsentError.absent).toString()
+		theWorkingDirectory then break
+	end 'spelled'
+
+	if not path.equals(project.rootPath) 'notTheRootFile'
+		throw AbsentError.absent
+	end 'notTheRootFile'
+
+	return path.filename()
+end 'spelledProgramRelativeOf'
+
+function joinedRelative(above String, below String) returns String
+	if above.isEmpty() 'atTheAnchor'
+		return below
+	end 'atTheAnchor'
+
+	if below.isEmpty() 'theWalkRootItself'
+		return above
+	end 'theWalkRootItself'
+
+	return "{above}{FilePath.separator()}{below}"
+end 'joinedRelative'
+
+function walkRootRelativeOf(project Project, walkRoot FilePath) returns String throws CompileError
+	if let memoized = try project.db.walkRootRelatives.get(walkRoot) 'alreadyMeasured'
+		return memoized
+	end 'alreadyMeasured'
+
+	let anchor = project.programAnchor.resolved()
+	let relative = try walkRoot.resolve(Directory.currentPath()).relativeTo(anchor) otherwise throw CompileError.sourceOutsideItsRoot(walkRoot, root: anchor)
+	project.db.walkRootRelatives.upsert(walkRoot, value: relative.toString())
+
+	return relative.toString()
+end 'walkRootRelativeOf'

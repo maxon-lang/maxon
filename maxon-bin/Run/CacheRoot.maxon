@@ -132,6 +132,10 @@ end 'physicalLookupCure'
 // or refuses may be of a path that exists and holds a link, and keying the rest lexically would split
 // it from its other spellings.
 export function projectIdentityPathOf(spelled FilePath) returns FilePath throws RunCacheError
+	if let physical = try spelled.resolvedPhysically() 'resolvedAsSpelled'
+		return physical.normalize()
+	end 'resolvedAsSpelled'
+
 	let anchored = spelled.anchoredAt(Directory.currentPath())
 	var existing = anchored.clone()
 	let absent = StringArray.create(0)
@@ -253,14 +257,8 @@ function hostCacheRoots() returns CacheRootArray throws RunCacheError
 	let roots = CacheRootArray.create(0)
 
 	for candidate in cacheRootCandidates() 'eachCandidate'
-		let spelled = try Process.environmentVariable(candidate.variable) otherwise continue
-
-		if spelled.isEmpty() 'namesNowhere'
-			continue
-		end 'namesNowhere'
-
-		let named = try FilePath.from(spelled) otherwise continue
-		noteRoot(roots, root: named.joinPath(candidate.suffix))
+		let root = try rootNamedBy(candidate) otherwise continue
+		noteRoot(roots, root: root)
 	end 'eachCandidate'
 
 	if roots.isEmpty() 'noneNamed'
@@ -269,6 +267,18 @@ function hostCacheRoots() returns CacheRootArray throws RunCacheError
 
 	return roots
 end 'hostCacheRoots'
+
+function rootNamedBy(candidate CacheRootCandidate) returns FilePath throws AbsentError
+	let spelled = try Process.environmentVariable(candidate.variable) otherwise throw AbsentError.absent
+
+	if spelled.isEmpty() 'namesNowhere'
+		throw AbsentError.absent
+	end 'namesNowhere'
+
+	let named = try FilePath.from(spelled) otherwise throw AbsentError.absent
+
+	return named.joinPath(candidate.suffix)
+end 'rootNamedBy'
 
 // Windows folds a path's case and POSIX does not, which `FilePath.equals` answers for the host.
 function noteRoot(roots CacheRootArray, root FilePath)
@@ -286,9 +296,7 @@ end 'noteRoot'
 // else's — which is what lets `maxon cache clear` know where to stop. A second derivation of it is
 // a second answer to that.
 export function hostCacheRoot() returns FilePath throws RunCacheError
-	let roots = try hostCacheRoots()
-
-	match cacheRootARunUses(roots) 'decided'
+	match cacheRootARunUses() 'decided'
 		usable(directory) then return directory
 		noneUsable then throw RunCacheError.unavailable(noCacheRootMessage())
 	end 'decided'
@@ -306,12 +314,14 @@ end 'CacheRootInUse'
 // It answers true for a directory that already exists, so a root that exists and cannot be written
 // under passes here, and the run fails later in `slotDirectory` about that one directory. Closing
 // that needs a write probe on every run.
-function cacheRootARunUses(roots CacheRootArray) returns CacheRootInUse
-	for root in roots 'eachRoot'
+function cacheRootARunUses() returns CacheRootInUse
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		let root = try rootNamedBy(candidate) otherwise continue
+
 		if Directory.create(root) 'created'
 			return CacheRootInUse.usable(root)
 		end 'created'
-	end 'eachRoot'
+	end 'eachCandidate'
 
 	return CacheRootInUse.noneUsable
 end 'cacheRootARunUses'

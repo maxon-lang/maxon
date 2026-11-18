@@ -24,9 +24,9 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	var storedCount = 0 as MemberCount  // Number of occupied entries
 	var capacity = 0 as TableCapacity  // Total slots
 
-	/// Slots a removal emptied, which a probe walks over rather than stopping at — `Map.tombstones`
+	/// Slots a removal emptied, which a probe walks over rather than stopping at — `Map.removalsSinceRehash`
 	/// states what reading them as occupancy is for, and `insert` below reads occupancy the same way.
-	var tombstones = 0 as TableCapacity
+	var removalsSinceRehash = 0 as TableCapacity
 
 	/// Create an empty set
 	public static function create() returns Self
@@ -74,11 +74,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	// reach here — the empty slot it landed on, and the first tombstone on the probe path — and both
 	// masked their index with `capacity - 1`, so both hand over an index in [0, capacity).
 	// `Map.insertAtSlot` is the same helper over the same table for the same reason.
-	function insertAtSlot(slotIndex TableSlotIndex, element Element, hash HashValue, takesATombstone bool)
-		if takesATombstone 'one_tombstone_fewer'
-			tombstones = tombstones - 1
-		end 'one_tombstone_fewer'
-
+	function insertAtSlot(slotIndex TableSlotIndex, element Element, hash HashValue)
 		try elements.set(slotIndex as ElementIndex, value: element) otherwise panic("Set.insertAtSlot: elements.set OOB — slot from the probe is always in-bounds")
 		try states.set(slotIndex as ElementIndex, value: SlotState.Occupied) otherwise panic("Set.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
 		try hashes.set(slotIndex as ElementIndex, value: hash) otherwise panic("Set.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
@@ -104,12 +100,12 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'init_empty'
 
 		// Check occupancy and rehash if needed (75% threshold). A tombstone counts, for the reason
-		// `tombstones` states; the capacity the LIVE count needs is the one a churning set is rebuilt at.
+		// `Map.removalsSinceRehash` states; the capacity the LIVE count needs is the one a churning set is rebuilt at.
 		let loadLimit = trunc((capacity * 3) / 4)
 
 		if storedCount >= loadLimit 'full_of_members'
 			rehash(capacity * 2)
-		end 'full_of_members' else if storedCount + tombstones >= loadLimit 'full_of_tombstones'
+		end 'full_of_members' else if storedCount + removalsSinceRehash >= loadLimit 'full_of_tombstones'
 			rehash(capacity if storedCount * 2 < loadLimit else capacity * 2)
 		end 'full_of_tombstones'
 
@@ -137,7 +133,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 			if isEmpty 'empty'
 				// Empty slot - insert here or at first deleted
-				insertAtSlot(firstDeleted if sawDeleted else index, element: element, hash: hash, takesATombstone: sawDeleted)
+				insertAtSlot(firstDeleted if sawDeleted else index, element: element, hash: hash)
 				return
 			end 'empty'
 
@@ -180,7 +176,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// Every slot probed without finding the element or an empty one. A tombstone is still a
 		// vacancy an insert can take, so it is a perfectly good answer.
 		if sawDeleted 'fallback'
-			insertAtSlot(firstDeleted, element: element, hash: hash, takesATombstone: true)
+			insertAtSlot(firstDeleted, element: element, hash: hash)
 			return
 		end 'fallback'
 
@@ -297,7 +293,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 						try elements.clearSlot(index as ElementIndex) otherwise panic("Set.remove: elements.clearSlot OOB — probe index is in-bounds")
 						try states.set(index as ElementIndex, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
 						storedCount = storedCount - 1
-						tombstones = tombstones + 1
+						removalsSinceRehash = removalsSinceRehash + 1
 						return true
 					end 'found'
 				end 'hash_match'
@@ -353,7 +349,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		hashes = newHashes
 		capacity = newCapacity
 		storedCount = 0
-		tombstones = 0
+		removalsSinceRehash = 0
 
 		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).

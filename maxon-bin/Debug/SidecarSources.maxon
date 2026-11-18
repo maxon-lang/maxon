@@ -1,0 +1,50 @@
+union SidecarLibraryTiers
+	beside(checkout FilePath)
+	unlocated
+end 'SidecarLibraryTiers'
+
+// A library file resolves against this compiler's tiers, so it names the file the program was built from
+// only while `compilerAgreementOf` holds, so a caller checks it before it resolves one.
+type SidecarSources
+	let root as FilePath
+	let libraries as SidecarLibraryTiers
+
+	static function of(root FilePath) returns SidecarSources
+		let stdlibDir = try locateStdlibDir() otherwise return Self{root: root, libraries: SidecarLibraryTiers.unlocated}
+		let checkout = try stdlibDir.parent() otherwise panic("SidecarSources.of: the stdlib directory '{stdlibDir.toString()}' a walk found has no parent")
+
+		return Self{root: root, libraries: SidecarLibraryTiers.beside(checkout)}
+	end 'of'
+
+	function resolved(recorded String) returns FilePath throws FilePathError
+		let named = try FilePath.from(recorded)
+
+		if not mxdbgNamesALibraryFile(recorded) 'aProgramFile'
+			return named.resolve(self.root).normalize()
+		end 'aProgramFile'
+
+		return match self.libraries 'tiers'
+			beside(checkout) gives checkout.joinPath(named).normalize()
+			unlocated gives named.normalize()
+		end 'tiers'
+	end 'resolved'
+end 'SidecarSources'
+
+union CompilerAgreement
+	agrees
+	differs(built String, running String)
+end 'CompilerAgreement'
+
+function compilerAgreementOf(reader MxdbgReader) returns CompilerAgreement
+	let running = compilerBuildStamp()
+
+	if reader.compilerVersion == running 'theSameCompiler'
+		return CompilerAgreement.agrees
+	end 'theSameCompiler'
+
+	return CompilerAgreement.differs(reader.compilerVersion, running: running)
+end 'compilerAgreementOf'
+
+function compilerDifferenceText(built String, running String) returns String
+	return "its debug info was written by maxon {built} and this is maxon {running}, so the {StdlibDirName}/, {RuntimeDirName}/ and {ScriptlibDirName}/ sources it names are not the ones the program was built from. Rebuild the program with this compiler"
+end 'compilerDifferenceText'

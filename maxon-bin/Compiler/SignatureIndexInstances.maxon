@@ -5197,17 +5197,34 @@ extension ProgramSignatures
 	end 'anyElementScopingContest'
 
 	function scopedInstanceEnvironments() returns FilePathArray
-		let environments = self.settledDeclarations().typeAliases.rangeContestEnvironments()
+		let contested = self.settledDeclarations().typeAliases.rangeContestEnvironments()
 
 		for environment in self.settledDeclarations().functionTypeAliases.shapeContestEnvironments() 'eachShapeContestFile'
-			environments.push(environment)
+			contested.push(environment)
 		end 'eachShapeContestFile'
 
-		if environments.count() == 0 'onlyReaderIndependentNamesNeedScoping'
-			environments.push(CompilerOwnedDeclFilePath)
-		end 'onlyReaderIndependentNamesNeedScoping'
+		let files = FilePathArray.create(contested.count(), zeroed: false)
+		var compilerOwnedReaders = (0 if contested.count() > 0 else 1) as ElementIndex
 
-		sortPathsBySpelling(environments)
+		for environment in contested 'eachEnvironment'
+			if environment.equals(CompilerOwnedDeclFilePath) 'theCompilerOwnedReader'
+				compilerOwnedReaders = compilerOwnedReaders + 1
+			end 'theCompilerOwnedReader' else 'aDeclaringFile'
+				files.push(environment)
+			end 'aDeclaringFile'
+		end 'eachEnvironment'
+
+		self.sortInSourceOrder(files)
+
+		let environments = FilePathArray.create(compilerOwnedReaders + files.count(), zeroed: false)
+
+		for _ in 0 upto compilerOwnedReaders 'eachCompilerOwnedReader'
+			environments.push(CompilerOwnedDeclFilePath)
+		end 'eachCompilerOwnedReader'
+
+		for file in files 'eachDeclaringFile'
+			environments.push(file)
+		end 'eachDeclaringFile'
 
 		return environments
 	end 'scopedInstanceEnvironments'
@@ -5623,7 +5640,7 @@ extension ProgramSignatures
 		let heldEntry = try self.settledDeclarations().genericAliasDecls.get(heldIndex) otherwise panic("ProgramSignatures.earlierBlame: genericAliasDecls.get OOB at {heldIndex}")
 		let candidateEntry = try self.settledDeclarations().genericAliasDecls.get(candidate) otherwise panic("ProgramSignatures.earlierBlame: genericAliasDecls.get OOB at {candidate}")
 
-		return AliasCycleResult.at(candidate as FieldIndex) if aliasDeclaredBefore(candidateEntry, held: heldEntry) else held
+		return AliasCycleResult.at(candidate as FieldIndex) if aliasDeclaredBefore(candidateEntry, held: heldEntry, signatures: self) else held
 	end 'earlierBlame'
 
 	// One round of the fixpoint: group every declaration by name over the instance it means in its own file,
