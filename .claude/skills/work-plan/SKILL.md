@@ -8,7 +8,8 @@ description: Work one class plan under `plans/` from its first stage to its land
 A plan under `plans/` is one class of defects with one design and an ordered list of stages. One session
 works it from start to finish. `plans/README.md` puts every plan in one of two queues; a session works only
 its own queue, so no plan is claimed. Given a queue letter, take that queue's first plan, in turn order,
-whose "Done" cell is empty. The stages are local commits; `main` receives the plan once, as one commit.
+whose "Done" cell is empty and which is not `deferred`: read every row of the queue, the ones above the
+plan just worked included. The stages are local commits; `main` receives the plan once, as one commit.
 
 **A plan is worked in its own worktree, on its own branch, never on local `main`:**
 `git worktree add temp/<plan>/tree -b plan/<plan>-stages origin/main`. The checkout is shared with other
@@ -94,11 +95,16 @@ For each stage, in order:
    fixed. This overrides `AGENTS.md`'s "fix what you find" for the life of the plan: the implementer
    cannot see the later stages, so only you can tell what they make irrelevant. For each finding:
    - **a later stage of this plan, or a stage of another plan, owns it** (its "Rule it establishes", its
-     section, or a plan's Members list covers it): do nothing. Add a line to that stage's section when
-     the finding is a case its red set should include, in this plan only;
+     section, or a plan's Members list covers it): do nothing here. Add the finding to that stage's
+     "Shown by", so the stage that owns the fix also proves it. For another plan's stage that line is
+     its own commit on `main`, pushed at once, changing nothing but that plan file;
    - **the stage's own cases cannot go green without it:** fix the least that makes them green, and say
      so in the commit message;
    - **nothing in `plans/` owns it:** record it as `/land` §10 says, and fix it after the plan lands.
+
+   **A session adds no stage that waits on another plan.** Such a stage holds this plan's landing behind
+   the other queue. What another plan's stage will fix is that stage's to prove, by the line above, and
+   this plan lands without it.
 
    The same holds for a review: a finding a later stage or another plan owns is not a blocker.
 5. **The stage's own cases green, and nothing wider.** Until §2, a run is `--filter`ed to the cases the

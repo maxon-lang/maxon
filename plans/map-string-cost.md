@@ -201,6 +201,7 @@ Each stage is one `/land` commit, green alone, unless it says `/plan-and-land` o
    - Depends on: stage 1 (the pair is a retain and a release only once the retain is not a copy).
    - Discharges: #208.
    - Shown by: an ir-spec, red first, that `let existing = try keys.get(i) …` followed only by `existing == key` holds neither `__str_retain` nor `__str_decref`; a spec that a read kept past a store of the same slot still retains; 2.4 to 4.7 ns per lookup hit as acceptance. The worker's survey reads how Swift's ownership SSA turns a copy with only borrowed uses into a borrow, and Perceus's borrow inference.
+   - Also shown by, for [determinism](determinism.md) 1c, with stage 1: a sort over `String` elements allocates nothing per comparison, and a walk of a `Map` or `Set` allocates nothing per step, so the determinism gate's allocation totals are equal under every seed. This stage turns that comparison on in the gate; whatever stays unequal is fixed here, in the element read or the walk.
 
 7. **A short key's hash is one runtime call.**
    - Changes: the hash row of the design, for the call shape: the `String` leaf's fold passes the record's bytes and the table's seed to one entry, with no separate seed load and no span guard a `String`'s own bytes cannot fail. The worker measures whether the `aes` tier should fold keys below a length with the multiply, as Go's `MemHash` does.
