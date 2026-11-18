@@ -10,7 +10,7 @@ last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
-| [ ] | V1 | A value's source rows, hold and live-binding index are one record written at one door and read by one resolver (in progress under #235, whose first task this is: tick it when that commit is on `main`) |  |  |  |
+| [x] | V1 | A value's source rows, hold and live-binding index are one record written at one door and read by one resolver (on `main` as part H1 of #235: `ValueStandings`, one hold writer, the live-name index) |  |  |  |
 | [ ] | V2 | Every question of which live names bind a value asks the live-binding index, not a walk of the symbol table | V1 |  |  |
 | [ ] | V3 | A value's birth is the record's second rider, carried by every merge, rename, hand-back, literal and call result | V1 | E1 |  |
 | [ ] | E1 | One function settles a merge edge by the one move rule: a var arm moves, an outliving let is co-owned, a linear value moves | V1 | V3 |  |
@@ -422,6 +422,6 @@ program the model refuses, so none owes a model round; a stage that finds it wou
   owes its own model round. #184 builds on E1 and E2.
 - #257 — the region model's MERGE-ARMS-ALT lift (R-a, R-f): model tooling.
 
-- #235 is in progress under its own number and stays open until its change lands.
-- #282 is in progress under its own number and stays open until its change lands.
+- #235 stays open: part H1 is on `main` and is stage V1; stage C1 is its remainder.
+- #282 is closed: its change landed with stage V1.
 - #284 is on the Backlog, not yet accepted: it stays open and is not folded until it is.
