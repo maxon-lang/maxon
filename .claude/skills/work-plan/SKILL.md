@@ -82,6 +82,8 @@ For each stage, in order:
    A message to a running agent is for a correction to the piece it is on.
    **Every agent runs on the cheapest model that can do its piece** (`/land`'s `brief.md`, "The model for
    each stage"), chosen per piece and named in the dispatch:
+   The rule covers the agents you dispatch, never you: the coordinator stays on the model the user
+   started it on, and changes no model setting, in the session or in a settings file.
    - `haiku` for a mechanical piece: a rename, a re-pin, a tick, a doc line;
    - `sonnet` for the spec author, the documenter, and a contained piece whose approach the plan settles,
      which is most stages;
