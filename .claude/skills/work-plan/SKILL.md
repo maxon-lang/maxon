@@ -50,6 +50,18 @@ For each stage, in order:
      which is most stages;
    - `opus` for a piece that is cross-pass or soundness-sensitive, involves performance or concurrency, or
      leaves a design choice open; for a diagnosis; for `optimize`; and for a review.
+   **An implementer changes only what its stage names.** Every brief says so, and says that anything
+   else it meets (a defect, duplication, a wrong name, code the stage leaves awkward) is reported, not
+   fixed. This overrides `AGENTS.md`'s "fix what you find" for the life of the plan: the implementer
+   cannot see the later stages, so only you can tell what they make irrelevant. For each finding:
+   - **a later stage of this plan, or a stage of another plan, owns it** (its "Rule it establishes", its
+     section, or a plan's Members list covers it): do nothing. Add a line to that stage's section when
+     the finding is a case its red set should include, in this plan only;
+   - **the stage's own cases cannot go green without it:** fix the least that makes them green, and say
+     so in the commit message;
+   - **nothing in `plans/` owns it:** record it as `/land` §10 says, and fix it after the plan lands.
+
+   The same holds for a review: a finding a later stage or another plan owns is not a blocker.
 5. **The stage's own cases green, and nothing wider.** Until §2, a run is `--filter`ed to the cases the
    stage wrote or re-pinned and the cases of a spec file it edited: never a whole spec file's suite for
    safety, a corpus, `ir-specs` unfiltered, a second target, or a lane. What a stage breaks elsewhere is
