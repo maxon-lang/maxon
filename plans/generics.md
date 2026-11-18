@@ -10,7 +10,7 @@ last stage.
 
 | Done | Stage | Rule it establishes | Waits on | Not beside | Needs a ruling |
 |---|---|---|---|---|---|
-| [ ] | 1 | Every generic instance is interned with its origin and judged once, at one door, whether written or inferred (in progress under #222: tick it when that commit is on `main`) |  |  |  |
+| [ ] | 1 | Every generic instance is interned with its origin and judged once, at one door, whether written or inferred |  |  |  |
 | [ ] | 2 | What `T` may be in a body is answered by the bounds in lexical scope alone, never by the program's instance rows | 1 |  |  |
 | [ ] | 3 | One value-kind classification, with an opaque arm and no default, answers every ownership and holding question | 2 | 4, 5 |  |
 | [ ] | 4 | A bare-base call infers once, after defaults, through one translation of a value's type into a type argument | 1 | 3, 5 | How does a `spawn` start a `sendable`-bounded generic service at an `immutable` record (#192)? Needs a ruling on #30 (recommended: inference takes the argument's capability). |
@@ -81,7 +81,7 @@ Each stage is one `/land` and one commit.
 **1. The instance ledger.** Every instance is interned with its origin; `checkOneInstantiation` runs every check on every written or inferred instance; the bare-base scope binding by parameter spelling goes.
 - Area: `SignatureIndexGenericTypes.maxon` (`internRow`), `SignatureIndexSettle.maxon` (`recordGenericAlias`, `internNestedNode`), `SignatureIndexInstances.maxon` (`scopedGenericInstanceOf`, `internGenericInstanceOf`, `internInstanceOverArgsOf`), `ConformanceCheck.maxon` (`checkWhereConstraints`, `checkOneInstantiation`, `recordInstancesWrittenAtSites`, `judgeInstancesWrittenAt`), `ParseStaging.maxon`; `specs/generic-instance-conformance.md`, `specs/regions-generic-flows.md`.
 - Depends on: none. If question 1 is answered (a), the unique-argument refusal is one more check at this door.
-- Discharges: #222, #269, #61.
+- Discharges: #269, #61. #222's part is on `main`: every written `Base with Args`, a nested inline one included, and a scoped bare name in a type position file a site, the judge reads sites only, and the member, container and tuple walks and the written-instance pre-pass are deleted. What remains is the instance a body infers (#269), the bare-base scope binding by parameter spelling, and #61. A "Shown by" case that is already green needs no work.
 - Shown by, red first:
   - `typealias StepPools = Array with (Pool with Step)` (`Pool uses T where T is sendable`, `Step` a function alias) is one E3215 at the inline `Pool`; `typealias Boxes = Box with StepPool` reports nothing at `Boxes`; a phantom argument `Keeper with (Pool with Step)` is refused; `Array with (Map with (Unhashable, Tally))` is E3017, and a nested linear argument is refused (#222).
   - `type Outer uses T` (no bound) whose method does `let pool = Pool.create(self.item)`, with `typealias JobOuter = Outer with Job` over a plain record: E3215 in `Outer` naming `T` and `where T is sendable`, identically when `Pool`'s parameter is spelled `T` or `V` (#269, P0: today the same-name spelling compiles and runs a `Pool with Job`).
@@ -177,4 +177,4 @@ Stages 2, 4, 5 and 7 touch disjoint files after stage 1 and may run in parallel,
 - #263 — "Unknown type 'Zr2.handle'": a service's handle type exists only when the program spawns the service; nothing generic. Probably a translator program with no `spawn`.
 - #104, #102 — one canonicaliser for a capability word on a value type, generic arguments included.
 
-- #222 is in progress under its own number and stays open until its change lands.
+- #222 is closed: its change is on `main` and is the first part of stage 1.
