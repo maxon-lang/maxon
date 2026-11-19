@@ -12,7 +12,7 @@ filtered specs covering what changed and the codecs check; CI runs the rest. **T
 a missing diagnostic, a pass that answers wrong, a feature however large; there is no heavier sibling.
 
 **Beside this file, read on demand:** `brief.md` before any brief; `situations.md` when a situation it
-names arises; `known-issues.md` for §10 when you are not a fleet worker. Seed-chain landing: `compiler-workflow`.
+names arises; Seed-chain landing: `compiler-workflow`.
 
 > **Whoever invoked `/land` chose it deliberately: finish it here however large**: no worktree, contract or board, no heavier process, no landing half
 > and filing the rest. Size, several passes, new IR ops, a design decision you can make, or hours of work
@@ -146,7 +146,7 @@ A case that cannot fail for your reason is padding; a wrong answer with no case 
 prevents. ⚠ **"Minimal" describes the SET, never the change**: it proves the **whole** task; a case
 inconvenient because the change is large is the size of the work (§2).
 
-**A LOCATED fix** (an issue with `Repro` and `Where`, at most two cases that go red at once:
+**A LOCATED fix** (a defect with a `Repro` and a `Where`, at most two cases that go red at once:
 `situations.md`) skips the scout and the spec author, and nothing else. **Otherwise the scout surveys** (read-only, no probes; the facts it returns are in `brief.md`), **YOU pick
 the set** from its facts — a decision that never moves — and **a spec author writes** your exact list.
 ⚠ **Cases or a failure count the ask names, run, are part of the acceptance**; a narrower hand-built red
@@ -203,7 +203,7 @@ between its report and §8. Re-run the filter yourself only when that evidence i
 - **Nobody runs the full suite** — not this loop, not §8, not you, not an agent; every brief says so.
 - ⛔ **Never turn a case green by narrowing what it tests**: spec text, filter or marker.
 - **A defect ANYONE finds is FIXED**, a wrong answer as much as a leak, green suite or not: RELATED (§10),
-  now, its reproduction a case in the set; unrelated, filed and drained after the push. A hand-run check
+  now, its reproduction a case in the set; unrelated, noted and fixed after the landing. A hand-run check
   is never evidence, and none is run to verify anything.
 - **When the set is green, re-run §1's count check yourself** (an agent's "all green" is not a run you
   read), then stop editing for correctness.
@@ -286,8 +286,7 @@ suite on every lane, the WSL lane. ⭐ **`lint maxon-bin` is the one local E3092
 
 **A red gate STOPS the change**, and a red you did not cause is fixed in its own commit before yours:
 attribute it by the failing cases alone, then a control (`situations.md`). ⚠ **A lane or gate that did not
-RUN is a SKIP you report**, never folded into the green. **A CI red after the push is fixed next**, in its
-own commit.
+RUN is a SKIP you report**, never folded into the green. **A CI red the user reports to you after the landing is fixed next**, in its own commit.
 
 ## 9. Commit and land through the door
 
@@ -302,10 +301,6 @@ read the ladder, the final paragraph carries `Scale-Note: <text>`** as a trailer
 
 - **Stage and commit as `situations.md`'s "Staging and committing" says**: explicit paths, stderr in
   view, the cached stat read.
-- **Glance at the last COMPLETED CI run as its own step** (`gh run list --branch main --workflow ci
-  --limit 3`), then land in a separate command. A completed red goes through §10's CI-red check (claimed
-  by someone else: theirs; else recorded, its culprit asked); land anyway, and that red (it hides later failures) is first in your
-  drain if it falls to you. A run in progress never blocks a land.
 - **Then land, in the background** (`run_in_background`; about 4 minutes for a compiler change, and its
   exit wakes you). **From `main`: `scripts/land.sh submit --name=<name>`**, which pushes `land/<name>`,
   dispatches `land.yml` and waits for the run. **A session that pushes only its own branch** ends the
@@ -325,18 +320,16 @@ changed, and submit again under the same name.
 > main received, the door's commit and not yours. Then `git fetch origin main && git reset --keep
 > origin/main`, delete `temp/land/` and every other `temp/` directory this change created, and do not
 > watch, poll or schedule a check. CI hosts the four native targets on their own architecture, the full suite, the tree corpora,
-> the two-stage seed build and wasm32-wasi (on its x64-linux lane), so a lane can go red after you report. A red lane reported
-> to you goes through §10's CI-red check; one that falls to you is yours whether or not you caused it,
-> in its own commit, reproduced on that platform's own host, never on the cross lane that missed it.
+> the two-stage seed build and wasm32-wasi (on its x64-linux lane), so a lane can go red after you report. A red lane the user
+> reports to you is yours whether or not you caused it, in its own commit, reproduced on that platform's own host, never on the cross lane that missed it.
 
 **Report in a few lines**: the change, the cases red → green, each gate's number, the sha main received,
-and every gate or lane not run, with its reason (CI-only lanes included). **Then drain the known issues (§10)**: the task is not
-over while one is claimable.
+and every gate or lane not run, with its reason (CI-only lanes included). **Then fix the unrelated defects you noted (§10)**: the task is not
+over while one remains.
 
-## 10. Known issues
+## 10. Unrelated defects
 
-**Every defect found gets fixed; those the change does not need wait** as issues on `maxon-lang/maxon`,
-for whoever finishes first.
+**Every defect found gets fixed; those the change does not need wait until it has landed.**
 
 > ### ⭐ RELATED — fixed now, in this change
 > - the acceptance set or a §8 gate **cannot go green** without it (a red you did not cause included, in
@@ -351,20 +344,23 @@ for whoever finishes first.
 > reviewer's finding elsewhere, pre-existing duplication the new code does not join, a diagnostic missed in
 > passing. "It is in a file I am editing anyway" does not make it related; "it blocks a case" does.
 
-### Recording
+### Noting, then fixing
 
-**An unrelated defect is an issue labelled `bug` and `accepted`** plus its area (`compiler`, `codegen`,
-`runtime`, `stdlib`, `tooling`, `performance`), so it is recorded and fixed once. Title: the one-line
-symptom. Body: **Where** (`file:line`), **Seen** (how, by which change), **Repro** (a program that
-reproduces it: the fixing land's red set).
+**An unrelated defect is a note in your scratchpad** the moment it is found, by you: implementers and
+reviewers report to you. The note holds the one-line symptom, **Where** (`file:line`), **Seen** (how, by
+which change) and **Repro** (a program that reproduces it: the fixing land's red set). Nothing touches
+the tree, and you go on with the change.
 
-**For a fleet worker the orchestrator files, claims and assigns every known issue** (the `fleet-worker`
-skill): recording is a `FOUND` to it, asking a CI red's culprit is its job, and draining is a
-`DONE` after which it assigns the next. **For every other session** the filing, the CI-red check and the
-draining are yours: `known-issues.md`. Either way, relatedness and how an issue lands bind you.
+**Once your change has landed, fix each one as its own `/land`**, one at a time, its repro the red set.
+A defect found while landing one takes the same RELATED test: related to that fix, fixed in that land;
+unrelated, noted. A note whose repro will not go red was fixed on the way: say which sha fixed it. One
+that needs a design ruling is a question to the user when its turn comes, never a skipped note. The task
+is done when no note remains, and one report names every defect, its sha, and any left unfixed with why.
 
-⛔ **Before filing an issue and before landing one, ask whether it repeats a landed fix**: if so it is a
-design question, a HALT (`situations.md`).
+**A fleet worker fixes none of them**: each is a `FOUND` to the orchestrator (the `fleet-worker` skill).
+
+⛔ **Before fixing one, ask whether it repeats a landed fix**: if so it is a design question, a HALT
+(`situations.md`).
 
 ## ⛔ HALT AND ASK
 
@@ -375,7 +371,7 @@ Everything above runs unattended. Stop and report, without landing, only when:
   contradicts itself. Do not guess; **never edit a spec to match the compiler**: that makes a compiler bug the specification.
 - **A case would have to be removed or excluded, or an existing `specs` expectation rewritten**: the
   first is what this process prevents; the second belongs to whoever owns that behaviour.
-- **A finding or known issue repeats a landed fix** at another consumer of the same fact (§10).
+- **A finding or noted defect repeats a landed fix** at another consumer of the same fact (§10).
 - **A change would make the compiler accept a program an approved design refuses** (`situations.md`).
 
 **For a fleet worker each is a `QUESTION` to the orchestrator** (the `fleet-worker` skill). **Each is answered in place,

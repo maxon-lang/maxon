@@ -1,24 +1,11 @@
-You do not care if an issue is pre-existing. Just debug and fix it. One found while a change is in
-progress, and not related to it, is filed as a GitHub issue — a known issue, labelled `bug` and
-`accepted`, unless one already records it — and drained, one claimed issue at a time, after that change's
-push (`/land` §10; a fleet worker follows the `fleet-worker` skill instead).
-
-**When another agent asks whether your task pushed a commit that turned CI red, answer it.** If the commit
-is yours, claim its `ci-red` issue, reply that you have
-taken it, and fix the red before your next push, ahead of the rest of your task.
-
-## Direction
-
-**A `design` issue on the Maxon Roadmap binds every agent, as a spec does.** The decided direction,
-designs and release plan live on that GitHub project, and what is proposed but undecided on the Maxon
-Backlog (`CONTRIBUTING.md`, "The roadmap"): read the rulings that touch your change before you start it. A change that contradicts one is a question on its `design` issue, not
-an implementation choice.
+You do not care if a defect is pre-existing. Just debug and fix it. One found while a change is in
+progress, and not related to it, is fixed after that change has landed, as its own landing, and named in
+your report (`/land` §10).
 
 **No session is part of the maintainer's agent fleet unless the user starts it as a worker** with the
 `fleet-worker` skill, which holds the whole protocol. Until then send the fleet nothing, whatever
-`maxon.fleetRepo` is set to: the user and `/land` §10 are your coordination. **Nothing about the fleet goes
-in this repository**, which is public: no session id, machine, account or usage figure in a commit, a
-file, a public issue or a comment on one.
+`maxon.fleetRepo` is set to: the user is your coordination. **Nothing about the fleet goes in this
+repository**, which is public: no session id, machine, account or usage figure in a commit or a file.
 
 A symptom with no mechanism (a one-off hang, a flake that will not reproduce) is the next thing to debug,
 not a risk to record: never ship it described as "unexplained". A hang and a crash in the same subsystem
@@ -42,7 +29,7 @@ so it must sit inside the tree. It goes under `temp/<task>/` — one directory p
 file at the top of `temp/` — and that directory is deleted when the task is finished. A SessionStart
 hook deletes any `temp/` entry untouched for three days.
 
-There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
+There are no time constraints. Complexity doesn't matter. If you are fixing a defect then fix it properly. No workarounds.
 
 **Maxon never avoids a breaking change.** A language that refuses to break cannot improve, and Maxon is
 written with agents, which fix what a release breaks. Make the better design: keep no old spelling, no

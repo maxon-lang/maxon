@@ -138,7 +138,7 @@ wrote the code, whatever the change's size: that independence is the whole point
 
 - **A `/land` change**: uncommitted, main checkout, no worktree, no branch, gates the coordinator's
   minutes later. The skill's steps 6–7 (gates, commit) are standalone-only: skip them.
-- **A finding NOT RELATED to this change (§10's test) is REPORTED, not fixed**: the known-issue drain
+- **A finding NOT RELATED to this change (§10's test) is REPORTED, not fixed**: the coordinator's fix after the landing
   satisfies the skill's "fix it even if pre-existing".
 - ⛔ **Comments are not its concern**: the tree has none by design. Do not brief one in.
 - ⛔ **Do not ask it to run the full suite, prove coverage or establish correctness.** It runs no

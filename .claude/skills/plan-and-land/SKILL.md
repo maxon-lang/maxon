@@ -113,9 +113,8 @@ contributor and by the orchestrator on any machine, and outside the checkout: `/
 tree and §9 commits the whole tree, so an in-repo plan file would be either dirt or swept into the commit.
 Work in a clone of the wiki in your scratchpad (`git clone https://github.com/maxon-lang/maxon.wiki.git`),
 and commit and push every edit to the page at once — an unpushed page is invisible to everyone else.
-Link the page from the plan's `design` issue (`CONTRIBUTING.md`, "The roadmap"), and the issue from the
-page. Not deleted after landing; the `STATUS:` line is stamped instead. Nothing about the maintainer's
-agent fleet goes on the page (`AGENTS.md`, "Direction").
+Not deleted after landing; the `STATUS:` line is stamped instead. Nothing about the maintainer's
+agent fleet goes on the page (`AGENTS.md`).
 
 ```
 # <the change in one line>          <- the line every /land brief carries
@@ -226,9 +225,8 @@ pushed at once, after every stage. ⛔ It is never a commit to the repository.
 ⛔ **Do not wait for CI** — not after the last stage, and not between stages: the next stage starts from
 the pushed commit (`/land` §9's ruling).
 
-Unrelated defects found while landing are filed as known issues, not in the plan file. **Drain them
-after the LAST stage** (never between stages), one claimed issue at a time (`/land` §10). The plan is closed when
-the file holds no claimable entry.
+Unrelated defects found while landing are noted as `/land` §10 says, not in the plan file. **Fix them
+after the LAST stage** (never between stages), one at a time. The plan is closed when no note remains.
 
 ---
 
@@ -248,7 +246,7 @@ agent; the reviewer counts, since `/land` §5 is often where a design flaw is fi
 > ⛔ **NOT a design-flaw halt, and each will be offered as one:** it is bigger than the plan said · it
 > touches more files than §4 listed · a cleaner design occurred to me · the plan did not mention X · this
 > wants a refactor first · a pre-existing defect is in the way (`/land`: *"a defect ANYONE finds on the
-> way is FIXED, not filed"* — now if it blocks the acceptance, after the push via a known issue if it
+> way is FIXED, not filed"* — now if it blocks the acceptance, after the landing by `/land` §10 if it
 > does not). Each of those is **carry on and say so in the report**.
 
 **This is not escalation.** `/land`'s *"One change, finished here, in one commit"* forbids the **coordinator** rerouting to

@@ -41,10 +41,10 @@ to the user. `--help` lists the thresholds' overrides.
 
 **A fix is LOCATED when all three hold before any dispatch:**
 
-1. its issue carries a `Repro` program and a `Where` (`file:line`);
+1. the defect comes with a `Repro` program and a `Where` (`file:line`);
 2. one grep names the spec file that owns the behaviour, and the repro needs at most two cases;
 3. those cases, written by you into that file (invoke `maxon-coder` first), go red on their first run for
-   the issue's stated symptom.
+   the stated symptom.
 
 If any fails, the scout runs, and the cases you wrote are its author's to keep or replace. A located fix
 dispatches no scout and no spec author; **if the implementer's measurement contradicts `Where`, the scout
@@ -167,9 +167,9 @@ every lane.
 
 ## A finding that repeats a landed fix (§10)
 
-**An issue that repeats a landed fix is a design question, not another issue.** Before filing an issue,
-and again before landing one, ask: **has a fix of this same kind already landed, or does another issue
-name the same question at a different site?** Examples: "the async path does not consult X", after "the
+**A defect that repeats a landed fix is a design question, not another fix.** Before fixing one, ask:
+**has a fix of this same kind already landed, or does another noted defect name the same question at a
+different site?** Examples: "the async path does not consult X", after "the
 spawn path did not consult X"; or a second consumer that disagrees with a third about one fact. If so, the
 fixes are treating symptoms: several consumers answer one question each for themselves (`code-review` §3,
 "the same DECISION made in two places"). **HALT and take it to the user**, naming every consumer with

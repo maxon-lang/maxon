@@ -55,6 +55,8 @@ account or a usage figure anywhere public.
   `.claude/agents/planner.md`). None is decided by you, however small it looks, because judging which
   design questions are small is itself design. So does judging whether a worker's report shows a ruling
   being bent, and **planning any non-trivial work before you assign it** (Assigning, below).
+  - **Tell it to load the `fleet-planner` skill**, which says where rulings are recorded and how one is
+    worded.
   - **Brief it** with the question or the work verbatim, the asking task, and the numbers of the
     `design` issues and wiki pages it touches. It reads the code and the designs itself.
   - **It returns** a ruling, a plan, or a question for the user. It studies how the language a part of
@@ -136,8 +138,8 @@ check, in this order. A `standing` line you have already acted on needs nothing 
 owner you have already sent a `PING`:
 
 1. `message`: act on every message (table below); `ack` each one.
-2. `main-red`: a red lane on main is a `ci-red` issue (`/land` §10). Ask the
-   culprit (`/land` §10) with one `send` to every live session in `status`
+2. `main-red`: a red lane on main is a `ci-red` issue (the `fleet-worker` skill's `ci-red.md`). Ask the
+   culprit (the same file) with one `send` to every live session in `status`
    rather than `SendMessage`, and assign it — to the culprit if one answers by the next wake, otherwise
    to the next free worker, ahead of everything else.
 3. `budget`: resize the fleet ("Sizing", below).

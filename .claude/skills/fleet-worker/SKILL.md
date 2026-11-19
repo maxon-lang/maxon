@@ -64,11 +64,15 @@ skill and never this one.
   its `RULING`.
 - **You do not edit the boards — a `design` issue, a project item, a milestone — or another design's
   wiki page (`/plan-and-land` §4: yours is yours), and you do not file, claim or close a known issue.**
-  An unrelated defect is a `FOUND` carrying the issue's fields (`/land` §10, "Recording"); after your
-  push, a `DONE` replaces `/land` §10's draining — the orchestrator hands you the next issue. Your fix's
+  An unrelated defect is a `FOUND` carrying the issue's fields (`ci-red.md`, beside this file); you fix
+  none of them yourself, and after your push a `DONE` replaces `/land` §10's fixing — the orchestrator
+  hands you the next issue. Your fix's
   commit still carries `Fixes #<n>` for the issue it was assigned.
-- **A commit of yours that turned CI red** is told to the orchestrator, which owns its `ci-red` issue;
-  you fix the red before your next push.
+- **When the orchestrator asks whether your task pushed a commit that turned CI red, answer it.** If the
+  commit is yours, say so, and fix the red before your next push, ahead of the rest of your task
+  (`ci-red.md`).
+- **The rulings that touch your task are on the Roadmap's `design` issues:** read them before you
+  start, as the `fleet-planner` skill says.
 - **A message is one line of kind, then the body:** `READY` · `REQUEST <goal>` ·
   `QUESTION <task> <question, the options, your recommendation>` · `FOUND <task>` + issue fields ·
   `PROGRESS <task> <state>` · `BLOCKED <task> <why>` · `DONE <task> <sha>` · `ARCHIVING`. It sends

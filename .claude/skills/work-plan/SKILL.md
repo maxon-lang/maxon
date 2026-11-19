@@ -19,19 +19,10 @@ is never pushed: a pushed branch starts the landing workflow.
 **A plan is the maintainer's, not the fleet's.** Send no `REQUEST` and run no `fleet.mjs` for it, and never
 invoke the `fleet-worker` skill from it.
 
-**A plan uses GitHub for the landing and nothing else.** The plan file replaces the issues and the
-Roadmap for the life of the plan, whatever `AGENTS.md`, `/land` or `/plan-and-land` say:
-
-- **Change nothing on GitHub:** no `status.mjs`, no `file.mjs`, no issue comment, edit, claim or close, no
-  project or milestone. The landing commit's `Fixes #<n>` closes the class issue by itself.
-- **Read no issue and no board.** A member issue is the plan's "Members" line; a ruling is the plan's
-  "Design" and "Rulings". A ruling the plan cites only by number is read from the wiki's design page
-  (its git clone), and if it is not there, with one `gh issue view`, once for the plan.
-- **An issue a stage waits on is closed when its fixing commit is on `main`:**
-  `git log origin/main --grep "#<n>"`, not an API call.
-- **A defect nothing in `plans/` owns** is a line under the plan file's "Found, not this plan's": what it
-  is, the program that shows it, where it was met. It is not filed and no duplicate is searched for.
-- What stays: `scripts/land.sh` and the run it watches, and reading a red CI job that is yours.
+**The plan file is the plan's whole record.** A member is the plan's "Members" line; a ruling is the
+plan's "Design" and "Rulings". An issue number a stage waits on is met when its fixing commit is on
+`main`: `git log origin/main --grep "#<n>"`. **A defect nothing in `plans/` owns** is a line under
+the plan file's "Found, not this plan's": what it is, the program that shows it, where it was met.
 
 **The procedure spends as little as a correct plan allows.** The plan is the survey and the design: no
 step here re-derives it, and none asks the user what the plan already answers.
