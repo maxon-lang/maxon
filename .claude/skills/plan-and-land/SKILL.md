@@ -115,7 +115,7 @@ Work in a clone of the wiki in your scratchpad (`git clone https://github.com/ma
 and commit and push every edit to the page at once — an unpushed page is invisible to everyone else.
 Link the page from the plan's `design` issue (`CONTRIBUTING.md`, "The roadmap"), and the issue from the
 page. Not deleted after landing; the `STATUS:` line is stamped instead. Nothing about the maintainer's
-agent fleet goes on the page (`AGENTS.md`, "Orchestration").
+agent fleet goes on the page (`AGENTS.md`, "Direction").
 
 ```
 # <the change in one line>          <- the line every /land brief carries
@@ -144,8 +144,8 @@ BASE:   <sha>, tree clean, <date>  <- the staleness anchor for the scout skip
 
 ## 5. ⛔ HALT — present it and wait
 
-**In chat** — the file is the record, the halt is the conversation; in the maintainer's fleet, a
-`QUESTION` to the orchestrator (`AGENTS.md`, "Orchestration") — in this order:
+**In chat** — the file is the record, the halt is the conversation; for a fleet worker, a
+`QUESTION` to the orchestrator (the `fleet-worker` skill) — in this order:
 
 1. **The change, one line.** If N > 1 stages: **`<N> STAGES — <named condition>`** as the very first thing.
 2. **The mechanism**, 2–4 sentences.

@@ -16,8 +16,8 @@ plan just worked included. The stages are local commits; `main` receives the pla
 sessions, whose resets and pushes of `main` would drop or publish a stage commit sitting there. The branch
 is never pushed: a pushed branch starts the landing workflow.
 
-**A plan is the maintainer's, not the fleet's.** Send no `REQUEST` and run no `fleet.mjs` for it, whatever
-`maxon.fleetRepo` says.
+**A plan is the maintainer's, not the fleet's.** Send no `REQUEST` and run no `fleet.mjs` for it, and never
+invoke the `fleet-worker` skill from it.
 
 **A plan uses GitHub for the landing and nothing else.** The plan file replaces the issues and the
 Roadmap for the life of the plan, whatever `AGENTS.md`, `/land` or `/plan-and-land` say:

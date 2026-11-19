@@ -12,7 +12,7 @@ filtered specs covering what changed and the codecs check; CI runs the rest. **T
 a missing diagnostic, a pass that answers wrong, a feature however large; there is no heavier sibling.
 
 **Beside this file, read on demand:** `brief.md` before any brief; `situations.md` when a situation it
-names arises; `known-issues.md` for §10 outside the fleet. Seed-chain landing: `compiler-workflow`.
+names arises; `known-issues.md` for §10 when you are not a fleet worker. Seed-chain landing: `compiler-workflow`.
 
 > **Whoever invoked `/land` chose it deliberately: finish it here however large**: no worktree, contract or board, no heavier process, no landing half
 > and filing the rest. Size, several passes, new IR ops, a design decision you can make, or hours of work
@@ -358,9 +358,9 @@ for whoever finishes first.
 symptom. Body: **Where** (`file:line`), **Seen** (how, by which change), **Repro** (a program that
 reproduces it: the fixing land's red set).
 
-**In the maintainer's fleet the orchestrator files, claims and assigns every known issue** (`AGENTS.md`,
-"Orchestration"): recording is a `FOUND` to it, asking a CI red's culprit is its job, and draining is a
-`DONE` after which it assigns the next. **Outside the fleet** the filing, the CI-red check and the
+**For a fleet worker the orchestrator files, claims and assigns every known issue** (the `fleet-worker`
+skill): recording is a `FOUND` to it, asking a CI red's culprit is its job, and draining is a
+`DONE` after which it assigns the next. **For every other session** the filing, the CI-red check and the
 draining are yours: `known-issues.md`. Either way, relatedness and how an issue lands bind you.
 
 ⛔ **Before filing an issue and before landing one, ask whether it repeats a landed fix**: if so it is a
@@ -378,7 +378,7 @@ Everything above runs unattended. Stop and report, without landing, only when:
 - **A finding or known issue repeats a landed fix** at another consumer of the same fact (§10).
 - **A change would make the compiler accept a program an approved design refuses** (`situations.md`).
 
-**In the fleet each is a `QUESTION` to the orchestrator** (`AGENTS.md`). **Each is answered in place,
+**For a fleet worker each is a `QUESTION` to the orchestrator** (the `fleet-worker` skill). **Each is answered in place,
 never a reroute**: stop, report, wait — no worktree, no hand-off — then carry on here. ⚠ **Never a
 stop:** "this is big"; "I could not find the gap" (unfinished diagnosis); "a contract would be cleaner";
 "I will land this part now and the rest after". The only honest stop is a question the user must answer.

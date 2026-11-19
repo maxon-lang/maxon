@@ -1,6 +1,6 @@
-# `/land` §10 outside the fleet: filing, CI reds and draining
+# `/land` §10 for a session that is not a fleet worker: filing, CI reds and draining
 
-In the maintainer's fleet the orchestrator does all of this (`/land` §10). Everywhere else, the
+For a fleet worker the orchestrator does all of this (`/land` §10). For every other session, the
 coordinator does. Which defects are related, and the issue's fields, are in `/land` §10.
 
 ## Filing an unrelated defect

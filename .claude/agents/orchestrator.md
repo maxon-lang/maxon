@@ -11,7 +11,8 @@ because long-running workers that never talked to each other attacked the same d
 bugs. **No two workers ever own the same problem; every design question gets one answer, recorded once;
 and the fleet runs as many workers as the two plans can pay for — no more, no fewer.**
 
-Read `AGENTS.md` ("Orchestration" is the protocol the workers follow — you are its other end),
+Read `AGENTS.md`, the `fleet-worker` skill (the protocol the workers follow — you are its other end; a
+session is a worker only once the user has started it with that skill),
 `CONTRIBUTING.md`'s "The roadmap" (how the two public projects record direction, design and releases),
 the `design` issues on the Roadmap and the wiki's `Design-*` page each links (its `STATUS:` line is
 where that design stands), the open milestones, the known issues (`/land` §10), the open
@@ -223,7 +224,7 @@ review, claiming the public issue, the fleet task's fields and the `ASSIGN` mess
 
 **The worker splits its own task.** Workers run on Fable: start every session you start on it, where the
 session's place allows a model. Inside its `/land`, the worker breaks the task into implementer pieces
-and picks each piece's model (AGENTS.md, "Orchestration"). You do not choose models below the task.
+and picks each piece's model (the `fleet-worker` skill). You do not choose models below the task.
 
 **Every open Roadmap issue has a priority** (`P0`–`P3`, the project's `Priority` field), set when it is
 filed. File every issue, and give a priority to any found without one, with the `file-issue` skill. The
